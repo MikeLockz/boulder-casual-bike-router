@@ -1,0 +1,25 @@
+name: Deploy to Proxmox NUC
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:deploy
+
+      - name: SSH into NUC & Run Update
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 100.127.44.82
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: /opt/boulder-casual-bike-router/update.sh
