@@ -22,6 +22,13 @@
     --color-stress-high: #e040fb;
     --color-offstreet-multiuse: #00b0ff;
     --color-ebike-restricted: #ff9100;
+    
+    /* Official Bike Routes Color Scheme */
+    --color-route-multiuse: #00e676;
+    --color-route-protected: #00e5ff;
+    --color-route-lane: #2979ff;
+    --color-route-designated: #b388ff;
+    --color-route-shoulder: #90a4ae;
 }
 
 * {
@@ -841,3 +848,444 @@ input[type="range"]::-webkit-slider-thumb:hover {
     border-radius: 4px;
     font-size: 10px;
 }
+
+/* ====================================
+   NAVIGATION VIEW STYLES
+   ==================================== */
+
+/* Start Navigation Button */
+.btn-nav {
+    background: linear-gradient(135deg, rgba(100, 255, 218, 0.15) 0%, rgba(100, 255, 218, 0.05) 100%);
+    color: var(--accent-color);
+    border: 1px solid rgba(100, 255, 218, 0.3);
+    margin-top: 12px;
+    font-weight: 600;
+}
+
+.btn-nav:hover {
+    background: linear-gradient(135deg, rgba(100, 255, 218, 0.25) 0%, rgba(100, 255, 218, 0.1) 100%);
+    border-color: var(--accent-color);
+    box-shadow: 0 0 20px rgba(100, 255, 218, 0.15);
+}
+
+/* Nav Overlay - Full Screen */
+.nav-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+
+.nav-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+    display: none;
+}
+
+.nav-overlay.visible {
+    opacity: 1;
+    display: flex;
+}
+
+.nav-overlay > * {
+    pointer-events: auto;
+}
+
+/* Maneuver Banner */
+.nav-maneuver-banner {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 16px 16px 0;
+    padding: 16px 20px;
+    background: rgba(18, 20, 26, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(100, 255, 218, 0.12);
+    border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    animation: navSlideDown 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes navSlideDown {
+    from { transform: translateY(-20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.nav-maneuver-icon-wrap {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(100, 255, 218, 0.2) 0%, rgba(100, 255, 218, 0.05) 100%);
+    border: 1px solid rgba(100, 255, 218, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.nav-maneuver-icon-wrap i {
+    font-size: 18px;
+    color: var(--accent-color);
+}
+
+.nav-maneuver-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.nav-maneuver-text {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nav-maneuver-dist {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent-color);
+}
+
+/* Bottom Bar */
+.nav-bottom-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 16px 16px;
+    padding: 12px 16px;
+    background: rgba(18, 20, 26, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    animation: navSlideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes navSlideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.nav-btn {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.nav-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.nav-btn-exit {
+    background: rgba(255, 23, 68, 0.1);
+    border-color: rgba(255, 23, 68, 0.2);
+    color: #ff1744;
+}
+
+.nav-btn-exit:hover {
+    background: rgba(255, 23, 68, 0.2);
+    border-color: rgba(255, 23, 68, 0.4);
+}
+
+.nav-stats {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-grow: 1;
+    justify-content: center;
+}
+
+.nav-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+}
+
+.nav-stat-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.nav-stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+}
+
+.nav-stat-divider {
+    width: 1px;
+    height: 28px;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+/* GPS Blue Dot */
+.nav-user-marker {
+    background: none !important;
+    border: none !important;
+}
+
+.nav-user-dot-outer {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(66, 133, 244, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: navPulse 2s ease-in-out infinite;
+}
+
+.nav-user-dot-inner {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4285f4;
+    border: 2.5px solid #ffffff;
+    box-shadow: 0 0 8px rgba(66, 133, 244, 0.6);
+}
+
+@keyframes navPulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.4); opacity: 0.6; }
+}
+
+/* Heading Cone */
+.nav-cone-marker {
+    background: none !important;
+    border: none !important;
+}
+
+.nav-heading-cone {
+    width: 60px;
+    height: 60px;
+    position: relative;
+    transition: transform 0.3s ease;
+}
+
+.nav-heading-cone::before {
+    content: '';
+    position: absolute;
+    top: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 18px solid transparent;
+    border-right: 18px solid transparent;
+    border-bottom: 40px solid rgba(66, 133, 244, 0.15);
+    filter: blur(2px);
+}
+
+/* Toast Notification */
+.nav-toast {
+    position: fixed;
+    top: 90px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    padding: 10px 20px;
+    background: rgba(18, 20, 26, 0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 179, 0, 0.3);
+    border-radius: 10px;
+    color: #ffb300;
+    font-family: 'Outfit', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 2001;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.nav-toast.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* Mobile safe-area adjustments */
+@media (max-width: 767px) {
+    .nav-maneuver-banner {
+        margin: calc(env(safe-area-inset-top, 8px) + 8px) 10px 0;
+        padding: 14px 16px;
+    }
+
+    .nav-bottom-bar {
+        margin: 0 10px calc(env(safe-area-inset-bottom, 8px) + 8px);
+        padding: 10px 12px;
+    }
+
+    .nav-maneuver-text {
+        font-size: 15px;
+    }
+
+    .nav-stat-value {
+        font-size: 16px;
+    }
+}
+
+/* Custom Switch Container and Slider */
+.layer-toggle-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.switch-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 500;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    padding: 10px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.switch-container:hover {
+    background: rgba(100, 255, 218, 0.04);
+    border-color: rgba(100, 255, 218, 0.2);
+}
+
+.switch-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.switch-label i {
+    color: var(--accent-color);
+}
+
+.switch-wrapper {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+}
+
+.switch-wrapper input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(255, 255, 255, 0.1);
+    transition: .3s;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.switch-slider:before {
+    position: absolute;
+    content: "";
+    height: 14px;
+    width: 14px;
+    left: 2px;
+    bottom: 2px;
+    background-color: var(--text-secondary);
+    transition: .3s;
+    border-radius: 50%;
+}
+
+.switch-wrapper input:checked + .switch-slider {
+    background-color: rgba(100, 255, 218, 0.2);
+    border-color: var(--accent-color);
+}
+
+.switch-wrapper input:checked + .switch-slider:before {
+    transform: translateX(16px);
+    background-color: var(--accent-color);
+    box-shadow: 0 0 8px rgba(100, 255, 218, 0.6);
+}
+
+/* Layer Legend Styling */
+.layer-legend {
+    margin-top: 14px;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    animation: fadeIn 0.3s ease;
+}
+
+.layer-legend h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.layer-legend.hidden {
+    display: none !important;
+}
+
+.layer-legend .legend-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.layer-legend .legend-item {
+    font-size: 11px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.layer-legend .legend-line {
+    width: 24px;
+    height: 3px;
+    border-radius: 2px;
+    display: inline-block;
+}
+
+/* Colors for lines */
+.legend-line.multiuse { background-color: var(--color-route-multiuse); }
+.legend-line.protected { background-color: var(--color-route-protected); }
+.legend-line.bike-lane { background-color: var(--color-route-lane); }
+.legend-line.designated { background-color: var(--color-route-designated); }
+.legend-line.shoulder { background-color: var(--color-route-shoulder); }

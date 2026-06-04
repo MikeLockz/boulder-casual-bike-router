@@ -13,6 +13,19 @@ let waypointMarkers = [];
 let currentWaypoints = [];
 let allCrossings = [];
 let activeCrossingMarkers = [];
+let bikeRoutesLayer = null;
+let cachedBikeRoutesGeoJSON = null;
+
+const OFFICIAL_ROUTE_COLORS = {
+    "Multi-Use Path": "#00e676",
+    "Bike Park Path": "#00e676",
+    "Protected Bike Lane": "#00e5ff",
+    "Separated Bike Lane": "#00e5ff",
+    "Contra Flow Bike Lane": "#00e5ff",
+    "On-Street Bike Lane": "#2979ff",
+    "Designated Bike Route": "#b388ff",
+    "Bikeable Shoulder": "#90a4ae"
+};
 
 // Infrastructure type to color mapping
 const INFRA_COLORS = {
@@ -288,6 +301,24 @@ function initEventListeners() {
             loadPresetRoute(startCoords, endCoords);
         });
     }
+
+    // Start Navigation button
+    const navBtn = document.getElementById("btn-start-nav");
+    if (navBtn) {
+        navBtn.addEventListener("click", () => {
+            if (window.lastRouteSegments && window.lastRouteSegments.length > 0) {
+                Navigation.start(window.lastRouteSegments, map);
+            } else {
+                alert("No route to navigate. Compute a route first.");
+            }
+        });
+    }
+
+    // Layer toggles
+    const officialRoutesToggle = document.getElementById("toggle-official-routes");
+    if (officialRoutesToggle) {
+        officialRoutesToggle.addEventListener("change", handleOfficialRoutesToggle);
+    }
 }
 
 // Get current weights from sliders
@@ -381,6 +412,9 @@ async function calculateRoute() {
 
         // Draw path segments
         drawRoute(data.segments);
+
+        // Store segments for navigation module
+        window.lastRouteSegments = data.segments;
 
         // Update Route Info Panel
         const distanceMiles = (data.total_length_meters / 1609.34).toFixed(2);
@@ -909,4 +943,105 @@ function createCrossingIcon(type) {
         iconAnchor: [13, 13],
         className: "crossing-marker-icon"
     });
+}
+
+// Toggle logic for the official bike routes layer
+async function handleOfficialRoutesToggle(e) {
+    const isChecked = e.target.checked;
+    const legend = document.getElementById("layer-legend-routes");
+    
+    if (isChecked) {
+        if (legend) legend.classList.remove("hidden");
+        await showOfficialRoutes();
+    } else {
+        if (legend) legend.classList.add("hidden");
+        hideOfficialRoutes();
+    }
+}
+
+// Fetch and draw official bike routes
+async function showOfficialRoutes() {
+    if (bikeRoutesLayer) {
+        map.addLayer(bikeRoutesLayer);
+        return;
+    }
+    
+    // If not cached, fetch from API
+    if (!cachedBikeRoutesGeoJSON) {
+        try {
+            console.log("Fetching official bike routes GeoJSON...");
+            const response = await fetch("http://localhost:3001/api/bike-routes");
+            cachedBikeRoutesGeoJSON = await response.json();
+        } catch (err) {
+            console.error("Failed to fetch official bike routes:", err);
+            alert("Failed to load official bike routes layer from backend.");
+            // Reset toggle
+            const toggle = document.getElementById("toggle-official-routes");
+            if (toggle) toggle.checked = false;
+            const legend = document.getElementById("layer-legend-routes");
+            if (legend) legend.classList.add("hidden");
+            return;
+        }
+    }
+    
+    // Draw GeoJSON layer
+    bikeRoutesLayer = L.geoJSON(cachedBikeRoutesGeoJSON, {
+        style: function (feature) {
+            const type = feature.properties.FACILITYTYPE;
+            const color = OFFICIAL_ROUTE_COLORS[type] || "#b0bec5";
+            let weight = 3.5;
+            
+            // Paths get slightly thicker lines
+            if (type === "Multi-Use Path" || type === "Bike Park Path") {
+                weight = 4.5;
+            }
+            
+            return {
+                color: color,
+                weight: weight,
+                opacity: 0.75,
+                lineCap: "round",
+                lineJoin: "round"
+            };
+        },
+        onEachFeature: function (feature, layer) {
+            const props = feature.properties;
+            const cleanType = props.FACILITYTYPE.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+            
+            layer.bindTooltip(`
+                <strong>${props.name}</strong><br>
+                Designation: ${cleanType}
+            `, {
+                sticky: true,
+                opacity: 0.9
+            });
+            
+            // Hover effect
+            layer.on("mouseover", function () {
+                layer.setStyle({
+                    weight: (props.FACILITYTYPE === "Multi-Use Path" || props.FACILITYTYPE === "Bike Park Path") ? 6.5 : 5.5,
+                    opacity: 1.0
+                });
+            });
+            
+            layer.on("mouseout", function () {
+                const type = props.FACILITYTYPE;
+                const baseWeight = (type === "Multi-Use Path" || type === "Bike Park Path") ? 4.5 : 3.5;
+                layer.setStyle({
+                    weight: baseWeight,
+                    opacity: 0.75
+                });
+            });
+        }
+    });
+    
+    // Add to map
+    bikeRoutesLayer.addTo(map);
+}
+
+// Remove official bike routes from map
+function hideOfficialRoutes() {
+    if (bikeRoutesLayer && map.hasLayer(bikeRoutesLayer)) {
+        map.removeLayer(bikeRoutesLayer);
+    }
 }

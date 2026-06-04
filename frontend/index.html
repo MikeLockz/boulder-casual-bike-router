@@ -228,7 +228,55 @@
                     </div>
                 </details>
 
-                <!-- Section 3: How to Route (Collapsed by default) -->
+                <!-- Section 3: Map Layers (Collapsed by default) -->
+                <details class="collapsible-section" id="sec-layers">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-layer-group"></i> Map Layers</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content">
+                        <p class="section-desc">Toggle additional GIS data overlays on the map.</p>
+                        
+                        <div class="layer-toggle-group">
+                            <label class="switch-container">
+                                <span class="switch-label"><i class="fa-solid fa-bicycle"></i> Official Bike Routes</span>
+                                <div class="switch-wrapper">
+                                    <input type="checkbox" id="toggle-official-routes">
+                                    <span class="switch-slider"></span>
+                                </div>
+                            </label>
+                        </div>
+                        
+                        <!-- Collapsible Legend for Official Bike Routes -->
+                        <div id="layer-legend-routes" class="layer-legend hidden">
+                            <h4>Bike Route Designations</h4>
+                            <div class="legend-grid">
+                                <div class="legend-item">
+                                    <span class="legend-line multiuse"></span>
+                                    <span>Multi-Use Path (Off-Street)</span>
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-line protected"></span>
+                                    <span>Protected / Separated Lane</span>
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-line bike-lane"></span>
+                                    <span>On-Street Bike Lane</span>
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-line designated"></span>
+                                    <span>Designated Bike Route</span>
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-line shoulder"></span>
+                                    <span>Bikeable Shoulder</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Section 4: How to Route (Collapsed by default) -->
                 <details class="collapsible-section" id="sec-instructions">
                     <summary>
                         <span class="summary-title"><i class="fa-solid fa-circle-question"></i> How to Route</span>
@@ -256,6 +304,8 @@
                             <span class="value" id="info-cost">-</span>
                         </div>
                     </div>
+                    
+                    <button id="btn-start-nav" class="btn btn-nav"><i class="fa-solid fa-location-arrow"></i> Start Navigation</button>
                     
                     <!-- Turn-by-turn cuesheet for B-180 and B-360 exact paths -->
                     <div id="turn-by-turn-container" class="turn-by-turn-box hidden">
@@ -285,6 +335,38 @@
         </aside>
 
         <!-- Map Container -->
+        <!-- Navigation Overlay -->
+        <div id="nav-overlay" class="nav-overlay hidden">
+            <div class="nav-maneuver-banner">
+                <div class="nav-maneuver-icon-wrap">
+                    <i id="nav-maneuver-icon" class="fa-solid fa-location-arrow"></i>
+                </div>
+                <div class="nav-maneuver-info">
+                    <span id="nav-maneuver-text" class="nav-maneuver-text">Preparing navigation...</span>
+                    <span id="nav-maneuver-dist" class="nav-maneuver-dist"></span>
+                </div>
+            </div>
+            <div class="nav-bottom-bar">
+                <button id="nav-mute-btn" class="nav-btn" onclick="Navigation.toggleMute()">
+                    <i class="fa-solid fa-volume-high"></i>
+                </button>
+                <div class="nav-stats">
+                    <div class="nav-stat">
+                        <span class="nav-stat-value" id="nav-remaining-dist">--</span>
+                        <span class="nav-stat-label">remaining</span>
+                    </div>
+                    <div class="nav-stat-divider"></div>
+                    <div class="nav-stat">
+                        <span class="nav-stat-value" id="nav-eta">--</span>
+                        <span class="nav-stat-label">ETA</span>
+                    </div>
+                </div>
+                <button id="nav-exit-btn" class="nav-btn nav-btn-exit" onclick="Navigation.stop(map)">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+        </div>
+
         <main id="map" class="map-view"></main>
     </div>
 
@@ -293,5 +375,7 @@
     
     <!-- Custom JS -->
     <script src="app.js"></script>
+    <script src="sim.js"></script>
+    <script src="navigation.js"></script>
 </body>
 </html>

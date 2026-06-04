@@ -49,6 +49,7 @@ G_connected = None
 nodes_global = {}
 safe_crossing_nodes_global = set()
 four_lane_nodes_global = set()
+bike_routes_geojson_global = None
 
 def haversine_distance(coord1, coord2):
     """Calculate the great-circle distance between two points in meters."""
@@ -788,6 +789,82 @@ def build_graph(weights=None):
     nodes_global = nodes
     safe_crossing_nodes_global = safe_crossing_nodes
     four_lane_nodes_global = four_lane_nodes
+    
+    # Pre-build bike routes GeoJSON
+    build_bike_routes_geojson()
+
+def build_bike_routes_geojson():
+    """Load, filter, and simplify official bike routes data into a lightweight FeatureCollection."""
+    global bike_routes_geojson_global
+    print("Compiling lightweight official bike routes GeoJSON...")
+    
+    features = []
+    
+    # 1. Process bike stress data (on-street network)
+    if os.path.exists(STRESS_CACHE_FILE):
+        try:
+            with open(STRESS_CACHE_FILE, "r") as f:
+                stress_data = json.load(f)
+                
+            allowed_stress_types = {
+                "Designated Bike Route",
+                "On-Street Bike Lane",
+                "Protected Bike Lane",
+                "Separated Bike Lane",
+                "Contra Flow Bike Lane",
+                "Bikeable Shoulder"
+            }
+            
+            for feat in stress_data.get("features", []):
+                props = feat.get("properties", {})
+                fac_type = props.get("FACILITYTYPE")
+                if fac_type in allowed_stress_types:
+                    geom = feat.get("geometry")
+                    if geom and geom.get("type") in ["LineString", "MultiLineString"]:
+                        features.append({
+                            "type": "Feature",
+                            "geometry": geom,
+                            "properties": {
+                                "FACILITYTYPE": fac_type,
+                                "name": props.get("STREETNAME") or props.get("NAME") or "Unnamed Street"
+                            }
+                        })
+        except Exception as e:
+            print(f"Error compiling stress routes: {e}")
+            
+    # 2. Process off-street data
+    if os.path.exists(OFFSTREET_CACHE_FILE):
+        try:
+            with open(OFFSTREET_CACHE_FILE, "r") as f:
+                offstreet_data = json.load(f)
+                
+            allowed_offstreet_types = {
+                "Multi-Use Path",
+                "Bike Park Path"
+            }
+            
+            for feat in offstreet_data.get("features", []):
+                props = feat.get("properties", {})
+                fac_type = props.get("FACILITYTYPE")
+                if fac_type in allowed_offstreet_types:
+                    geom = feat.get("geometry")
+                    if geom and geom.get("type") in ["LineString", "MultiLineString"]:
+                        features.append({
+                            "type": "Feature",
+                            "geometry": geom,
+                            "properties": {
+                                "FACILITYTYPE": fac_type,
+                                "name": props.get("NAME") or props.get("STREETNAME") or "Unnamed Path"
+                            }
+                        })
+        except Exception as e:
+            print(f"Error compiling off-street routes: {e}")
+            
+    bike_routes_geojson_global = {
+        "type": "FeatureCollection",
+        "features": features
+    }
+    print(f"Successfully compiled {len(features)} official bike route features.")
 
 def find_nearest_node(target_coord):
     """Find the nearest node in the connected graph to the target coordinate."""
@@ -1033,6 +1110,14 @@ def get_playgrounds():
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/bike-routes", methods=["GET"])
+def get_bike_routes():
+    """API endpoint to get the compiled, lightweight official bike routes GeoJSON."""
+    global bike_routes_geojson_global
+    if bike_routes_geojson_global is None:
+        build_bike_routes_geojson()
+    return jsonify(bike_routes_geojson_global)
 
 # Simple CORS support for development
 @app.after_request
