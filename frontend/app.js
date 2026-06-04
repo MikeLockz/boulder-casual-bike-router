@@ -363,7 +363,7 @@ async function calculateRoute() {
     };
 
     try {
-        const response = await fetch("http://localhost:3001/api/route", {
+        const response = await fetch("/api/route", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
@@ -395,7 +395,7 @@ async function calculateRoute() {
 
     } catch (err) {
         console.error("Failed to fetch route:", err);
-        alert("Unable to connect to routing server. Make sure the backend Flask app is running on port 3001.");
+        alert("Unable to connect to routing server. Make sure the backend routing service is running.");
     }
 }
 
@@ -786,7 +786,7 @@ function prepopulatePoints() {
 // Fetch crossings and cache them on load
 async function loadCrossings() {
     try {
-        const response = await fetch("http://localhost:3001/api/crossings");
+        const response = await fetch("/api/crossings");
         allCrossings = await response.json();
         console.log(`Loaded ${allCrossings.length} crossing signals for dynamic route display.`);
     } catch (err) {
@@ -800,7 +800,7 @@ async function loadPlaygrounds() {
     if (!playgroundSelect) return;
     
     try {
-        const response = await fetch("http://localhost:3001/api/playgrounds");
+        const response = await fetch("/api/playgrounds");
         const playgrounds = await response.json();
         
         playgrounds.forEach(pg => {
