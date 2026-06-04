@@ -110,6 +110,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initMap();
     initSliders();
     initEventListeners();
+    initDebugMode();
     prepopulatePoints();
     loadCrossings();
     loadPlaygrounds();
@@ -234,6 +235,13 @@ function initEventListeners() {
     const grabBar = document.getElementById("grab-bar");
     const panelHeader = document.querySelector(".panel-header");
 
+    // Set initial toggle button visibility based on panel state
+    if (controlPanel.classList.contains("collapsed")) {
+        panelToggle.classList.remove("hidden");
+    } else {
+        panelToggle.classList.add("hidden");
+    }
+
     function togglePanel() {
         controlPanel.classList.toggle("collapsed");
         if (controlPanel.classList.contains("collapsed")) {
@@ -242,7 +250,13 @@ function initEventListeners() {
             panelToggle.classList.add("hidden");
         }
         // Force Leaflet map resize layout update
-        setTimeout(() => map.invalidateSize(), 300);
+        setTimeout(() => {
+            map.invalidateSize();
+            if (routeSegments.length > 0) {
+                const group = new L.featureGroup(routeSegments);
+                map.fitBounds(group.getBounds(), getFitBoundsOptions());
+            }
+        }, 300);
     }
 
     panelToggle.addEventListener("click", togglePanel);
@@ -510,7 +524,7 @@ function drawRoute(segments) {
     // Automatically fit map bounds to the route
     if (routeSegments.length > 0) {
         const group = new L.featureGroup(routeSegments);
-        map.fitBounds(group.getBounds().pad(0.1));
+        map.fitBounds(group.getBounds(), getFitBoundsOptions());
     }
     
     // Show crossing signals near the route path
@@ -658,7 +672,7 @@ function drawOfficialGeoJSON(data, routeType) {
     // Fit map bounds to the exact route
     if (routeSegments.length > 0) {
         const group = new L.featureGroup(routeSegments);
-        map.fitBounds(group.getBounds().pad(0.1));
+        map.fitBounds(group.getBounds(), getFitBoundsOptions());
     }
 }
 
@@ -1049,4 +1063,74 @@ function hideOfficialRoutes() {
     if (bikeRoutesLayer && map.hasLayer(bikeRoutesLayer)) {
         map.removeLayer(bikeRoutesLayer);
     }
+}
+
+// Initialize debug mode based on URL parameter
+function initDebugMode() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const isDebug = urlParams.has("debug");
+
+    const presetInstruction = document.getElementById("preset-instruction");
+    const presetList = document.querySelector(".preset-list");
+    const weightsSection = document.getElementById("sec-weights");
+    const costContainer = document.getElementById("info-cost-container");
+    const infoGrid = document.querySelector(".info-grid");
+    const wayfindingSubSection = document.querySelector(".wayfinding-sub-section");
+
+    if (isDebug) {
+        // Show everything for debug mode
+        if (presetInstruction) presetInstruction.classList.remove("hidden");
+        if (presetList) presetList.classList.remove("hidden");
+        if (weightsSection) weightsSection.classList.remove("hidden");
+        if (costContainer) costContainer.classList.remove("hidden");
+        if (infoGrid) infoGrid.classList.remove("single-column");
+        if (wayfindingSubSection) {
+            wayfindingSubSection.style.marginTop = "";
+            wayfindingSubSection.style.paddingTop = "";
+            wayfindingSubSection.style.borderTop = "";
+        }
+    } else {
+        // Hide debug elements for normal mode
+        if (presetInstruction) presetInstruction.classList.add("hidden");
+        if (presetList) presetList.classList.add("hidden");
+        if (weightsSection) weightsSection.classList.add("hidden");
+        if (costContainer) costContainer.classList.add("hidden");
+        if (infoGrid) infoGrid.classList.add("single-column");
+        if (wayfindingSubSection) {
+            wayfindingSubSection.style.marginTop = "0";
+            wayfindingSubSection.style.paddingTop = "0";
+            wayfindingSubSection.style.borderTop = "none";
+        }
+    }
+}
+
+// Get dynamic padding options for fitBounds depending on screen size and side panel state
+function getFitBoundsOptions() {
+    const options = {
+        animate: true,
+        duration: 0.5
+    };
+    
+    const controlPanel = document.getElementById("control-panel");
+    const isMobile = window.innerWidth < 768;
+    const isPanelOpen = controlPanel && !controlPanel.classList.contains("collapsed");
+    
+    if (isPanelOpen) {
+        if (isMobile) {
+            // On mobile, the panel is at the bottom (max-height 60vh, height auto)
+            const panelHeight = controlPanel.offsetHeight || 0;
+            options.paddingBottomRight = [15, panelHeight + 15];
+            options.paddingTopLeft = [15, 15];
+        } else {
+            // On laptop/desktop, the panel is on the left (width 380px + 20px offset + gap)
+            // Left padding 430px leaves a beautiful view area on the right
+            options.paddingTopLeft = [430, 30];
+            options.paddingBottomRight = [30, 30];
+        }
+    } else {
+        // If panel is closed/collapsed, use standard uniform padding
+        options.padding = [40, 40];
+    }
+    
+    return options;
 }

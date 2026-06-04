@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Boulder Casual Bike Router</title>
+    <title>Biking Boulder</title>
     
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
@@ -22,7 +22,7 @@
 <body>
     <div class="app-container">
         <!-- Floating Toggle Panel Button -->
-        <button id="panel-toggle" class="panel-toggle-btn"><i class="fa-solid fa-bars"></i></button>
+        <button id="panel-toggle" class="panel-toggle-btn hidden"><i class="fa-solid fa-bars"></i></button>
 
         <!-- Floating Control Panel Overlay -->
         <aside class="control-panel" id="control-panel">
@@ -31,7 +31,7 @@
             <header class="panel-header">
                 <div class="logo">
                     <i class="fa-solid fa-bicycle logo-icon"></i>
-                    <h1>Casual Router</h1>
+                    <h1>Biking Boulder</h1>
                 </div>
                 <button id="btn-close-panel" class="close-panel-btn"><i class="fa-solid fa-xmark"></i></button>
             </header>
@@ -44,7 +44,7 @@
                         <i class="fa-solid fa-chevron-down chevron"></i>
                     </summary>
                     <div class="section-content">
-                        <p class="section-desc">Select a route preset or click points on the map to start planning.</p>
+                        <p id="preset-instruction" class="section-desc">Select a route preset or click points on the map to start planning.</p>
                         <div class="preset-list">
                             <button class="preset-item" data-start="40.028446,-105.281088" data-end="40.03866227818636,-105.26385171093987">
                                 <span class="preset-name">North Boulder ➔ Iris Ave</span>
@@ -299,7 +299,7 @@
                             <span class="label">Actual Distance</span>
                             <span class="value" id="info-distance">-</span>
                         </div>
-                        <div class="info-item">
+                        <div class="info-item" id="info-cost-container">
                             <span class="label">Weighted Cost</span>
                             <span class="value" id="info-cost">-</span>
                         </div>

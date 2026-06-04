@@ -1289,3 +1289,14 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .legend-line.bike-lane { background-color: var(--color-route-lane); }
 .legend-line.designated { background-color: var(--color-route-designated); }
 .legend-line.shoulder { background-color: var(--color-route-shoulder); }
+
+/* General visibility utility */
+.hidden {
+    display: none !important;
+}
+
+/* Route info grid single column layout when cost is hidden */
+.info-grid.single-column {
+    grid-template-columns: 1fr;
+}
+
