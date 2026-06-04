@@ -1,6 +1,11 @@
 // Boulder Casual Bike Router
 // Frontend logic using Leaflet.js
 
+// Determine the API base URL dynamically based on dev vs prod environment
+const API_BASE = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+    ? "http://localhost:3001"
+    : "";
+
 // Initial Map Settings
 const BOULDER_CO = [40.015, -105.270];
 const ZOOM_LEVEL = 13;
@@ -394,7 +399,7 @@ async function calculateRoute() {
     };
 
     try {
-        const response = await fetch("/api/route", {
+        const response = await fetch(`${API_BASE}/api/route`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
@@ -820,7 +825,7 @@ function prepopulatePoints() {
 // Fetch crossings and cache them on load
 async function loadCrossings() {
     try {
-        const response = await fetch("/api/crossings");
+        const response = await fetch(`${API_BASE}/api/crossings`);
         allCrossings = await response.json();
         console.log(`Loaded ${allCrossings.length} crossing signals for dynamic route display.`);
     } catch (err) {
@@ -834,7 +839,7 @@ async function loadPlaygrounds() {
     if (!playgroundSelect) return;
     
     try {
-        const response = await fetch("/api/playgrounds");
+        const response = await fetch(`${API_BASE}/api/playgrounds`);
         const playgrounds = await response.json();
         
         playgrounds.forEach(pg => {
@@ -970,7 +975,7 @@ async function showOfficialRoutes() {
     if (!cachedBikeRoutesGeoJSON) {
         try {
             console.log("Fetching official bike routes GeoJSON...");
-            const response = await fetch("http://localhost:3001/api/bike-routes");
+            const response = await fetch(`${API_BASE}/api/bike-routes`);
             cachedBikeRoutesGeoJSON = await response.json();
         } catch (err) {
             console.error("Failed to fetch official bike routes:", err);
