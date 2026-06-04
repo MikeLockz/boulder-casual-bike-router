@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boulder Casual Bike Router</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    
+    <!-- Google Fonts (Outfit) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom Style -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Floating Toggle Panel Button -->
+        <button id="panel-toggle" class="panel-toggle-btn"><i class="fa-solid fa-bars"></i></button>
+
+        <!-- Floating Control Panel Overlay -->
+        <aside class="control-panel" id="control-panel">
+            <div class="grab-bar" id="grab-bar"></div>
+            
+            <header class="panel-header">
+                <div class="logo">
+                    <i class="fa-solid fa-bicycle logo-icon"></i>
+                    <h1>Casual Router</h1>
+                </div>
+                <button id="btn-close-panel" class="close-panel-btn"><i class="fa-solid fa-xmark"></i></button>
+            </header>
+
+            <div class="panel-body">
+                <!-- Section 1: Presets & Wayfinding (Open by default) -->
+                <details open class="collapsible-section" id="sec-presets">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-location-dot"></i> Presets & Wayfinding</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content">
+                        <p class="section-desc">Select a route preset or click points on the map to start planning.</p>
+                        <div class="preset-list">
+                            <button class="preset-item" data-start="40.028446,-105.281088" data-end="40.03866227818636,-105.26385171093987">
+                                <span class="preset-name">North Boulder ➔ Iris Ave</span>
+                                <span class="preset-desc">Cedar Ave to 28th St & Iris</span>
+                            </button>
+                            <button class="preset-item" data-start="40.007,-105.263" data-end="40.028,-105.283">
+                                <span class="preset-name">CU Campus ➔ North Park</span>
+                                <span class="preset-desc">Broadway Path & residential streets</span>
+                            </button>
+                            <button class="preset-item" data-start="40.030,-105.234" data-end="40.018,-105.279">
+                                <span class="preset-name">Valmont Park ➔ Pearl Street Mall</span>
+                                <span class="preset-desc">Using off-street multi-use paths</span>
+                            </button>
+                            <button class="preset-item" data-start="39.986,-105.262" data-end="40.007,-105.263">
+                                <span class="preset-name">Table Mesa ➔ CU Campus</span>
+                                <span class="preset-desc">Safe commuting corridors</span>
+                            </button>
+                            <button class="preset-item" data-start="40.030,-105.234" data-end="40.030,-105.234" data-waypoints="40.033,-105.253;40.038,-105.263;40.028,-105.281;40.028,-105.283;40.021,-105.291;40.015,-105.292;40.014,-105.275;40.015,-105.253" data-route-type="b180">
+                                <span class="preset-name"><i class="fa-solid fa-arrows-spin"></i> Boulder B-180 Loop</span>
+                                <span class="preset-desc">12 mi scenic loop (Valmont Park)</span>
+                            </button>
+                            <button class="preset-item" data-start="40.030,-105.234" data-end="40.030,-105.234" data-waypoints="40.034,-105.225;40.052,-105.207;40.054,-105.228;40.040,-105.249;40.046,-105.265;40.060,-105.275;40.039,-105.289;40.028,-105.289;40.015,-105.292;39.998,-105.283;39.991,-105.263;39.986,-105.238;39.981,-105.233;39.998,-105.228;40.030,-105.210" data-route-type="b360">
+                                <span class="preset-name"><i class="fa-solid fa-arrows-spin"></i> Boulder B-360 Loop</span>
+                                <span class="preset-desc">24 mi grand loop (Valmont Park)</span>
+                            </button>
+                        </div>
+                        
+                        <!-- New Playground Wayfinding Sub-section -->
+                        <div class="wayfinding-sub-section">
+                            <h3 class="sub-section-title"><i class="fa-solid fa-child-reaching"></i> Playgrounds from Cedar Ave</h3>
+                            <p class="section-desc">Starts at Cedar Ave. Select a park playground destination:</p>
+                            <div class="select-container">
+                                <select id="playground-select" class="dropdown-select">
+                                    <option value="" disabled selected>-- Select a Park with Playground --</option>
+                                </select>
+                                <i class="fa-solid fa-chevron-down select-arrow"></i>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Section 2: Routing Weights (Collapsed by default) -->
+                <details class="collapsible-section" id="sec-weights">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-sliders"></i> Routing Weights</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content">
+                        <p class="section-desc">Adjust sliders to influence path selection. Lower values attract routes; higher values penalize roads.</p>
+                        
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-leaf text-separated"></i> Separated Paths</span>
+                                <span id="val-separated_path" class="weight-value">0.5x</span>
+                            </div>
+                            <input type="range" id="weight-separated_path" min="0.1" max="2.0" step="0.1" value="0.5">
+                            <span class="subtext">Multi-use paths, greenways, cycletracks</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-shield text-protected"></i> Quiet Streets (Sharrows)</span>
+                                <span id="val-sharrow_minor" class="weight-value">1.5x</span>
+                            </div>
+                            <input type="range" id="weight-sharrow_minor" min="0.5" max="5.0" step="0.1" value="1.5">
+                            <span class="subtext">Quiet streets with shared lane markings</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-house text-residential"></i> Residential Streets</span>
+                                <span id="val-residential" class="weight-value">1.0x</span>
+                            </div>
+                            <input type="range" id="weight-residential" min="0.5" max="5.0" step="0.1" value="1.0">
+                            <span class="subtext">Quiet side streets without designations</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-walking text-sidewalk"></i> Sidewalk Routing</span>
+                                <span id="val-sidewalk" class="weight-value">2.0x</span>
+                            </div>
+                            <input type="range" id="weight-sidewalk" min="1.0" max="10.0" step="0.5" value="2.0">
+                            <span class="subtext">Separate sidewalks, pedestrian ways, slow speed</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-road text-busy-lane"></i> Busy Roads w/ Bike Lane</span>
+                                <span id="val-busy_with_lane" class="weight-value">5.0x</span>
+                            </div>
+                            <input type="range" id="weight-busy_with_lane" min="2.0" max="15.0" step="0.5" value="5.0">
+                            <span class="subtext">Secondary/tertiary roads with painted lanes</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-triangle-exclamation text-busy-sharrow"></i> Busy Roads w/ Sharrows</span>
+                                <span id="val-busy_with_sharrow" class="weight-value">8.0x</span>
+                            </div>
+                            <input type="range" id="weight-busy_with_sharrow" min="3.0" max="25.0" step="1.0" value="8.0">
+                            <span class="subtext">Busy arterials with sharrows</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-skull-crossbones text-busy-undesignated"></i> Busy Roads (Undesignated)</span>
+                                <span id="val-busy_undesignated" class="weight-value">15.0x</span>
+                            </div>
+                            <input type="range" id="weight-busy_undesignated" min="5.0" max="50.0" step="1.0" value="15.0">
+                            <span class="subtext">Arterials without bike infrastructure (feeder-only)</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-ban text-sidewalk-forced"></i> Sidewalk on 4+ Lanes</span>
+                                <span id="val-sidewalk_forced" class="weight-value">6.0x</span>
+                            </div>
+                            <input type="range" id="weight-sidewalk_forced" min="2.0" max="20.0" step="1.0" value="6.0">
+                            <span class="subtext">Forced sidewalk walk on 4+ lane roads</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-traffic-light text-crossing-safe"></i> Safe Crossings</span>
+                                <span id="val-crossing_safe" class="weight-value">1.0x</span>
+                            </div>
+                            <input type="range" id="weight-crossing_safe" min="0.5" max="3.0" step="0.1" value="1.0">
+                            <span class="subtext">Signalized, beacon-flashing, or bike crossings</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-triangle-exclamation text-crossing-unsafe"></i> Unsignalized Crossings</span>
+                                <span id="val-crossing_unsafe" class="weight-value">6.0x</span>
+                            </div>
+                            <input type="range" id="weight-crossing_unsafe" min="1.0" max="10.0" step="0.5" value="6.0">
+                            <span class="subtext">Unmarked or non-signalized busy street crossings</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-heart-circle-check text-low-stress"></i> Low Stress Modifier</span>
+                                <span id="val-stress_low" class="weight-value">0.7x</span>
+                            </div>
+                            <input type="range" id="weight-stress_low" min="0.1" max="1.5" step="0.1" value="0.7">
+                            <span class="subtext">Additional multiplier applied to streets matching Low Traffic Stress overlay</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-circle-exclamation text-high-stress"></i> High Stress Modifier</span>
+                                <span id="val-stress_high" class="weight-value">2.0x</span>
+                            </div>
+                            <input type="range" id="weight-stress_high" min="1.0" max="10.0" step="0.5" value="2.0">
+                            <span class="subtext">Additional penalty applied to streets matching High Traffic Stress overlay</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-tree-city text-offstreet-multiuse"></i> Multi-Use Path Modifier</span>
+                                <span id="val-offstreet_multiuse" class="weight-value">0.8x</span>
+                            </div>
+                            <input type="range" id="weight-offstreet_multiuse" min="0.1" max="1.5" step="0.1" value="0.8">
+                            <span class="subtext">Additional multiplier applied to off-street Multi-Use Paths</span>
+                        </div>
+
+                        <div class="weight-group">
+                            <div class="weight-label">
+                                <span><i class="fa-solid fa-bolt-lightning text-ebike-restricted"></i> E-Bike Prohibited Penalty</span>
+                                <span id="val-ebike_restricted" class="weight-value">1.0x</span>
+                            </div>
+                            <input type="range" id="weight-ebike_restricted" min="1.0" max="10.0" step="0.5" value="1.0">
+                            <span class="subtext">Additional penalty applied if e-bikes are prohibited on the path</span>
+                        </div>
+
+
+                        <div class="action-buttons">
+                            <button id="btn-reset" class="btn btn-secondary"><i class="fa-solid fa-rotate-left"></i> Reset Defaults</button>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Section 3: How to Route (Collapsed by default) -->
+                <details class="collapsible-section" id="sec-instructions">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-circle-question"></i> How to Route</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content instructions">
+                        <ol>
+                            <li>Click on the map to set a <strong>Start point</strong>.</li>
+                            <li>Click another location to set a <strong>Destination</strong>.</li>
+                            <li>Or select from the presets above!</li>
+                        </ol>
+                    </div>
+                </details>
+
+                <!-- Route Summary Panel -->
+                <div class="route-info-box hidden" id="route-info">
+                    <h2><i class="fa-solid fa-route"></i> Route Summary</h2>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span class="label">Actual Distance</span>
+                            <span class="value" id="info-distance">-</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Weighted Cost</span>
+                            <span class="value" id="info-cost">-</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Turn-by-turn cuesheet for B-180 and B-360 exact paths -->
+                    <div id="turn-by-turn-container" class="turn-by-turn-box hidden">
+                        <h3><i class="fa-solid fa-list-ol"></i> Turn-by-Turn Route Cues</h3>
+                        <div class="cue-scroll-wrapper">
+                            <ul id="turn-by-turn-list" class="cue-list"></ul>
+                        </div>
+                    </div>
+                    
+                    <div class="legend">
+                        <h3>Legend</h3>
+                        <div class="legend-grid">
+                            <div class="legend-item"><span class="legend-color separated"></span> Separated Path</div>
+                            <div class="legend-item"><span class="legend-color residential"></span> Residential St</div>
+                            <div class="legend-item"><span class="legend-color sharrow"></span> Quiet Sharrow</div>
+                            <div class="legend-item"><span class="legend-color sidewalk"></span> Sidewalk / Footway</div>
+                            <div class="legend-item"><span class="legend-color busy-lane"></span> Busy w/ Bike Lane</div>
+                            <div class="legend-item"><span class="legend-color busy-sharrow"></span> Busy w/ Sharrow</div>
+                            <div class="legend-item"><span class="legend-color busy-undesignated"></span> Busy Undesignated</div>
+                            <div class="legend-item"><span class="legend-color sidewalk-forced"></span> 4+ Lane Sidewalk</div>
+                            <div class="legend-item"><span class="legend-color crossing-safe"></span> Safe Crossing</div>
+                            <div class="legend-item"><span class="legend-color crossing-unsafe"></span> Unsignalized Crossing</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Map Container -->
+        <main id="map" class="map-view"></main>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <!-- Custom JS -->
+    <script src="app.js"></script>
+</body>
+</html>

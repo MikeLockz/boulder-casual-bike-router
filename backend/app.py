@@ -1,0 +1,1048 @@
+import os
+import json
+import math
+import sys
+
+try:
+    import requests
+    import networkx as nx
+    from flask import Flask, request, jsonify
+except ImportError as e:
+    missing_module = getattr(e, "name", "dependencies")
+    print(f"\n[ERROR] Missing required library: '{missing_module}'")
+    print("It looks like you are running the app with the system Python instead of the virtual environment.")
+    print("Please run the app using the virtual environment:")
+    print("  source venv/bin/activate")
+    print("  python backend/app.py")
+    print("Or run it directly using the venv executable:")
+    print("  ./venv/bin/python3 backend/app.py\n")
+    sys.exit(1)
+
+app = Flask(__name__)
+
+# Bounding box for Boulder, CO: [South, West, North, East]
+BOULDER_BBOX = (39.96, -105.30, 40.09, -105.18)
+CACHE_FILE = os.path.join(os.path.dirname(__file__), "boulder_osm_data.json")
+PLAYGROUNDS_CACHE_FILE = os.path.join(os.path.dirname(__file__), "boulder_playground_data.json")
+STRESS_CACHE_FILE = os.path.join(os.path.dirname(__file__), "boulder_bike_stress_data.json")
+OFFSTREET_CACHE_FILE = os.path.join(os.path.dirname(__file__), "boulder_bike_offstreet_data.json")
+
+DEFAULT_WEIGHTS = {
+    "separated_path": 0.5,
+    "sharrow_minor": 1.5,
+    "sidewalk": 2.0,
+    "residential": 1.0,
+    "busy_with_lane": 5.0,
+    "busy_with_sharrow": 8.0,
+    "busy_undesignated": 15.0,
+    "sidewalk_forced": 6.0,
+    "crossing_safe": 1.0,
+    "crossing_unsafe": 6.0,
+    "stress_low": 0.7,
+    "stress_high": 2.0,
+    "offstreet_multiuse": 0.8,
+    "ebike_restricted": 1.0
+}
+
+# In-memory graph storage
+G_connected = None
+nodes_global = {}
+safe_crossing_nodes_global = set()
+four_lane_nodes_global = set()
+
+def haversine_distance(coord1, coord2):
+    """Calculate the great-circle distance between two points in meters."""
+    lat1, lon1 = coord1
+    lat2, lon2 = coord2
+    R = 6371000  # Earth's radius in meters
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
+def fetch_osm_data():
+    """Fetch OpenStreetMap data for Boulder from Overpass API or load from cache."""
+    if os.path.exists(CACHE_FILE):
+        print("Loading OSM data from cache...")
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+            
+    print("Fetching OSM data from Overpass API (this may take a few seconds)...")
+    s, w, n, e = BOULDER_BBOX
+    overpass_url = "https://overpass-api.de/api/interpreter"
+    overpass_query = f"""
+    [out:json][timeout:180];
+    (
+      way["highway"]({s},{w},{n},{e});
+    );
+    out body;
+    >;
+    out body qt;
+    """
+    
+    headers = {
+        "User-Agent": "BoulderCasualBikeRouter/1.0 (contact: support@bouldercasualrouter.local)"
+    }
+    response = requests.post(overpass_url, data={"data": overpass_query}, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+    
+    # Save cache
+    with open(CACHE_FILE, "w") as f:
+        json.dump(data, f)
+        
+    return data
+
+def fetch_playground_data():
+    """Fetch playground locations data for Boulder from Open Data portal or load from cache."""
+    if os.path.exists(PLAYGROUNDS_CACHE_FILE):
+        try:
+            with open(PLAYGROUNDS_CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error reading playgrounds cache: {e}")
+            
+    print("Fetching playground data from Boulder Open Data portal...")
+    url = "https://opendata.arcgis.com/datasets/b1297c2328b343528f70dfd78c6de459_1.geojson"
+    headers = {
+        "User-Agent": "BoulderCasualBikeRouter/1.0 (contact: support@bouldercasualrouter.local)"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Save cache
+        with open(PLAYGROUNDS_CACHE_FILE, "w") as f:
+            json.dump(data, f)
+        return data
+    except Exception as e:
+        print(f"Error fetching playground data: {e}")
+        # Return cache if available as a fallback
+        if os.path.exists(PLAYGROUNDS_CACHE_FILE):
+            with open(PLAYGROUNDS_CACHE_FILE, "r") as f:
+                return json.load(f)
+        raise e
+
+def fetch_stress_data():
+    """Fetch bike stress data for Boulder from Open Data portal or load from cache."""
+    if os.path.exists(STRESS_CACHE_FILE):
+        try:
+            with open(STRESS_CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error reading stress cache: {e}")
+            
+    print("Fetching bike stress data from Boulder Open Data portal...")
+    url = "https://opendata.arcgis.com/datasets/e20bc9b72c3b4d0fac167d722a7cf1b7_0.geojson"
+    headers = {
+        "User-Agent": "BoulderCasualBikeRouter/1.0 (contact: support@bouldercasualrouter.local)"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        with open(STRESS_CACHE_FILE, "w") as f:
+            json.dump(data, f)
+        return data
+    except Exception as e:
+        print(f"Error fetching bike stress data: {e}")
+        if os.path.exists(STRESS_CACHE_FILE):
+            with open(STRESS_CACHE_FILE, "r") as f:
+                return json.load(f)
+        raise e
+
+def fetch_offstreet_data():
+    """Fetch bike off-street data for Boulder from Open Data portal or load from cache."""
+    if os.path.exists(OFFSTREET_CACHE_FILE):
+        try:
+            with open(OFFSTREET_CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error reading off-street cache: {e}")
+            
+    print("Fetching bike off-street data from Boulder Open Data portal...")
+    url = "https://opendata.arcgis.com/datasets/8cae0bbbd3154abe8264fa349b8f245f_0.geojson"
+    headers = {
+        "User-Agent": "BoulderCasualBikeRouter/1.0 (contact: support@bouldercasualrouter.local)"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        with open(OFFSTREET_CACHE_FILE, "w") as f:
+            json.dump(data, f)
+        return data
+    except Exception as e:
+        print(f"Error fetching bike off-street data: {e}")
+        if os.path.exists(OFFSTREET_CACHE_FILE):
+            with open(OFFSTREET_CACHE_FILE, "r") as f:
+                return json.load(f)
+        raise e
+
+
+def point_to_segment_distance(pt, seg_start, seg_end):
+    lat, lon = pt
+    lat1, lon1 = seg_start
+    lat2, lon2 = seg_end
+    
+    avg_lat = math.radians((lat + lat1 + lat2) / 3.0)
+    lat_scale = 111000.0
+    lon_scale = 111000.0 * math.cos(avg_lat)
+    
+    py = (lat - lat1) * lat_scale
+    px = (lon - lon1) * lon_scale
+    
+    sey = (lat2 - lat1) * lat_scale
+    sex = (lon2 - lon1) * lon_scale
+    
+    seg_len_sq = sex*sex + sey*sey
+    if seg_len_sq == 0.0:
+        return math.sqrt(px*px + py*py)
+        
+    t = (px * sex + py * sey) / seg_len_sq
+    t = max(0.0, min(1.0, t))
+    
+    cpx = t * sex
+    cpy = t * sey
+    
+    dx = px - cpx
+    dy = py - cpy
+    return math.sqrt(dx*dx + dy*dy)
+
+def get_segment_bearing(lat1, lon1, lat2, lon2):
+    dlon = math.radians(lon2 - lon1)
+    lat1_r = math.radians(lat1)
+    lat2_r = math.radians(lat2)
+    
+    y = math.sin(dlon) * math.cos(lat2_r)
+    x = math.cos(lat1_r) * math.sin(lat2_r) - math.sin(lat1_r) * math.cos(lat2_r) * math.cos(dlon)
+    bearing = math.atan2(y, x)
+    return (math.degrees(bearing) + 360) % 360
+
+def bearing_difference_undirected(b1, b2):
+    diff = abs(b1 - b2) % 360
+    if diff > 180:
+        diff = 360 - diff
+    if diff > 90:
+        diff = 180 - diff
+    return diff
+
+class SpatialGridIndex:
+    def __init__(self, cell_size=0.001):
+        self.cell_size = cell_size
+        self.grid = {}
+
+    def _get_cell(self, lat, lon):
+        return int(lat / self.cell_size), int(lon / self.cell_size)
+
+    def add_segment(self, lat1, lon1, lat2, lon2, feature_idx, properties):
+        # Prevent indexing segments with invalid lat/lon or extreme coordinates
+        if not (-90.0 <= lat1 <= 90.0) or not (-180.0 <= lon1 <= 180.0):
+            return
+        if not (-90.0 <= lat2 <= 90.0) or not (-180.0 <= lon2 <= 180.0):
+            return
+            
+        # Protect against long lines (e.g. diagonal lines spanning the globe)
+        if abs(lat1 - lat2) > 0.05 or abs(lon1 - lon2) > 0.05:
+            return
+
+        min_lat, max_lat = min(lat1, lat2), max(lat1, lat2)
+        min_lon, max_lon = min(lon1, lon2), max(lon1, lon2)
+        
+        start_cell_x, start_cell_y = self._get_cell(min_lat, min_lon)
+        end_cell_x, end_cell_y = self._get_cell(max_lat, max_lon)
+        
+        # Double check cell span is reasonable
+        if (end_cell_x - start_cell_x > 50) or (end_cell_y - start_cell_y > 50):
+            return
+            
+        # Precalculate bearing once
+        bearing = get_segment_bearing(lat1, lon1, lat2, lon2)
+        segment_data = (lat1, lon1, lat2, lon2, feature_idx, properties, bearing)
+        
+        for x in range(start_cell_x, end_cell_x + 1):
+            for y in range(start_cell_y, end_cell_y + 1):
+                cell_key = (x, y)
+                if cell_key not in self.grid:
+                    self.grid[cell_key] = []
+                self.grid[cell_key].append(segment_data)
+
+    def query_nearest_with_bearing(self, lat, lon, osm_bearing, max_dist_meters=15.0, bearing_tolerance=30.0):
+        cell_x, cell_y = self._get_cell(lat, lon)
+        candidates = []
+        
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                cell_key = (cell_x + dx, cell_y + dy)
+                if cell_key in self.grid:
+                    candidates.extend(self.grid[cell_key])
+                    
+        if not candidates:
+            return None
+            
+        best_candidate = None
+        min_dist = float('inf')
+        checked_segments = set()
+        
+        for lat1, lon1, lat2, lon2, feat_idx, props, gis_bearing in candidates:
+            seg_key = (lat1, lon1, lat2, lon2, feat_idx)
+            if seg_key in checked_segments:
+                continue
+            checked_segments.add(seg_key)
+            
+            if bearing_difference_undirected(osm_bearing, gis_bearing) > bearing_tolerance:
+                continue
+                
+            dist = point_to_segment_distance((lat, lon), (lat1, lon1), (lat2, lon2))
+            if dist < min_dist:
+                min_dist = dist
+                best_candidate = (props, dist)
+                
+        if min_dist <= max_dist_meters:
+            return best_candidate
+        return None
+
+
+def calculate_centroid(pts):
+    """Calculate exact centroid of a 2D polygon using shifted coordinates to avoid floating point cancellation."""
+    if not pts:
+        return 0.0, 0.0
+    # Use first point as offset to prevent precision loss with large coordinates
+    offset_x, offset_y = pts[0]
+    shifted_pts = [[x - offset_x, y - offset_y] for x, y in pts]
+    A = 0.0
+    Cx = 0.0
+    Cy = 0.0
+    for i in range(len(shifted_pts) - 1):
+        x0, y0 = shifted_pts[i]
+        x1, y1 = shifted_pts[i+1]
+        factor = (x0 * y1 - x1 * y0)
+        A += factor
+        Cx += (x0 + x1) * factor
+        Cy += (y0 + y1) * factor
+    A = 0.5 * A
+    if A == 0.0:
+        # Fallback to average of unique vertices
+        unique_pts = pts[:-1] if len(pts) > 1 and pts[0] == pts[-1] else pts
+        return sum(p[1] for p in unique_pts) / len(unique_pts), sum(p[0] for p in unique_pts) / len(unique_pts)
+    
+    Cx = Cx / (6 * A) + offset_x  # Longitude (x)
+    Cy = Cy / (6 * A) + offset_y  # Latitude (y)
+    return Cy, Cx  # Returns (lat, lon)
+
+def get_way_class_and_multiplier(tags, weights, way_nodes=None, safe_crossing_nodes=None, node_highways=None):
+    """Categorize the way and return its infrastructure type and weighting multiplier."""
+    highway = tags.get("highway", "")
+    cycleway = tags.get("cycleway", "")
+    cycleway_left = tags.get("cycleway:left", "")
+    cycleway_right = tags.get("cycleway:right", "")
+    cycleway_both = tags.get("cycleway:both", "")
+    sidewalk = tags.get("sidewalk", "")
+    bicycle = tags.get("bicycle", "")
+    
+    # Check for crossings first
+    is_crossing = (tags.get("footway") == "crossing" or tags.get("cycleway") == "crossing" or highway == "crossing")
+    if is_crossing and way_nodes and safe_crossing_nodes is not None and node_highways is not None:
+        intersects_busy = False
+        intersects_safe_node = False
+        
+        for node_id in way_nodes:
+            # Check if this node touches a busy street
+            busy_types = ["primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link"]
+            node_ways = node_highways.get(node_id, set())
+            if any(bt in node_ways for bt in busy_types):
+                intersects_busy = True
+            if node_id in safe_crossing_nodes:
+                intersects_safe_node = True
+                
+        if intersects_busy:
+            if intersects_safe_node:
+                return "crossing_safe", weights.get("crossing_safe", 1.0)
+            else:
+                return "crossing_unsafe", weights.get("crossing_unsafe", 3.0)
+        else:
+            # Crosses a quiet street or footpath connector: comfortable
+            return "crossing_safe", weights.get("crossing_safe", 1.0)
+
+    # Block motorways and trunks entirely
+    if highway in ["motorway", "motorway_link", "trunk", "trunk_link"]:
+        return "blocked", 999999.0
+        
+    # Check lanes count
+    lanes_str = tags.get("lanes", "")
+    try:
+        if ";" in lanes_str:
+            lanes = max([int(x) for x in lanes_str.split(";") if x.isdigit()])
+        else:
+            lanes = int(lanes_str) if lanes_str.isdigit() else 2
+    except:
+        lanes = 2
+
+    # Check forward/backward lanes
+    try:
+        lanes_fwd = int(tags.get("lanes:forward", "0"))
+        lanes_bwd = int(tags.get("lanes:backward", "0"))
+        if lanes_fwd + lanes_bwd > 0:
+            lanes = lanes_fwd + lanes_bwd
+    except:
+        pass
+
+    has_sidewalk = (sidewalk in ["yes", "both", "left", "right", "shared"]) or \
+                   ("sidewalk:left" in tags) or ("sidewalk:right" in tags) or ("sidewalk:both" in tags)
+
+    has_track = (cycleway == "track") or (cycleway_left == "track") or (cycleway_right == "track") or (cycleway_both == "track")
+
+    # Check for standard bike lanes (on-street painted)
+    has_bike_lane = (cycleway in ["lane", "opposite_lane"]) or \
+                    (cycleway_left in ["lane", "opposite_lane"]) or \
+                    (cycleway_right in ["lane", "opposite_lane"]) or \
+                    (cycleway_both in ["lane", "opposite_lane"])
+
+    # Check for separated cycle tracks or dedicated paths first
+    if highway == "cycleway" or (highway in ["path", "footway"] and bicycle in ["yes", "designated"]) or has_track:
+        return "separated_path", weights.get("separated_path", 0.5)
+
+    # 4+ Lane Block Rules
+    if lanes >= 4:
+        if has_bike_lane:
+            return "busy_with_lane", weights.get("busy_with_lane", 5.0)
+        elif not has_sidewalk:
+            return "blocked", 999999.0
+        else:
+            return "sidewalk_forced", weights.get("sidewalk_forced", 6.0)
+
+    # Check for sharrows
+    has_sharrow = (cycleway == "shared_lane") or (cycleway_left == "shared_lane") or (cycleway_right == "shared_lane") or (cycleway_both == "shared_lane")
+
+    # Separate sidewalks / footways / pedestrian paths
+    if highway in ["footway", "pedestrian", "path"] or tags.get("footway") == "sidewalk":
+        return "sidewalk", weights.get("sidewalk", 2.0)
+
+    # Quiet residential streets
+    if highway in ["residential", "living_street", "service"]:
+        if has_sharrow:
+            return "sharrow_minor", weights.get("sharrow_minor", 1.5)
+        elif has_bike_lane:
+            # High quality bike lane on quiet street counts as a separated path quality for comfort
+            return "separated_path", weights.get("separated_path", 0.5)
+        else:
+            return "residential", weights.get("residential", 1.0)
+
+    # Busy streets (primary, secondary, tertiary)
+    if highway in ["primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link"]:
+        if has_bike_lane:
+            # Busy road with bike lane (worse than sharrows on quiet roads)
+            return "busy_with_lane", weights.get("busy_with_lane", 5.0)
+        elif has_sharrow:
+            return "busy_with_sharrow", weights.get("busy_with_sharrow", 8.0)
+        elif has_sidewalk:
+            # Route on sidewalk if no bike lane is present
+            return "sidewalk", weights.get("sidewalk", 2.0)
+        else:
+            return "busy_undesignated", weights.get("busy_undesignated", 15.0)
+
+    # Fall-through defaults
+    if has_bike_lane:
+        return "busy_with_lane", weights.get("busy_with_lane", 5.0)
+    return "residential", weights.get("residential", 1.0)
+
+def match_stress_for_edge(u, v, nodes, spatial_index):
+    if not spatial_index or u not in nodes or v not in nodes:
+        return "None"
+    lat_u, lon_u = nodes[u]["lat"], nodes[u]["lon"]
+    lat_v, lon_v = nodes[v]["lat"], nodes[v]["lon"]
+    
+    midpoint = ((lat_u + lat_v) / 2.0, (lon_u + lon_v) / 2.0)
+    osm_bearing = get_segment_bearing(lat_u, lon_u, lat_v, lon_v)
+    
+    match = spatial_index.query_nearest_with_bearing(
+        midpoint[0], midpoint[1], osm_bearing, 
+        max_dist_meters=15.0, bearing_tolerance=30.0
+    )
+    if match:
+        props, dist = match
+        return props.get("BIKESTRESS", "None") or "None"
+    return "None"
+
+def match_offstreet_for_edge(u, v, nodes, spatial_index):
+    if not spatial_index or u not in nodes or v not in nodes:
+        return "None", "Yes", "Yes"
+    lat_u, lon_u = nodes[u]["lat"], nodes[u]["lon"]
+    lat_v, lon_v = nodes[v]["lat"], nodes[v]["lon"]
+    
+    midpoint = ((lat_u + lat_v) / 2.0, (lon_u + lon_v) / 2.0)
+    osm_bearing = get_segment_bearing(lat_u, lon_u, lat_v, lon_v)
+    
+    match = spatial_index.query_nearest_with_bearing(
+        midpoint[0], midpoint[1], osm_bearing, 
+        max_dist_meters=15.0, bearing_tolerance=30.0
+    )
+    if match:
+        props, dist = match
+        return (
+            props.get("FACILITYTYPE", "None") or "None",
+            props.get("BICYCLES", "Yes") or "Yes",
+            props.get("EBIKE", "Yes") or "Yes"
+        )
+    return "None", "Yes", "Yes"
+
+def build_graph(weights=None):
+    """Build the NetworkX routing graph from OSM JSON data."""
+    global G_connected, nodes_global, safe_crossing_nodes_global, four_lane_nodes_global
+    if weights is None:
+        weights = DEFAULT_WEIGHTS
+
+    data = fetch_osm_data()
+    G = nx.Graph()
+
+    # Load stress data and build spatial index
+    try:
+        stress_data = fetch_stress_data()
+        spatial_index = SpatialGridIndex(cell_size=0.001)
+        for idx, feature in enumerate(stress_data.get("features", [])):
+            geom = feature.get("geometry", {})
+            props = feature.get("properties", {})
+            if geom.get("type") == "LineString":
+                coords = geom.get("coordinates", [])
+                for i in range(len(coords) - 1):
+                    lon1, lat1 = coords[i]
+                    lon2, lat2 = coords[i+1]
+                    spatial_index.add_segment(lat1, lon1, lat2, lon2, idx, props)
+        print("Bicycle stress spatial index built successfully.")
+    except Exception as e:
+        print(f"Error building bicycle stress spatial index: {e}")
+        spatial_index = None
+
+    # Load off-street data and build spatial index
+    try:
+        offstreet_data = fetch_offstreet_data()
+        offstreet_spatial_index = SpatialGridIndex(cell_size=0.001)
+        for idx, feature in enumerate(offstreet_data.get("features", [])):
+            geom = feature.get("geometry", {})
+            props = feature.get("properties", {})
+            if geom.get("type") == "LineString":
+                coords = geom.get("coordinates", [])
+                for i in range(len(coords) - 1):
+                    lon1, lat1 = coords[i]
+                    lon2, lat2 = coords[i+1]
+                    offstreet_spatial_index.add_segment(lat1, lon1, lat2, lon2, idx, props)
+        print("Off-street spatial index built successfully.")
+    except Exception as e:
+        print(f"Error building off-street spatial index: {e}")
+        offstreet_spatial_index = None
+
+
+
+    # Phase 1: Parse nodes & map network topology for crossings
+    node_highways = {}
+    safe_crossing_nodes = set()
+    nodes = {}
+    
+    for element in data.get("elements", []):
+        if element.get("type") == "node":
+            node_id = element["id"]
+            nodes[node_id] = {
+                "lat": element["lat"],
+                "lon": element["lon"],
+                "tags": element.get("tags", {})
+            }
+            node_tags = element.get("tags", {})
+            highway = node_tags.get("highway", "")
+            crossing = node_tags.get("crossing", "")
+            
+            is_safe = False
+            if highway == "traffic_signals":
+                is_safe = True
+            elif highway == "crossing":
+                is_safe = (
+                    crossing in ["traffic_signals", "toucan", "pelican", "pegasus", "controlled", "marked", "zebra"] or
+                    node_tags.get("crossing:signals") == "yes" or
+                    node_tags.get("crossing:signals:pedestrian") == "yes" or
+                    node_tags.get("flashing_lights") in ["yes", "button"] or
+                    node_tags.get("crossing:bicycle") in ["yes", "designated"] or
+                    node_tags.get("crossing:markings") in ["yes", "marked", "zebra", "surface"]
+                )
+            
+            if is_safe:
+                safe_crossing_nodes.add(node_id)
+                    
+        elif element.get("type") == "way":
+            way_nodes = element.get("nodes", [])
+            way_tags = element.get("tags", {})
+            highway = way_tags.get("highway", "")
+            if highway:
+                for node_id in way_nodes:
+                    if node_id not in node_highways:
+                        node_highways[node_id] = set()
+                    node_highways[node_id].add(highway)
+
+    # Pre-identify all ways that have lanes >= 4
+    four_lane_ways = {}
+    four_lane_nodes = set()
+    node_to_four_lane_ways = {}
+    way_orientations = {}
+    
+    for element in data.get("elements", []):
+        if element.get("type") == "way":
+            way_id = element["id"]
+            way_nodes = element.get("nodes", [])
+            tags = element.get("tags", {})
+            highway = tags.get("highway", "")
+            if not highway or highway in ["motorway", "motorway_link", "trunk", "trunk_link"]:
+                continue
+                
+            lanes_str = tags.get("lanes", "")
+            try:
+                if ";" in lanes_str:
+                    lanes = max([int(x) for x in lanes_str.split(";") if x.isdigit()])
+                else:
+                    lanes = int(lanes_str) if lanes_str.isdigit() else 2
+            except:
+                lanes = 2
+                
+            try:
+                lanes_fwd = int(tags.get("lanes:forward", "0"))
+                lanes_bwd = int(tags.get("lanes:backward", "0"))
+                if lanes_fwd + lanes_bwd > 0:
+                    lanes = lanes_fwd + lanes_bwd
+            except:
+                pass
+                
+            if lanes >= 4:
+                four_lane_ways[way_id] = tags
+                for nid in way_nodes:
+                    four_lane_nodes.add(nid)
+                    if nid not in node_to_four_lane_ways:
+                        node_to_four_lane_ways[nid] = set()
+                    node_to_four_lane_ways[nid].add(way_id)
+                
+                # Determine orientation
+                lats = [nodes[n]["lat"] for n in way_nodes if n in nodes]
+                lons = [nodes[n]["lon"] for n in way_nodes if n in nodes]
+                if lats and lons:
+                    lat_span = max(lats) - min(lats)
+                    lon_span = max(lons) - min(lons)
+                    orientation = "NS" if lat_span > lon_span else "EW"
+                else:
+                    orientation = "NS"
+                way_orientations[way_id] = orientation
+
+    # Phase 2: Parse ways and create edges
+    for element in data.get("elements", []):
+        if element.get("type") == "way":
+            way_id = element["id"]
+            tags = element.get("tags", {})
+            way_nodes = element.get("nodes", [])
+            
+            infra_type, multiplier = get_way_class_and_multiplier(
+                tags, weights, way_nodes, safe_crossing_nodes, node_highways
+            )
+            
+            # Skip blocked roads (unless it's a 4-lane way, in which case we still need crossing edges)
+            if (infra_type == "blocked" or multiplier >= 100000.0) and way_id not in four_lane_ways:
+                continue
+                
+            way_name = tags.get("name", "Unnamed Path")
+            
+            if way_id in four_lane_ways:
+                # Reconstruct parallel sides for 4+ lane way (only if not blocked)
+                if infra_type != "blocked" and multiplier < 100000.0:
+                    for i in range(len(way_nodes) - 1):
+                        u = way_nodes[i]
+                        v = way_nodes[i+1]
+                        if u in nodes and v in nodes:
+                            u_side1 = f"{u}_side1"
+                            v_side1 = f"{v}_side1"
+                            u_side2 = f"{u}_side2"
+                            v_side2 = f"{v}_side2"
+                            
+                            G.add_node(u_side1, lat=nodes[u]["lat"], lon=nodes[u]["lon"])
+                            G.add_node(v_side1, lat=nodes[v]["lat"], lon=nodes[v]["lon"])
+                            G.add_node(u_side2, lat=nodes[u]["lat"], lon=nodes[u]["lon"])
+                            G.add_node(v_side2, lat=nodes[v]["lat"], lon=nodes[v]["lon"])
+                            
+                            dist = haversine_distance((nodes[u]["lat"], nodes[u]["lon"]), (nodes[v]["lat"], nodes[v]["lon"]))
+                            weight = dist * multiplier
+                            stress_level = match_stress_for_edge(u, v, nodes, spatial_index)
+                            offstreet_type, bicycles_allowed, ebike_allowed = match_offstreet_for_edge(u, v, nodes, offstreet_spatial_index)
+                            
+                            G.add_edge(u_side1, v_side1,
+                                       weight=weight,
+                                       length=dist,
+                                       type=infra_type,
+                                       multiplier=multiplier,
+                                       name=way_name,
+                                       bikestress=stress_level,
+                                       offstreet_type=offstreet_type,
+                                       bicycles_allowed=bicycles_allowed,
+                                       ebike_allowed=ebike_allowed)
+                            G.add_edge(u_side2, v_side2,
+                                       weight=weight,
+                                       length=dist,
+                                       type=infra_type,
+                                       multiplier=multiplier,
+                                       name=way_name,
+                                       bikestress=stress_level,
+                                       offstreet_type=offstreet_type,
+                                       bicycles_allowed=bicycles_allowed,
+                                       ebike_allowed=ebike_allowed)
+                
+                # Connect side1 and side2 at each node on this way
+                for nid in way_nodes:
+                    if nid in nodes:
+                        nid_side1 = f"{nid}_side1"
+                        nid_side2 = f"{nid}_side2"
+                        
+                        length_crossing = 15.0
+                        if nid in safe_crossing_nodes:
+                            crossing_type = "crossing_safe"
+                            crossing_multiplier = weights.get("crossing_safe", 1.0)
+                            weight_crossing = length_crossing * crossing_multiplier
+                        else:
+                            crossing_type = "crossing_unsafe"
+                            crossing_multiplier = weights.get("crossing_unsafe", 3.0)
+                            weight_crossing = (length_crossing + 100.0) * crossing_multiplier
+                            
+                        if not G.has_edge(nid_side1, nid_side2):
+                            crossing_name = f"{way_name} Crossing"
+                            G.add_node(nid_side1, lat=nodes[nid]["lat"], lon=nodes[nid]["lon"])
+                            G.add_node(nid_side2, lat=nodes[nid]["lat"], lon=nodes[nid]["lon"])
+                            G.add_edge(nid_side1, nid_side2,
+                                       weight=weight_crossing,
+                                       length=length_crossing,
+                                       type=crossing_type,
+                                       multiplier=crossing_multiplier,
+                                       name=crossing_name)
+            else:
+                # For other streets, connect to side1 or side2 if they touch a 4+ lane node
+                for i in range(len(way_nodes) - 1):
+                    u = way_nodes[i]
+                    v = way_nodes[i+1]
+                    if u in nodes and v in nodes:
+                        u_name = u
+                        v_name = v
+                        
+                        if u in four_lane_nodes:
+                            parent_way_id = list(node_to_four_lane_ways[u])[0]
+                            orientation = way_orientations[parent_way_id]
+                            if orientation == "NS":
+                                if nodes[v]["lon"] > nodes[u]["lon"]:
+                                    u_name = f"{u}_side1"
+                                else:
+                                    u_name = f"{u}_side2"
+                            else:
+                                if nodes[v]["lat"] > nodes[u]["lat"]:
+                                    u_name = f"{u}_side1"
+                                else:
+                                    u_name = f"{u}_side2"
+                                    
+                        if v in four_lane_nodes:
+                            parent_way_id = list(node_to_four_lane_ways[v])[0]
+                            orientation = way_orientations[parent_way_id]
+                            if orientation == "NS":
+                                if nodes[u]["lon"] > nodes[v]["lon"]:
+                                    v_name = f"{v}_side1"
+                                else:
+                                    v_name = f"{v}_side2"
+                            else:
+                                if nodes[u]["lat"] > nodes[v]["lat"]:
+                                    v_name = f"{v}_side1"
+                                else:
+                                    v_name = f"{v}_side2"
+                                    
+                        dist = haversine_distance((nodes[u]["lat"], nodes[u]["lon"]), (nodes[v]["lat"], nodes[v]["lon"]))
+                        weight = dist * multiplier
+                        stress_level = match_stress_for_edge(u, v, nodes, spatial_index)
+                        offstreet_type, bicycles_allowed, ebike_allowed = match_offstreet_for_edge(u, v, nodes, offstreet_spatial_index)
+                        
+                        if not G.has_node(u_name):
+                            G.add_node(u_name, lat=nodes[u]["lat"], lon=nodes[u]["lon"])
+                        if not G.has_node(v_name):
+                            G.add_node(v_name, lat=nodes[v]["lat"], lon=nodes[v]["lon"])
+                            
+                        G.add_edge(u_name, v_name,
+                                   weight=weight,
+                                   length=dist,
+                                   type=infra_type,
+                                   multiplier=multiplier,
+                                   name=way_name,
+                                   bikestress=stress_level,
+                                   offstreet_type=offstreet_type,
+                                   bicycles_allowed=bicycles_allowed,
+                                   ebike_allowed=ebike_allowed)
+
+    # Get largest connected component to ensure routes are reachable
+    if len(G) > 0:
+        largest_cc = max(nx.connected_components(G), key=len)
+        G_connected = G.subgraph(largest_cc).copy()
+        print(f"Graph loaded successfully: {G_connected.number_of_nodes()} nodes, {G_connected.number_of_edges()} edges.")
+    else:
+        G_connected = G
+        print("Warning: Graph is empty.")
+
+    # Store global references for API usage
+    nodes_global = nodes
+    safe_crossing_nodes_global = safe_crossing_nodes
+    four_lane_nodes_global = four_lane_nodes
+
+def find_nearest_node(target_coord):
+    """Find the nearest node in the connected graph to the target coordinate."""
+    min_dist = float("inf")
+    nearest_node = None
+    for node, data in G_connected.nodes(data=True):
+        dist = haversine_distance(target_coord, (data["lat"], data["lon"]))
+        if dist < min_dist:
+            min_dist = dist
+            nearest_node = node
+    return nearest_node, min_dist
+
+@app.route("/api/route", methods=["POST", "OPTIONS"])
+def get_route():
+    """API endpoint to request a route between two points with custom weights."""
+    if request.method == "OPTIONS":
+        return "", 200
+        
+    global G_connected
+    data = request.json or {}
+    
+    start_lat = data.get("start_lat")
+    start_lon = data.get("start_lon")
+    end_lat = data.get("end_lat")
+    end_lon = data.get("end_lon")
+    custom_weights = data.get("weights", DEFAULT_WEIGHTS)
+    
+    if not all([start_lat, start_lon, end_lat, end_lon]):
+        return jsonify({"error": "Missing coordinates"}), 400
+
+    for u, v, d in G_connected.edges(data=True):
+        infra_type = d.get("type", "residential")
+        base_multiplier = custom_weights.get(infra_type, DEFAULT_WEIGHTS.get(infra_type, 1.0))
+        
+        # Apply stress modifier if matched
+        stress = d.get("bikestress", "None")
+        stress_modifier = 1.0
+        if stress == "Low":
+            stress_modifier = custom_weights.get("stress_low", DEFAULT_WEIGHTS.get("stress_low", 0.7))
+        elif stress == "High":
+            stress_modifier = custom_weights.get("stress_high", DEFAULT_WEIGHTS.get("stress_high", 2.0))
+            
+        # Apply off-street modifiers
+        offstreet_modifier = 1.0
+        bicycles_allowed = d.get("bicycles_allowed", "Yes")
+        
+        if bicycles_allowed == "No":
+            # Bicycles forbidden -> Blocked segment!
+            final_multiplier = 999999.0
+        else:
+            offstreet_type = d.get("offstreet_type", "None")
+            if offstreet_type == "Multi-Use Path":
+                offstreet_modifier = custom_weights.get("offstreet_multiuse", DEFAULT_WEIGHTS.get("offstreet_multiuse", 0.8))
+                
+            ebike_allowed = d.get("ebike_allowed", "Yes")
+            ebike_modifier = 1.0
+            if ebike_allowed == "No":
+                ebike_modifier = custom_weights.get("ebike_restricted", DEFAULT_WEIGHTS.get("ebike_restricted", 1.0))
+                
+            final_multiplier = base_multiplier * stress_modifier * offstreet_modifier * ebike_modifier
+            
+        G_connected[u][v]["multiplier"] = final_multiplier
+        
+        length = d.get("length", 0.0)
+        if infra_type == "crossing_unsafe":
+            G_connected[u][v]["weight"] = (length + 100.0) * final_multiplier
+        else:
+            G_connected[u][v]["weight"] = length * final_multiplier
+
+    waypoints = data.get("waypoints", []) # list of [lat, lon]
+    
+    # Compile a sequence of coordinates to route between
+    route_points = [(start_lat, start_lon)]
+    for wp in waypoints:
+        route_points.append((wp[0], wp[1]))
+    route_points.append((end_lat, end_lon))
+
+    try:
+        segments = []
+        total_length = 0
+        total_weight = 0
+        
+        start_node_dist = None
+        end_node_dist = None
+        
+        # Iterate over consecutive pairs of points
+        for p in range(len(route_points) - 1):
+            sub_start_lat, sub_start_lon = route_points[p]
+            sub_end_lat, sub_end_lon = route_points[p+1]
+            
+            sub_start_node, sub_start_dist = find_nearest_node((sub_start_lat, sub_start_lon))
+            sub_end_node, sub_end_dist = find_nearest_node((sub_end_lat, sub_end_lon))
+            
+            if sub_start_node is None or sub_end_node is None:
+                return jsonify({"error": f"Could not locate routing node for point {p+1}."}), 404
+                
+            if p == 0:
+                start_node_dist = sub_start_dist
+            if p == len(route_points) - 2:
+                end_node_dist = sub_end_dist
+                
+            path_nodes = nx.shortest_path(G_connected, source=sub_start_node, target=sub_end_node, weight="weight")
+            
+            for i in range(len(path_nodes) - 1):
+                u = path_nodes[i]
+                v = path_nodes[i+1]
+                edge_data = G_connected.get_edge_data(u, v)
+                length = edge_data.get("length", 0)
+                infra_type = edge_data.get("type", "residential")
+                name = edge_data.get("name", "Unnamed Path")
+                multiplier = edge_data.get("multiplier", 1.0)
+                
+                edge_weight = edge_data.get("weight", length * multiplier)
+                total_length += length
+                total_weight += edge_weight
+                
+                node_u_data = G_connected.nodes[u]
+                node_v_data = G_connected.nodes[v]
+                
+                segments.append({
+                    "coords": [
+                        [node_u_data["lat"], node_u_data["lon"]],
+                        [node_v_data["lat"], node_v_data["lon"]]
+                    ],
+                    "type": infra_type,
+                    "name": name,
+                    "length": length,
+                    "multiplier": multiplier,
+                    "bikestress": edge_data.get("bikestress", "None"),
+                    "offstreet_type": edge_data.get("offstreet_type", "None"),
+                    "bicycles_allowed": edge_data.get("bicycles_allowed", "Yes"),
+                    "ebike_allowed": edge_data.get("ebike_allowed", "Yes")
+                })
+                
+        return jsonify({
+            "segments": segments,
+            "total_length_meters": total_length,
+            "total_weight": total_weight,
+            "start_node_dist_meters": start_node_dist,
+            "end_node_dist_meters": end_node_dist
+        })
+        
+    except nx.NetworkXNoPath:
+        return jsonify({"error": "No route exists between the selected points."}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/weights", methods=["GET"])
+def get_current_weights():
+    """Get the default and currently configured weighting factors."""
+    return jsonify(DEFAULT_WEIGHTS)
+
+@app.route("/api/crossings", methods=["GET"])
+def get_crossings():
+    """Get all crossing nodes on 4+ lane roads or safe crossings in the network."""
+    global nodes_global, safe_crossing_nodes_global, four_lane_nodes_global
+    
+    crossings_list = []
+    for nid, ndata in nodes_global.items():
+        tags = ndata.get("tags", {})
+        highway = tags.get("highway", "")
+        if highway == "crossing" or highway == "traffic_signals":
+            if nid in four_lane_nodes_global or nid in safe_crossing_nodes_global:
+                lat = ndata["lat"]
+                lon = ndata["lon"]
+                
+                # Classify type
+                if nid in safe_crossing_nodes_global:
+                    if tags.get("bicycle") in ["yes", "designated"] or tags.get("crossing:bicycle") in ["yes", "designated"]:
+                        crossing_type = "bike_signal"
+                        desc = "Dedicated Bike Signal"
+                    else:
+                        crossing_type = "stop_light"
+                        desc = "Signalized Crossing (Stop Light)"
+                else:
+                    crossing_type = "crosswalk"
+                    desc = "Unsignalized Crosswalk"
+                    
+                crossings_list.append({
+                    "id": nid,
+                    "lat": lat,
+                    "lon": lon,
+                    "crossing_type": crossing_type,
+                    "description": desc,
+                    "tags": tags
+                })
+                
+    return jsonify(crossings_list)
+
+@app.route("/api/playgrounds", methods=["GET"])
+def get_playgrounds():
+    """Get processed playground locations sorted alphabetically with display names and centroids."""
+    from collections import Counter
+    try:
+        data = fetch_playground_data()
+        features = data.get("features", [])
+        
+        # Filter for active playgrounds
+        playgrounds = []
+        for f in features:
+            prop = f.get("properties", {})
+            geom = f.get("geometry", {})
+            if prop.get("PLAYTYPE") == "Park Playground" and geom and geom.get("type") == "Polygon":
+                playgrounds.append(f)
+                
+        # Count playgrounds per park to format name properly
+        park_counts = Counter(f["properties"].get("PROPNAME", "") for f in playgrounds)
+        
+        results = []
+        for f in playgrounds:
+            prop = f["properties"]
+            park_name = prop.get("PROPNAME", "Unnamed Park")
+            play_name = prop.get("NAME", "Unnamed Playground")
+            coords = f["geometry"]["coordinates"][0]
+            
+            lat, lon = calculate_centroid(coords)
+            
+            # Format display name
+            if park_counts[park_name] == 1:
+                display_name = park_name
+            else:
+                # Remove park name words and common terms to get a clean suffix
+                words_to_remove = set(w.lower() for w in park_name.split())
+                words_to_remove.update(["playground", "park", "community"])
+                
+                play_words = play_name.split()
+                unique_words = [w for w in play_words if w.lower() not in words_to_remove]
+                suffix = " ".join(unique_words)
+                
+                if not suffix:
+                    suffix = "Playground"
+                display_name = f"{park_name} ({suffix})"
+                
+            results.append({
+                "name": display_name,
+                "lat": lat,
+                "lon": lon
+            })
+            
+        # Sort alphabetically by display name
+        results.sort(key=lambda x: x["name"])
+        
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Simple CORS support for development
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    return response
+
+if __name__ == "__main__":
+    # Pre-build graph on startup
+    build_graph()
+    app.run(host="0.0.0.0", port=3001, debug=True)
