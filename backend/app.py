@@ -41,7 +41,14 @@ DEFAULT_WEIGHTS = {
     "stress_low": 0.7,
     "stress_high": 2.0,
     "offstreet_multiuse": 0.8,
-    "ebike_restricted": 1.0
+    "ebike_restricted": 1.0,
+    # Boulder GIS FACILITYTYPE bonus multipliers (applied on top of base type)
+    # Lower = more preferred. Physical infrastructure beats mere designation.
+    "facility_designated_route": 0.70,  # Designated Bike Route — mild preference (no physical infra)
+    "facility_protected_lane": 0.20,    # Protected / Separated Bike Lane — physical barrier
+    "facility_onstreet_lane": 0.35,     # On-Street Bike Lane (painted) — physical lanes
+    "facility_bikeable_shoulder": 0.65, # Bikeable Shoulder
+    "facility_contraflow": 0.45         # Contra Flow Bike Lane
 }
 
 # In-memory graph storage
@@ -436,24 +443,36 @@ def get_way_class_and_multiplier(tags, weights, way_nodes=None, safe_crossing_no
     # Busy streets (primary, secondary, tertiary)
     if highway in ["primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link"]:
         if has_bike_lane:
-            # Busy road with bike lane (worse than sharrows on quiet roads)
-            return "busy_with_lane", weights.get("busy_with_lane", 5.0)
+            is_designated = bicycle in ["yes", "designated"]
+            if is_designated and lanes <= 2 and highway in ["tertiary", "tertiary_link", "unclassified"]:
+                # Dedicated painted bike lanes + designated on a low-speed tertiary
+                # → treat as sharrow_minor quality
+                return "sharrow_minor", weights.get("sharrow_minor", 1.5)
+            else:
+                # Primary/secondary or high-lane-count: still a busy road with lane
+                return "busy_with_lane", weights.get("busy_with_lane", 3.0)
         elif has_sharrow:
-            return "busy_with_sharrow", weights.get("busy_with_sharrow", 8.0)
+            is_designated = bicycle in ["yes", "designated"]
+            if is_designated and lanes <= 2 and highway in ["tertiary", "tertiary_link", "unclassified"]:
+                return "sharrow_minor", weights.get("sharrow_minor", 1.3)
+            else:
+                return "busy_with_sharrow", weights.get("busy_with_sharrow", 6.0)
         elif has_sidewalk:
-            # Route on sidewalk if no bike lane is present
             return "sidewalk", weights.get("sidewalk", 2.0)
         else:
             return "busy_undesignated", weights.get("busy_undesignated", 15.0)
 
     # Fall-through defaults
     if has_bike_lane:
-        return "busy_with_lane", weights.get("busy_with_lane", 5.0)
-    return "residential", weights.get("residential", 1.0)
+        return "busy_with_lane", weights.get("busy_with_lane", 3.0)
+    return "residential", weights.get("residential", 1.2)
+
+
 
 def match_stress_for_edge(u, v, nodes, spatial_index):
+    """Returns (stress_level, facility_type) tuple from Boulder GIS stress data."""
     if not spatial_index or u not in nodes or v not in nodes:
-        return "None"
+        return "None", "None"
     lat_u, lon_u = nodes[u]["lat"], nodes[u]["lon"]
     lat_v, lon_v = nodes[v]["lat"], nodes[v]["lon"]
     
@@ -466,30 +485,43 @@ def match_stress_for_edge(u, v, nodes, spatial_index):
     )
     if match:
         props, dist = match
-        return props.get("BIKESTRESS", "None") or "None"
-    return "None"
+        stress = props.get("BIKESTRESS", "None") or "None"
+        facility = props.get("FACILITYTYPE", "None") or "None"
+        return stress, facility
+    return "None", "None"
 
 def match_offstreet_for_edge(u, v, nodes, spatial_index):
     if not spatial_index or u not in nodes or v not in nodes:
         return "None", "Yes", "Yes"
     lat_u, lon_u = nodes[u]["lat"], nodes[u]["lon"]
     lat_v, lon_v = nodes[v]["lat"], nodes[v]["lon"]
-    
+
     midpoint = ((lat_u + lat_v) / 2.0, (lon_u + lon_v) / 2.0)
     osm_bearing = get_segment_bearing(lat_u, lon_u, lat_v, lon_v)
-    
+
     match = spatial_index.query_nearest_with_bearing(
-        midpoint[0], midpoint[1], osm_bearing, 
+        midpoint[0], midpoint[1], osm_bearing,
         max_dist_meters=15.0, bearing_tolerance=30.0
     )
     if match:
         props, dist = match
+        facility_type = props.get("FACILITYTYPE", "None") or "None"
+
+        # Sidewalks and pedestrian paths run alongside roads and will naturally
+        # snap onto the adjacent road edge. Their BICYCLES=No means the SIDEWALK
+        # itself is ped-only — it must NOT block the road running next to it.
+        PEDESTRIAN_ONLY_TYPES = {"Sidewalk", "Pedestrian Path", "Pedestrian Overpass",
+                                  "Pedestrian Underpass", "Plaza Path"}
+        if facility_type in PEDESTRIAN_ONLY_TYPES:
+            return (facility_type, "Yes", "Yes")
+
         return (
-            props.get("FACILITYTYPE", "None") or "None",
+            facility_type,
             props.get("BICYCLES", "Yes") or "Yes",
             props.get("EBIKE", "Yes") or "Yes"
         )
     return "None", "Yes", "Yes"
+
 
 def build_graph(weights=None):
     """Build the NetworkX routing graph from OSM JSON data."""
@@ -667,30 +699,49 @@ def build_graph(weights=None):
                             G.add_node(v_side2, lat=nodes[v]["lat"], lon=nodes[v]["lon"])
                             
                             dist = haversine_distance((nodes[u]["lat"], nodes[u]["lon"]), (nodes[v]["lat"], nodes[v]["lon"]))
-                            weight = dist * multiplier
-                            stress_level = match_stress_for_edge(u, v, nodes, spatial_index)
+                            stress_level, facility_type = match_stress_for_edge(u, v, nodes, spatial_index)
                             offstreet_type, bicycles_allowed, ebike_allowed = match_offstreet_for_edge(u, v, nodes, offstreet_spatial_index)
+                            
+                            # Apply Boulder GIS facility type bonus on top of base multiplier
+                            edge_multiplier = multiplier
+                            FACILITY_BONUS = {
+                                "Designated Bike Route": weights.get("facility_designated_route", 0.4),
+                                "Protected Bike Lane": weights.get("facility_protected_lane", 0.3),
+                                "Separated Bike Lane": weights.get("facility_protected_lane", 0.3),
+                                "On-Street Bike Lane": weights.get("facility_onstreet_lane", 0.6),
+                                "Bikeable Shoulder": weights.get("facility_bikeable_shoulder", 0.75),
+                                "Contra Flow Bike Lane": weights.get("facility_contraflow", 0.5),
+                            }
+                            if facility_type in FACILITY_BONUS:
+                                edge_multiplier = multiplier * FACILITY_BONUS[facility_type]
+                            weight = dist * edge_multiplier
                             
                             G.add_edge(u_side1, v_side1,
                                        weight=weight,
                                        length=dist,
                                        type=infra_type,
-                                       multiplier=multiplier,
+                                       multiplier=edge_multiplier,
                                        name=way_name,
                                        bikestress=stress_level,
+                                       facility_type=facility_type,
                                        offstreet_type=offstreet_type,
                                        bicycles_allowed=bicycles_allowed,
-                                       ebike_allowed=ebike_allowed)
+                                       ebike_allowed=ebike_allowed,
+                                       way_id=way_id,
+                                       tags=tags)
                             G.add_edge(u_side2, v_side2,
                                        weight=weight,
                                        length=dist,
                                        type=infra_type,
-                                       multiplier=multiplier,
+                                       multiplier=edge_multiplier,
                                        name=way_name,
                                        bikestress=stress_level,
+                                       facility_type=facility_type,
                                        offstreet_type=offstreet_type,
                                        bicycles_allowed=bicycles_allowed,
-                                       ebike_allowed=ebike_allowed)
+                                       ebike_allowed=ebike_allowed,
+                                       way_id=way_id,
+                                       tags=tags)
                 
                 # Connect side1 and side2 at each node on this way
                 for nid in way_nodes:
@@ -717,7 +768,9 @@ def build_graph(weights=None):
                                        length=length_crossing,
                                        type=crossing_type,
                                        multiplier=crossing_multiplier,
-                                       name=crossing_name)
+                                       name=crossing_name,
+                                       way_id=None,
+                                       tags=nodes[nid].get("tags", {}))
             else:
                 # For other streets, connect to side1 or side2 if they touch a 4+ lane node
                 for i in range(len(way_nodes) - 1):
@@ -756,9 +809,22 @@ def build_graph(weights=None):
                                     v_name = f"{v}_side2"
                                     
                         dist = haversine_distance((nodes[u]["lat"], nodes[u]["lon"]), (nodes[v]["lat"], nodes[v]["lon"]))
-                        weight = dist * multiplier
-                        stress_level = match_stress_for_edge(u, v, nodes, spatial_index)
+                        stress_level, facility_type = match_stress_for_edge(u, v, nodes, spatial_index)
                         offstreet_type, bicycles_allowed, ebike_allowed = match_offstreet_for_edge(u, v, nodes, offstreet_spatial_index)
+                        
+                        # Apply Boulder GIS facility type bonus on top of base multiplier
+                        edge_multiplier = multiplier
+                        FACILITY_BONUS = {
+                            "Designated Bike Route": weights.get("facility_designated_route", 0.4),
+                            "Protected Bike Lane": weights.get("facility_protected_lane", 0.3),
+                            "Separated Bike Lane": weights.get("facility_protected_lane", 0.3),
+                            "On-Street Bike Lane": weights.get("facility_onstreet_lane", 0.6),
+                            "Bikeable Shoulder": weights.get("facility_bikeable_shoulder", 0.75),
+                            "Contra Flow Bike Lane": weights.get("facility_contraflow", 0.5),
+                        }
+                        if facility_type in FACILITY_BONUS:
+                            edge_multiplier = multiplier * FACILITY_BONUS[facility_type]
+                        weight = dist * edge_multiplier
                         
                         if not G.has_node(u_name):
                             G.add_node(u_name, lat=nodes[u]["lat"], lon=nodes[u]["lon"])
@@ -769,12 +835,15 @@ def build_graph(weights=None):
                                    weight=weight,
                                    length=dist,
                                    type=infra_type,
-                                   multiplier=multiplier,
+                                   multiplier=edge_multiplier,
                                    name=way_name,
                                    bikestress=stress_level,
+                                   facility_type=facility_type,
                                    offstreet_type=offstreet_type,
                                    bicycles_allowed=bicycles_allowed,
-                                   ebike_allowed=ebike_allowed)
+                                   ebike_allowed=ebike_allowed,
+                                   way_id=way_id,
+                                   tags=tags)
 
     # Get largest connected component to ensure routes are reachable
     if len(G) > 0:
@@ -895,10 +964,77 @@ def get_route():
     if not all([start_lat, start_lon, end_lat, end_lon]):
         return jsonify({"error": "Missing coordinates"}), 400
 
+    # Pre-build facility bonus table from current weights
+    FACILITY_BONUS_ROUTING = {
+        "Designated Bike Route": custom_weights.get("facility_designated_route", DEFAULT_WEIGHTS.get("facility_designated_route", 0.4)),
+        "Protected Bike Lane":   custom_weights.get("facility_protected_lane",   DEFAULT_WEIGHTS.get("facility_protected_lane",   0.3)),
+        "Separated Bike Lane":   custom_weights.get("facility_protected_lane",   DEFAULT_WEIGHTS.get("facility_protected_lane",   0.3)),
+        "On-Street Bike Lane":   custom_weights.get("facility_onstreet_lane",    DEFAULT_WEIGHTS.get("facility_onstreet_lane",    0.6)),
+        "Bikeable Shoulder":     custom_weights.get("facility_bikeable_shoulder",DEFAULT_WEIGHTS.get("facility_bikeable_shoulder",0.75)),
+        "Contra Flow Bike Lane": custom_weights.get("facility_contraflow",       DEFAULT_WEIGHTS.get("facility_contraflow",       0.5)),
+    }
+
     for u, v, d in G_connected.edges(data=True):
         infra_type = d.get("type", "residential")
         base_multiplier = custom_weights.get(infra_type, DEFAULT_WEIGHTS.get(infra_type, 1.0))
-        
+
+        # Apply Boulder GIS facility type bonus (official designated routes etc.)
+        facility_type = d.get("facility_type", "None")
+        facility_modifier = FACILITY_BONUS_ROUTING.get(facility_type, 1.0)
+
+        # Parse lanes count from tags to identify 4+ lane arterials
+        tags = d.get("tags", {})
+        lanes_str = tags.get("lanes", "")
+        try:
+            if ";" in lanes_str:
+                lanes = max([int(x) for x in lanes_str.split(";") if x.isdigit()])
+            else:
+                lanes = int(lanes_str) if lanes_str.isdigit() else 2
+        except:
+            lanes = 2
+
+        # Check forward/backward lanes
+        try:
+            lanes_fwd = int(tags.get("lanes:forward", "0"))
+            lanes_bwd = int(tags.get("lanes:backward", "0"))
+            if lanes_fwd + lanes_bwd > 0:
+                lanes = lanes_fwd + lanes_bwd
+        except:
+            pass
+
+        # GIS-authoritative base override:
+        # Boulder's GIS data is more detailed than OSM for bike infrastructure.
+        # If GIS says there's a bike facility, cap the base to something reasonable
+        # regardless of what OSM says (e.g., OSM might say busy_undesignated while
+        # GIS says On-Street Bike Lane — trust GIS).
+        highway = tags.get("highway", "")
+        is_major_busy_road = (lanes >= 4) or (highway in ["primary", "primary_link", "secondary", "secondary_link"])
+
+        if is_major_busy_road:
+            # For 4+ lane streets, only physically separated paths can cap down to low values.
+            # Painted lanes, sharrows, or simple routes remain at higher, realistic base levels.
+            GIS_BASE_CAP = {
+                "Protected Bike Lane":   custom_weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
+                "Separated Bike Lane":   custom_weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
+                "On-Street Bike Lane":   custom_weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    5.0)),
+                "Designated Bike Route": custom_weights.get("busy_with_sharrow", DEFAULT_WEIGHTS.get("busy_with_sharrow", 8.0)),
+                "Bikeable Shoulder":     custom_weights.get("busy_undesignated", DEFAULT_WEIGHTS.get("busy_undesignated", 15.0)),
+                "Contra Flow Bike Lane": custom_weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    5.0)),
+            }
+        else:
+            GIS_BASE_CAP = {
+                "Protected Bike Lane":   custom_weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
+                "Separated Bike Lane":   custom_weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
+                "On-Street Bike Lane":   custom_weights.get("sharrow_minor",     DEFAULT_WEIGHTS.get("sharrow_minor",     1.3)),
+                "Designated Bike Route": custom_weights.get("residential",       DEFAULT_WEIGHTS.get("residential",       1.2)),
+                "Bikeable Shoulder":     custom_weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    3.0)),
+                "Contra Flow Bike Lane": custom_weights.get("sharrow_minor",     DEFAULT_WEIGHTS.get("sharrow_minor",     1.3)),
+            }
+
+        if facility_type in GIS_BASE_CAP:
+            # Use whichever is lower: OSM-derived base or GIS cap
+            base_multiplier = min(base_multiplier, GIS_BASE_CAP[facility_type])
+
         # Apply stress modifier if matched
         stress = d.get("bikestress", "None")
         stress_modifier = 1.0
@@ -906,11 +1042,11 @@ def get_route():
             stress_modifier = custom_weights.get("stress_low", DEFAULT_WEIGHTS.get("stress_low", 0.7))
         elif stress == "High":
             stress_modifier = custom_weights.get("stress_high", DEFAULT_WEIGHTS.get("stress_high", 2.0))
-            
+
         # Apply off-street modifiers
         offstreet_modifier = 1.0
         bicycles_allowed = d.get("bicycles_allowed", "Yes")
-        
+
         if bicycles_allowed == "No":
             # Bicycles forbidden -> Blocked segment!
             final_multiplier = 999999.0
@@ -918,16 +1054,16 @@ def get_route():
             offstreet_type = d.get("offstreet_type", "None")
             if offstreet_type == "Multi-Use Path":
                 offstreet_modifier = custom_weights.get("offstreet_multiuse", DEFAULT_WEIGHTS.get("offstreet_multiuse", 0.8))
-                
+
             ebike_allowed = d.get("ebike_allowed", "Yes")
             ebike_modifier = 1.0
             if ebike_allowed == "No":
                 ebike_modifier = custom_weights.get("ebike_restricted", DEFAULT_WEIGHTS.get("ebike_restricted", 1.0))
-                
-            final_multiplier = base_multiplier * stress_modifier * offstreet_modifier * ebike_modifier
-            
+
+            final_multiplier = base_multiplier * facility_modifier * stress_modifier * offstreet_modifier * ebike_modifier
+
         G_connected[u][v]["multiplier"] = final_multiplier
-        
+
         length = d.get("length", 0.0)
         if infra_type == "crossing_unsafe":
             G_connected[u][v]["weight"] = (length + 100.0) * final_multiplier
@@ -1011,6 +1147,71 @@ def get_route():
         return jsonify({"error": "No route exists between the selected points."}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/inspect-edge", methods=["GET"])
+def inspect_edge():
+    """Inspect the nearest edge in the routing graph and return its full attributes and geometry."""
+    global G_connected
+    
+    lat_val = request.args.get("lat")
+    lon_val = request.args.get("lon")
+    
+    if not lat_val or not lon_val:
+        return jsonify({"error": "Missing coordinates"}), 400
+        
+    try:
+        click_coord = (float(lat_val), float(lon_val))
+    except ValueError:
+        return jsonify({"error": "Invalid coordinates"}), 400
+        
+    # Find nearest node
+    nearest_node, _ = find_nearest_node(click_coord)
+    if nearest_node is None:
+        return jsonify({"error": "No road network found near click."}), 404
+        
+    best_edge = None
+    min_dist = float("inf")
+    
+    # Check edges connected to nearest_node to find the closest segment line
+    for neighbor in G_connected.neighbors(nearest_node):
+        node_u_data = G_connected.nodes[nearest_node]
+        node_v_data = G_connected.nodes[neighbor]
+        pt_u = (node_u_data["lat"], node_u_data["lon"])
+        pt_v = (node_v_data["lat"], node_v_data["lon"])
+        
+        dist = point_to_segment_distance(click_coord, pt_u, pt_v)
+        if dist < min_dist:
+            min_dist = dist
+            best_edge = (nearest_node, neighbor)
+            
+    if best_edge is None:
+        return jsonify({"error": "Could not identify an edge."}), 404
+        
+    u, v = best_edge
+    edge_data = G_connected.get_edge_data(u, v)
+    node_u_data = G_connected.nodes[u]
+    node_v_data = G_connected.nodes[v]
+    
+    response_data = {
+        "name": edge_data.get("name", "Unnamed Path"),
+        "type": edge_data.get("type", "residential"),
+        "multiplier": edge_data.get("multiplier", 1.0),
+        "bikestress": edge_data.get("bikestress", "None"),
+        "facility_type": edge_data.get("facility_type", "None"),
+        "offstreet_type": edge_data.get("offstreet_type", "None"),
+        "bicycles_allowed": edge_data.get("bicycles_allowed", "Yes"),
+        "ebike_allowed": edge_data.get("ebike_allowed", "Yes"),
+        "length": edge_data.get("length", 0.0),
+        "way_id": edge_data.get("way_id"),
+        "tags": edge_data.get("tags", {}),
+        "coords": [
+            [node_u_data["lat"], node_u_data["lon"]],
+            [node_v_data["lat"], node_v_data["lon"]]
+        ],
+        "distance_to_click_meters": min_dist
+    }
+    
+    return jsonify(response_data)
 
 @app.route("/api/weights", methods=["GET"])
 def get_current_weights():

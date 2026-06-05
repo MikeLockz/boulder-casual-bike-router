@@ -20,6 +20,8 @@ let allCrossings = [];
 let activeCrossingMarkers = [];
 let bikeRoutesLayer = null;
 let cachedBikeRoutesGeoJSON = null;
+let inspectModeActive = false;
+let inspectHighlightLayer = null;
 
 const OFFICIAL_ROUTE_COLORS = {
     "Multi-Use Path": "#00e676",
@@ -111,7 +113,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initSliders();
     initEventListeners();
     initDebugMode();
-    prepopulatePoints();
+    initWelcomeModal();
     loadCrossings();
     loadPlaygrounds();
 });
@@ -135,6 +137,12 @@ function initMap() {
 function onMapClick(e) {
     const latlng = e.latlng;
 
+    // Inspector intercepts: toggle mode OR shift+click (always available)
+    if (inspectModeActive || (e.originalEvent && e.originalEvent.shiftKey)) {
+        inspectEdge(latlng);
+        return;
+    }
+
     if (!startMarker) {
         // Set Start marker
         startMarker = L.marker(latlng, {
@@ -144,6 +152,7 @@ function onMapClick(e) {
         
         startMarker.bindPopup("<strong>Start Point</strong><br>Drag to move").openPopup();
         startMarker.on("dragend", calculateRoute);
+        updatePlaygroundStartText("Custom Start");
         
     } else if (!endMarker) {
         // Set Destination marker
@@ -166,6 +175,7 @@ function onMapClick(e) {
         }).addTo(map);
         startMarker.bindPopup("<strong>Start Point</strong>").openPopup();
         startMarker.on("dragend", calculateRoute);
+        updatePlaygroundStartText("Custom Start");
     }
 }
 
@@ -290,6 +300,16 @@ function initEventListeners() {
                 playgroundSelect.selectedIndex = 0;
             }
 
+            // Update playground section title and description to match preset's starting location
+            const presetName = preset.querySelector(".preset-name").textContent;
+            let startName = "Cedar Ave";
+            if (presetName.includes("➔")) {
+                startName = presetName.split("➔")[0].trim();
+            } else if (presetName.includes("Loop")) {
+                startName = "Valmont Park";
+            }
+            updatePlaygroundStartText(startName);
+
             const startStr = preset.getAttribute("data-start");
             const endStr = preset.getAttribute("data-end");
             const waypointsStr = preset.getAttribute("data-waypoints");
@@ -313,7 +333,12 @@ function initEventListeners() {
             // Remove active highlight from presets when a playground is selected
             presets.forEach(p => p.classList.remove("active"));
 
-            const startCoords = [40.028446, -105.281088]; // Always Cedar Ave location
+            // Route from startMarker if set, otherwise default to Cedar Ave
+            let startCoords = [40.028446, -105.281088]; // Default Cedar Ave location
+            if (startMarker) {
+                const latlng = startMarker.getLatLng();
+                startCoords = [latlng.lat, latlng.lng];
+            }
             const endStr = e.target.value;
             const endCoords = endStr.split(",").map(Number);
 
@@ -375,6 +400,8 @@ function clearRoute() {
         tbtContainer.classList.add("hidden");
         document.getElementById("turn-by-turn-list").innerHTML = "";
     }
+    updatePlaygroundStartText("Cedar Ave");
+    clearInspectHighlight();
 }
 
 function clearWaypoints() {
@@ -827,6 +854,287 @@ function generateDynamicCues(segments) {
     return cues;
 }
 
+let userGPSMarker = null;
+
+// Boulder bounding box definitions
+const BOULDER_BOUNDS = {
+    minLat: 39.95,
+    maxLat: 40.15,
+    minLon: -105.35,
+    maxLon: -105.15
+};
+
+// Check if coordinates are in/near Boulder
+function isWithinBoulder(lat, lon) {
+    return lat >= BOULDER_BOUNDS.minLat && lat <= BOULDER_BOUNDS.maxLat &&
+           lon >= BOULDER_BOUNDS.minLon && lon <= BOULDER_BOUNDS.maxLon;
+}
+
+// Sleek Toast Notification
+function showToast(message) {
+    let toast = document.getElementById('nav-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'nav-toast';
+        toast.className = 'nav-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.classList.add('visible');
+    setTimeout(() => toast.classList.remove('visible'), 4000);
+}
+
+// Dynamic update of the playgrounds start location text
+function updatePlaygroundStartText(text) {
+    const titleEl = document.getElementById("playground-start-title");
+    const descEl = document.getElementById("playground-start-desc");
+    if (titleEl) titleEl.textContent = text;
+    if (descEl) descEl.textContent = text;
+}
+
+// Show user GPS dot with pulsing animation on Leaflet map
+function showUserGPSDot(lat, lon) {
+    if (userGPSMarker) {
+        map.removeLayer(userGPSMarker);
+    }
+    const dotHtml = `
+        <div class="nav-user-dot-outer">
+            <div class="nav-user-dot-inner"></div>
+        </div>
+    `;
+    userGPSMarker = L.marker([lat, lon], {
+        icon: L.divIcon({
+            html: dotHtml,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12],
+            className: 'nav-user-marker'
+        }),
+        zIndexOffset: 9999,
+        interactive: false
+    }).addTo(map);
+}
+
+// Dismiss welcome modal with a smooth fade-out transition
+function dismissWelcomeModal() {
+    const overlay = document.getElementById("welcome-modal-overlay");
+    if (!overlay) return;
+    overlay.classList.add("fade-out");
+    setTimeout(() => {
+        overlay.classList.add("hidden");
+    }, 400);
+}
+
+// Check if we should show the welcome modal based on permissions or localStorage
+async function checkExistingPermission() {
+    // If the user has explicitly denied/blocked location before, bypass modal and go to demo
+    if (localStorage.getItem("geolocation_denied") === "true") {
+        return false;
+    }
+    
+    if (navigator.permissions && navigator.permissions.query) {
+        try {
+            const status = await navigator.permissions.query({ name: 'geolocation' });
+            if (status.state === 'granted' || status.state === 'denied') {
+                return false;
+            }
+        } catch (e) {
+            console.warn("Permissions API query for geolocation is not supported or failed:", e);
+        }
+    }
+    
+    // Fallback to checking localStorage flag
+    const hasGrantedBefore = localStorage.getItem("geolocation_granted") === "true";
+    return !hasGrantedBefore;
+}
+
+// Automatically locate the user in the background (used when permission was already granted)
+function autoLocateUser() {
+    showToast("Locating your starting position...");
+    
+    if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                
+                // Keep the flag updated
+                localStorage.setItem("geolocation_granted", "true");
+                localStorage.removeItem("geolocation_denied");
+
+                if (isWithinBoulder(lat, lon)) {
+                    map.setView([lat, lon], 15);
+                    
+                    if (startMarker) {
+                        map.removeLayer(startMarker);
+                    }
+                    
+                    startMarker = L.marker([lat, lon], {
+                        draggable: true,
+                        icon: createCustomIcon("green")
+                    }).addTo(map);
+                    
+                    startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
+                    startMarker.on("dragend", calculateRoute);
+
+                    showUserGPSDot(lat, lon);
+                    updatePlaygroundStartText("Current Location");
+                    showToast("Start point set to your location.");
+                } else {
+                    showToast("Your location is outside Boulder. Loading demo route instead.");
+                    prepopulatePoints();
+                }
+            },
+            (error) => {
+                console.warn("Auto-location failed:", error.message);
+                // Clear the granted flag if it failed due to permission revoking
+                if (error.code === error.PERMISSION_DENIED) {
+                    localStorage.removeItem("geolocation_granted");
+                    localStorage.setItem("geolocation_denied", "true");
+                }
+                prepopulatePoints();
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 10000,
+                timeout: 8000
+            }
+        );
+    } else {
+        prepopulatePoints();
+    }
+}
+
+// Request location permission and center map (used when user interacts with modal)
+function requestLocation() {
+    const overlay = document.getElementById("welcome-modal-overlay");
+    if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+
+                dismissWelcomeModal();
+                
+                // Store success state in localStorage
+                localStorage.setItem("geolocation_granted", "true");
+                localStorage.removeItem("geolocation_denied");
+
+                if (isWithinBoulder(lat, lon)) {
+                    map.setView([lat, lon], 15);
+                    
+                    if (startMarker) {
+                        map.removeLayer(startMarker);
+                    }
+                    
+                    startMarker = L.marker([lat, lon], {
+                        draggable: true,
+                        icon: createCustomIcon("green")
+                    }).addTo(map);
+                    
+                    startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
+                    startMarker.on("dragend", calculateRoute);
+
+                    showUserGPSDot(lat, lon);
+                    updatePlaygroundStartText("Current Location");
+
+                    showToast("Starting point set to your location. Click on the map to set a destination!");
+                } else {
+                    showToast("Your location is outside Boulder routing zone. Loading demo route instead.");
+                    prepopulatePoints();
+                }
+            },
+            (error) => {
+                console.warn("Geolocation request failed:", error.message);
+                dismissWelcomeModal();
+                
+                // Store denied state if blocked
+                if (error.code === error.PERMISSION_DENIED) {
+                    localStorage.setItem("geolocation_denied", "true");
+                    localStorage.removeItem("geolocation_granted");
+                }
+                
+                let errorMsg = "Location access denied. Loading demo route.";
+                if (error.code === error.TIMEOUT) {
+                    errorMsg = "Location request timed out. Loading demo route.";
+                } else if (error.code === error.POSITION_UNAVAILABLE) {
+                    errorMsg = "Location unavailable. Loading demo route.";
+                }
+                
+                showToast(errorMsg);
+                prepopulatePoints();
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 10000,
+                timeout: 8000
+            }
+        );
+    } else {
+        dismissWelcomeModal();
+        showToast("Geolocation is not supported by this browser. Loading demo route.");
+        prepopulatePoints();
+    }
+}
+
+// Initialize welcome modal event listeners and display flow
+function initWelcomeModal() {
+    const overlay = document.getElementById("welcome-modal-overlay");
+    const btnUseLocation = document.getElementById("btn-use-location");
+    const btnUseDemo = document.getElementById("btn-use-demo");
+    const loadingEl = document.getElementById("location-loading");
+    const actionsEl = document.querySelector(".welcome-modal-actions");
+
+    if (!overlay) return;
+
+    // Check if we should bypass the welcome modal
+    checkExistingPermission().then((shouldShow) => {
+        if (shouldShow) {
+            // Show welcome modal (starts hidden by default in HTML to prevent layouts flashing)
+            overlay.classList.remove("hidden");
+        } else {
+            // Bypass modal: check if we should auto-locate or just load demo
+            const hasGrantedBefore = localStorage.getItem("geolocation_granted") === "true";
+            
+            if (navigator.permissions && navigator.permissions.query) {
+                navigator.permissions.query({ name: 'geolocation' }).then((status) => {
+                    if (status.state === 'granted') {
+                        autoLocateUser();
+                    } else {
+                        prepopulatePoints();
+                    }
+                }).catch(() => {
+                    if (hasGrantedBefore) {
+                        autoLocateUser();
+                    } else {
+                        prepopulatePoints();
+                    }
+                });
+            } else {
+                if (hasGrantedBefore) {
+                    autoLocateUser();
+                } else {
+                    prepopulatePoints();
+                }
+            }
+        }
+    });
+
+    // "Explore Demo Tour" click handler
+    btnUseDemo.addEventListener("click", () => {
+        dismissWelcomeModal();
+        prepopulatePoints();
+    });
+
+    // "Use Current Location" click handler
+    btnUseLocation.addEventListener("click", () => {
+        // Toggle view to loading state
+        if (actionsEl) actionsEl.classList.add("hidden");
+        if (loadingEl) loadingEl.classList.remove("hidden");
+
+        requestLocation();
+    });
+}
+
 // Prepopulate map with specific start and end coordinates by loading the first preset
 function prepopulatePoints() {
     // Automatically trigger click on the first preset item to load default coordinates
@@ -1076,6 +1384,8 @@ function initDebugMode() {
     const costContainer = document.getElementById("info-cost-container");
     const infoGrid = document.querySelector(".info-grid");
     const wayfindingSubSection = document.querySelector(".wayfinding-sub-section");
+    const debugInspectorTool = document.getElementById("debug-inspector-tool");
+    const toggleStreetInspector = document.getElementById("toggle-street-inspector");
 
     if (isDebug) {
         // Show everything for debug mode
@@ -1084,10 +1394,23 @@ function initDebugMode() {
         if (weightsSection) weightsSection.classList.remove("hidden");
         if (costContainer) costContainer.classList.remove("hidden");
         if (infoGrid) infoGrid.classList.remove("single-column");
+        if (debugInspectorTool) debugInspectorTool.classList.remove("hidden");
         if (wayfindingSubSection) {
             wayfindingSubSection.style.marginTop = "";
             wayfindingSubSection.style.paddingTop = "";
             wayfindingSubSection.style.borderTop = "";
+        }
+        
+        // Listen to inspector switch
+        if (toggleStreetInspector) {
+            toggleStreetInspector.onchange = (e) => {
+                inspectModeActive = e.target.checked;
+                if (!inspectModeActive) {
+                    clearInspectHighlight();
+                } else {
+                    showToast("Street Inspector Active. Click any street to inspect.");
+                }
+            };
         }
     } else {
         // Hide debug elements for normal mode
@@ -1096,11 +1419,141 @@ function initDebugMode() {
         if (weightsSection) weightsSection.classList.add("hidden");
         if (costContainer) costContainer.classList.add("hidden");
         if (infoGrid) infoGrid.classList.add("single-column");
+        if (debugInspectorTool) debugInspectorTool.classList.add("hidden");
         if (wayfindingSubSection) {
             wayfindingSubSection.style.marginTop = "0";
             wayfindingSubSection.style.paddingTop = "0";
             wayfindingSubSection.style.borderTop = "none";
         }
+        inspectModeActive = false;
+        if (toggleStreetInspector) toggleStreetInspector.checked = false;
+        clearInspectHighlight();
+    }
+}
+
+// Inspect an edge on the map at the given latlng
+async function inspectEdge(latlng) {
+    try {
+        const response = await fetch(`${API_BASE}/api/inspect-edge?lat=${latlng.lat}&lon=${latlng.lng}`);
+        if (!response.ok) {
+            const err = await response.json();
+            showToast(err.error || "Failed to inspect street segment.");
+            return;
+        }
+        
+        const edge = await response.json();
+        
+        // 1. Draw glowing highlight polyline over the clicked edge segment
+        clearInspectHighlight();
+        
+        inspectHighlightLayer = L.polyline(edge.coords, {
+            color: "#ff9100", // Bright amber neon
+            weight: 8,
+            opacity: 0.9,
+            dashArray: "6, 6",
+            className: "path-glow",
+            lineCap: "round",
+            lineJoin: "round"
+        }).addTo(map);
+        
+        // 2. Format popup content
+        const formattedType = edge.type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+        const lengthMeters = edge.length.toFixed(1);
+        const osmLink = edge.way_id 
+            ? `<a href="https://www.openstreetmap.org/way/${edge.way_id}" target="_blank" style="color: #ffb300; font-weight: bold; text-decoration: none;"><i class="fa-solid fa-arrow-up-right-from-square"></i> OSM Way ${edge.way_id}</a>`
+            : `<span style="color: #94a3b8; font-style: italic;">No OSM Way (Connector/Intersection)</span>`;
+            
+        // Stress Badge
+        let stressText = "None Matched";
+        let stressColor = "#94a3b8";
+        if (edge.bikestress === "Low") {
+            stressText = "Low Stress";
+            stressColor = "#64ffda";
+        } else if (edge.bikestress === "High") {
+            stressText = "High Stress";
+            stressColor = "#e040fb";
+        }
+        const stressBadge = `<span style="color: ${stressColor}; font-weight: 600;">${stressText}</span>`;
+        
+        // Facility type (Boulder GIS)
+        let facilityText = edge.facility_type || "None";
+        let facilityColor = "#94a3b8";
+        const FACILITY_COLORS = {
+            "Designated Bike Route": "#00e676",
+            "Protected Bike Lane":   "#00e676",
+            "Separated Bike Lane":   "#00e676",
+            "On-Street Bike Lane":   "#ffb300",
+            "Contra Flow Bike Lane": "#ffb300",
+            "Bikeable Shoulder":     "#ff9100",
+        };
+        if (facilityText in FACILITY_COLORS) facilityColor = FACILITY_COLORS[facilityText];
+        const facilityBadge = `<span style="color: ${facilityColor}; font-weight: 600;">${facilityText}</span>`;
+        
+        // Off-street
+        const isOffstreet = edge.offstreet_type === "Multi-Use Path";
+        const offstreetBadge = `<span style="color: ${isOffstreet ? '#00b0ff' : '#94a3b8'}; font-weight: 600;">${edge.offstreet_type}</span>`;
+        
+        // Restrictions
+        const isBikesAllowed = edge.bicycles_allowed !== "No";
+        const isEbikeAllowed = edge.ebike_allowed !== "No";
+        const bikesBadge = `<span style="color: ${isBikesAllowed ? '#64ffda' : '#ff1744'}; font-weight: 600;">${edge.bicycles_allowed}</span>`;
+        const ebikeBadge = `<span style="color: ${isEbikeAllowed ? '#64ffda' : '#ff9100'}; font-weight: 600;">${edge.ebike_allowed}</span>`;
+        
+        // Raw OSM tags table
+        let tagsHtml = `<div style="margin-top: 8px; font-size: 11px; max-height: 120px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 4px; background: rgba(0,0,0,0.2);">`;
+        if (edge.tags && Object.keys(edge.tags).length > 0) {
+            tagsHtml += `<table style="width: 100%; border-collapse: collapse; line-height: 1.3;">`;
+            for (const [key, value] of Object.entries(edge.tags)) {
+                tagsHtml += `
+                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);">
+                        <td style="color: #64ffda; font-weight: 500; padding: 2px 4px; width: 45%; word-break: break-all;">${key}</td>
+                        <td style="color: #f8fafc; padding: 2px 4px; word-break: break-all;">${value}</td>
+                    </tr>
+                `;
+            }
+            tagsHtml += `</table>`;
+        } else {
+            tagsHtml += `<span style="color: #94a3b8; font-style: italic; padding: 2px 4px;">No tags available</span>`;
+        }
+        tagsHtml += `</div>`;
+        
+        // 3. Open Popup
+        L.popup()
+            .setLatLng(latlng)
+            .setContent(`
+                <div class="crossing-popup" style="min-width: 250px;">
+                    <h3 style="margin-bottom: 4px; color: #ffb300;"><i class="fa-solid fa-magnifying-glass-location"></i> Inspect Edge</h3>
+                    <p style="margin-bottom: 8px; font-size: 12px; font-weight: bold; color: #fff;">${edge.name}</p>
+                    <p style="margin-bottom: 8px;">${osmLink}</p>
+                    <hr style="border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 6px 0;">
+                    <div style="display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 11px;">
+                        <span><strong>Base Type:</strong></span> <span style="color: #64ffda;">${formattedType}</span>
+                        <span><strong>Boulder GIS:</strong></span> ${facilityBadge}
+                        <span><strong>Length:</strong></span> <span>${lengthMeters} m</span>
+                        <span><strong>Multiplier:</strong></span> <span style="font-weight: bold; color: #ffb300;">${edge.multiplier.toFixed(2)}x</span>
+                        <span><strong>Stress Overlay:</strong></span> ${stressBadge}
+                        <span><strong>Off-Street Overlay:</strong></span> ${offstreetBadge}
+                        <span><strong>Bicycles Allowed:</strong></span> ${bikesBadge}
+                        <span><strong>E-Bikes Allowed:</strong></span> ${ebikeBadge}
+                    </div>
+                    <hr style="border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 8px 0 4px 0;">
+                    <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #94a3b8; font-weight: 600;">OSM Tags:</span>
+                    ${tagsHtml}
+                </div>
+            `)
+            .openOn(map);
+            
+    } catch (err) {
+        console.error("Inspector failed:", err);
+        showToast("Error inspecting street segment.");
+    }
+}
+
+// Clear the inspector highlight layer
+function clearInspectHighlight() {
+    if (inspectHighlightLayer) {
+        map.removeLayer(inspectHighlightLayer);
+        inspectHighlightLayer = null;
     }
 }
 

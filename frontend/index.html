@@ -74,8 +74,8 @@
                         
                         <!-- New Playground Wayfinding Sub-section -->
                         <div class="wayfinding-sub-section">
-                            <h3 class="sub-section-title"><i class="fa-solid fa-child-reaching"></i> Playgrounds from Cedar Ave</h3>
-                            <p class="section-desc">Starts at Cedar Ave. Select a park playground destination:</p>
+                            <h3 class="sub-section-title"><i class="fa-solid fa-child-reaching"></i> Playgrounds from <span id="playground-start-title">Cedar Ave</span></h3>
+                            <p class="section-desc">Starts at <span id="playground-start-desc">Cedar Ave</span>. Select a park playground destination:</p>
                             <div class="select-container">
                                 <select id="playground-select" class="dropdown-select">
                                     <option value="" disabled selected>-- Select a Park with Playground --</option>
@@ -93,6 +93,20 @@
                         <i class="fa-solid fa-chevron-down chevron"></i>
                     </summary>
                     <div class="section-content">
+                        <!-- Street Inspector Tool (Debug Mode Only) -->
+                        <div class="debug-tool-group hidden" id="debug-inspector-tool" style="margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
+                            <label class="switch-container">
+                                <span class="switch-label" style="font-weight: 600; color: #ffb300;"><i class="fa-solid fa-magnifying-glass-location"></i> Street Inspector Tool</span>
+                                <div class="switch-wrapper">
+                                    <input type="checkbox" id="toggle-street-inspector">
+                                    <span class="switch-slider"></span>
+                                </div>
+                            </label>
+                            <span class="subtext" style="display: block; margin-top: 4px; font-size: 11px; color: #94a3b8; line-height: 1.4;">
+                                Toggle ON and click any street on the map to inspect its raw OSM & GIS attributes. Or, hold <strong>Shift</strong> while clicking the map.
+                            </span>
+                        </div>
+
                         <p class="section-desc">Adjust sliders to influence path selection. Lower values attract routes; higher values penalize roads.</p>
                         
                         <div class="weight-group">
@@ -364,6 +378,32 @@
                 <button id="nav-exit-btn" class="nav-btn nav-btn-exit" onclick="Navigation.stop(map)">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
+            </div>
+        </div>
+
+        <!-- Welcome / Geolocation Request Modal -->
+        <div id="welcome-modal-overlay" class="welcome-overlay-backdrop hidden">
+            <div class="welcome-modal-card">
+                <div class="welcome-modal-icon">
+                    <i class="fa-solid fa-map-location-dot"></i>
+                </div>
+                <h2>Explore Biking Boulder</h2>
+                <p class="welcome-modal-desc">Plan the safest, lowest-stress bike routes using paths and quiet streets.</p>
+                <p class="welcome-modal-question">Would you like to route starting from your current location?</p>
+                
+                <div class="welcome-modal-actions">
+                    <button id="btn-use-location" class="btn btn-modal-primary">
+                        <i class="fa-solid fa-location-crosshairs"></i> Use Current Location
+                    </button>
+                    <button id="btn-use-demo" class="btn btn-modal-secondary">
+                        <i class="fa-solid fa-route"></i> Explore Demo Tour
+                    </button>
+                </div>
+                
+                <div id="location-loading" class="location-loading hidden">
+                    <div class="spinner flex-center"></div>
+                    <span>Locating you on the map...</span>
+                </div>
             </div>
         </div>
 
