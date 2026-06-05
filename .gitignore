@@ -27,3 +27,7 @@ Thumbs.db
 # Scratch
 scratch_config.json
 *.log
+
+# PocketBase local database
+pb_data/
+

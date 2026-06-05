@@ -1,0 +1,35 @@
+version: "3.7"
+
+services:
+  pocketbase:
+    image: ghcr.io/muchobien/pocketbase:0.39.1
+    container_name: pocketbase-local
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./pb_data:/pb_data
+
+  boulder-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: boulder-backend-local
+    ports:
+      - "3001:3001"
+    environment:
+      - POCKETBASE_URL=http://pocketbase:8090
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - pocketbase
+
+  boulder-frontend:
+    image: nginx:alpine
+    container_name: boulder-frontend-local
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8081:80"
+    depends_on:
+      - boulder-backend
