@@ -63,7 +63,7 @@ const Navigation = (() => {
         if ('geolocation' in navigator) {
             state.watchId = navigator.geolocation.watchPosition(
                 (pos) => onPositionUpdate(pos, mapInstance),
-                (err) => onPositionError(err),
+                (err) => onPositionError(err, mapInstance),
                 {
                     enableHighAccuracy: true,
                     maximumAge: 3000,
@@ -196,10 +196,21 @@ const Navigation = (() => {
         updateBottomBar();
     }
 
-    function onPositionError(err) {
+    function onPositionError(err, mapInstance) {
         console.warn('GPS error:', err.message);
-        if (err.code === 1) {
+        if (err.code === 1) { // PERMISSION_DENIED
             showToast('Location permission denied. Enable GPS to navigate.');
+            stop(mapInstance);
+            if (window.showLocationSettingsModal) {
+                window.showLocationSettingsModal();
+            }
+        } else {
+            // Update banner to inform user
+            const textEl = document.getElementById('nav-maneuver-text');
+            if (textEl && !state.position) {
+                textEl.textContent = 'Waiting for GPS signal...';
+            }
+            showToast(`GPS Error: ${err.message}`);
         }
     }
 

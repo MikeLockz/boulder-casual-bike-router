@@ -363,6 +363,43 @@ function initEventListeners() {
     if (officialRoutesToggle) {
         officialRoutesToggle.addEventListener("change", handleOfficialRoutesToggle);
     }
+
+    // Floating Locate Me Button
+    const locateBtn = document.getElementById("btn-locate-map");
+    if (locateBtn) {
+        locateBtn.addEventListener("click", () => {
+            onDemandLocate();
+        });
+    }
+
+    // Location Settings Help Modal Tabs
+    const tabBtns = document.querySelectorAll("#location-settings-modal .tab-btn");
+    tabBtns.forEach(btn => {
+        btn.addEventListener("click", () => {
+            tabBtns.forEach(b => b.classList.remove("active"));
+            document.querySelectorAll("#location-settings-modal .tab-content").forEach(c => c.classList.remove("active"));
+            
+            btn.classList.add("active");
+            const targetTab = btn.getAttribute("data-tab");
+            const content = document.getElementById(`tab-content-${targetTab}`);
+            if (content) content.classList.add("active");
+        });
+    });
+
+    // Location Settings Help Modal Actions
+    const retryBtn = document.getElementById("btn-settings-retry");
+    if (retryBtn) {
+        retryBtn.addEventListener("click", () => {
+            onDemandLocate(true);
+        });
+    }
+
+    const settingsCloseBtn = document.getElementById("btn-settings-close");
+    if (settingsCloseBtn) {
+        settingsCloseBtn.addEventListener("click", () => {
+            document.getElementById("location-settings-modal").classList.add("hidden");
+        });
+    }
 }
 
 // Get current weights from sliders
@@ -1051,6 +1088,9 @@ function requestLocation() {
                 if (error.code === error.PERMISSION_DENIED) {
                     localStorage.setItem("geolocation_denied", "true");
                     localStorage.removeItem("geolocation_granted");
+                    
+                    // Show settings instructions helper modal
+                    showLocationSettingsModal();
                 }
                 
                 let errorMsg = "Location access denied. Loading demo route.";
@@ -1073,6 +1113,110 @@ function requestLocation() {
         dismissWelcomeModal();
         showToast("Geolocation is not supported by this browser. Loading demo route.");
         prepopulatePoints();
+    }
+}
+
+// Show the custom location settings instructions modal and auto-select browser tab
+function showLocationSettingsModal() {
+    const settingsModal = document.getElementById("location-settings-modal");
+    if (settingsModal) {
+        // Detect mobile platform to preset correct tab
+        const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+        const iosTab = document.querySelector("#location-settings-modal .tab-btn[data-tab='ios']");
+        const androidTab = document.querySelector("#location-settings-modal .tab-btn[data-tab='android']");
+        
+        if (/iPad|iPhone|iPod/.test(userAgent) && !window.MSStream) {
+            if (iosTab) iosTab.click();
+        } else if (/Android/.test(userAgent)) {
+            if (androidTab) androidTab.click();
+        }
+        
+        settingsModal.classList.remove("hidden");
+    }
+}
+
+// On-demand geolocation request flow
+function onDemandLocate(isRetry = false) {
+    const locateBtn = document.getElementById("btn-locate-map");
+    const settingsModal = document.getElementById("location-settings-modal");
+    
+    if (locateBtn) {
+        locateBtn.classList.add("locating");
+    }
+    
+    showToast(isRetry ? "Checking permissions..." : "Acquiring location...");
+
+    if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+
+                if (locateBtn) locateBtn.classList.remove("locating");
+                if (settingsModal) settingsModal.classList.add("hidden");
+                
+                // Store success state
+                localStorage.setItem("geolocation_granted", "true");
+                localStorage.removeItem("geolocation_denied");
+
+                if (isWithinBoulder(lat, lon)) {
+                    map.setView([lat, lon], 15);
+                    
+                    if (startMarker) {
+                        map.removeLayer(startMarker);
+                    }
+                    
+                    startMarker = L.marker([lat, lon], {
+                        draggable: true,
+                        icon: createCustomIcon("green")
+                    }).addTo(map);
+                    
+                    startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
+                    startMarker.on("dragend", calculateRoute);
+
+                    showUserGPSDot(lat, lon);
+                    updatePlaygroundStartText("Current Location");
+                    
+                    // Re-calculate route if endMarker is set
+                    if (endMarker) {
+                        calculateRoute();
+                    }
+
+                    showToast("Start point set to your location.");
+                } else {
+                    showToast("Your location is outside Boulder. Location dot shown.");
+                    showUserGPSDot(lat, lon);
+                }
+            },
+            (error) => {
+                if (locateBtn) locateBtn.classList.remove("locating");
+                
+                if (error.code === error.PERMISSION_DENIED) {
+                    localStorage.setItem("geolocation_denied", "true");
+                    localStorage.removeItem("geolocation_granted");
+                    
+                    // Show settings instructions helper modal
+                    showLocationSettingsModal();
+                    showToast("Location permission denied. Please allow in settings.");
+                } else {
+                    let errorMsg = "Could not acquire location.";
+                    if (error.code === error.TIMEOUT) {
+                        errorMsg = "Location request timed out.";
+                    } else if (error.code === error.POSITION_UNAVAILABLE) {
+                        errorMsg = "Location unavailable.";
+                    }
+                    showToast(errorMsg);
+                }
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 10000,
+                timeout: 8000
+            }
+        );
+    } else {
+        if (locateBtn) locateBtn.classList.remove("locating");
+        showToast("Geolocation is not supported by your browser.");
     }
 }
 
@@ -1385,6 +1529,7 @@ function initDebugMode() {
     const infoGrid = document.querySelector(".info-grid");
     const wayfindingSubSection = document.querySelector(".wayfinding-sub-section");
     const debugInspectorTool = document.getElementById("debug-inspector-tool");
+    const debugPermissionsTool = document.getElementById("debug-permissions-tool");
     const toggleStreetInspector = document.getElementById("toggle-street-inspector");
 
     if (isDebug) {
@@ -1395,6 +1540,7 @@ function initDebugMode() {
         if (costContainer) costContainer.classList.remove("hidden");
         if (infoGrid) infoGrid.classList.remove("single-column");
         if (debugInspectorTool) debugInspectorTool.classList.remove("hidden");
+        if (debugPermissionsTool) debugPermissionsTool.classList.remove("hidden");
         if (wayfindingSubSection) {
             wayfindingSubSection.style.marginTop = "";
             wayfindingSubSection.style.paddingTop = "";
@@ -1420,6 +1566,7 @@ function initDebugMode() {
         if (costContainer) costContainer.classList.add("hidden");
         if (infoGrid) infoGrid.classList.add("single-column");
         if (debugInspectorTool) debugInspectorTool.classList.add("hidden");
+        if (debugPermissionsTool) debugPermissionsTool.classList.add("hidden");
         if (wayfindingSubSection) {
             wayfindingSubSection.style.marginTop = "0";
             wayfindingSubSection.style.paddingTop = "0";
@@ -1428,6 +1575,42 @@ function initDebugMode() {
         inspectModeActive = false;
         if (toggleStreetInspector) toggleStreetInspector.checked = false;
         clearInspectHighlight();
+    }
+
+    // Initialize mock permissions selectors
+    initMockPermissionsSelectors();
+}
+
+// Initialize mock permissions selectors and persist choice in localStorage
+function initMockPermissionsSelectors() {
+    const geoSelect = document.getElementById("mock-geolocation-state");
+    const compassSelect = document.getElementById("mock-compass-state");
+    const wakeSelect = document.getElementById("mock-wakelock-state");
+
+    if (geoSelect) {
+        geoSelect.value = localStorage.getItem("mock_geolocation_state") || "default";
+        geoSelect.addEventListener("change", (e) => {
+            localStorage.setItem("mock_geolocation_state", e.target.value);
+            showToast("Geolocation mock updated. Reloading page...");
+            setTimeout(() => window.location.reload(), 800);
+        });
+    }
+
+    if (compassSelect) {
+        compassSelect.value = localStorage.getItem("mock_compass_state") || "default";
+        compassSelect.addEventListener("change", (e) => {
+            localStorage.setItem("mock_compass_state", e.target.value);
+            showToast("Device compass mock updated. Reloading page...");
+            setTimeout(() => window.location.reload(), 800);
+        });
+    }
+
+    if (wakeSelect) {
+        wakeSelect.value = localStorage.getItem("mock_wakelock_state") || "default";
+        wakeSelect.addEventListener("change", (e) => {
+            localStorage.setItem("mock_wakelock_state", e.target.value);
+            showToast("Wake lock mock updated.");
+        });
     }
 }
 
