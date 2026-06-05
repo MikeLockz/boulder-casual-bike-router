@@ -5,8 +5,9 @@
 (function () {
     'use strict';
 
-    // --- Gate: only activate if ?sim=1 is present ---
-    if (!new URLSearchParams(window.location.search).has('sim')) return;
+    // --- Gate: only activate if ?sim=1 or ?debug=1 is present ---
+    const urlParams = new URLSearchParams(window.location.search);
+    if (!urlParams.has('sim') && !urlParams.has('debug')) return;
 
     console.log('%c[SIM] GPS Simulation Harness Active', 'color: #ffb300; font-weight: bold; font-size: 14px;');
 
@@ -47,23 +48,61 @@
     const realGeolocation = navigator.geolocation;
     const fakeGeolocation = {
         watchPosition: function (success, error, options) {
+            const state = localStorage.getItem("mock_geolocation_state") || "default";
+
+            if (state === "denied") {
+                setTimeout(() => error({ code: 1, message: "User denied Geolocation access (Mocked)" }), 300);
+                return 999;
+            } else if (state === "unavailable") {
+                setTimeout(() => error({ code: 2, message: "Position unavailable (Mocked)" }), 300);
+                return 999;
+            } else if (state === "timeout") {
+                setTimeout(() => error({ code: 3, message: "Location request timed out (Mocked)" }), 300);
+                return 999;
+            }
+
             sim.watchCallback = success;
             sim.watchErrorCallback = error;
-            // Don't start ticking yet — we start when startSim() is called
-            // But we do need to prepare the route
-            prepareSim();
+
+            const delay = state === "slow" ? 5000 : 200;
+            setTimeout(() => {
+                prepareSim();
+            }, delay);
+
             return 999; // Fake watch ID
         },
         clearWatch: function (id) {
             stopSim();
         },
         getCurrentPosition: function (success, error, options) {
-            if (sim.interpCoords.length > 0) {
-                const pos = buildPosition(sim.interpCoords[0][0], sim.interpCoords[0][1], 0);
-                success(pos);
-            } else if (realGeolocation) {
-                realGeolocation.getCurrentPosition(success, error, options);
+            const state = localStorage.getItem("mock_geolocation_state") || "default";
+
+            if (state === "denied") {
+                setTimeout(() => error({ code: 1, message: "User denied Geolocation access (Mocked)" }), 300);
+                return;
+            } else if (state === "unavailable") {
+                setTimeout(() => error({ code: 2, message: "Position unavailable (Mocked)" }), 300);
+                return;
+            } else if (state === "timeout") {
+                setTimeout(() => error({ code: 3, message: "Location request timed out (Mocked)" }), 300);
+                return;
             }
+
+            const getPosSuccess = () => {
+                if (sim.interpCoords.length > 0) {
+                    const pos = buildPosition(sim.interpCoords[0][0], sim.interpCoords[0][1], 0);
+                    success(pos);
+                } else if (state === "granted") {
+                    success(buildPosition(40.028446, -105.281088, 5));
+                } else if (realGeolocation) {
+                    realGeolocation.getCurrentPosition(success, error, options);
+                } else {
+                    error({ code: 2, message: "Geolocation not supported by this browser" });
+                }
+            };
+
+            const delay = state === "slow" ? 5000 : 200;
+            setTimeout(getPosSuccess, delay);
         }
     };
 
@@ -76,6 +115,9 @@
     // --- Also patch DeviceOrientationEvent to inject compass ---
     // We'll dispatch fake events on the window
     function fireCompassEvent(heading) {
+        const compassState = localStorage.getItem("mock_compass_state") || "default";
+        if (compassState === "denied" || compassState === "unsupported") return;
+
         try {
             const event = new Event('deviceorientation');
             event.alpha = (360 - heading) % 360; // Android convention
