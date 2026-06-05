@@ -90,7 +90,7 @@ const OFFICIAL_CUES = {
     ]
 };
 
-const DEFAULT_WEIGHTS = {
+let DEFAULT_WEIGHTS = {
     "separated_path": 0.5,
     "sharrow_minor": 1.5,
     "sidewalk": 2.0,
@@ -108,15 +108,152 @@ const DEFAULT_WEIGHTS = {
 };
 
 // Initialize app when DOM loads
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
     initMap();
-    initSliders();
-    initEventListeners();
+    await loadBackendConfig();
     initDebugMode();
     initWelcomeModal();
     loadCrossings();
     loadPlaygrounds();
 });
+
+// Load dynamic presets and weight metadata from backend configuration API
+async function loadBackendConfig() {
+    try {
+        const response = await fetch(`${API_BASE}/api/config`);
+        const config = await response.json();
+        
+        // 1. Populate weights metadata and override defaults
+        config.weights.forEach(w => {
+            DEFAULT_WEIGHTS[w.key] = w.default;
+        });
+
+        // 2. Render sliders dynamically
+        const slidersContainer = document.getElementById("sliders-container");
+        if (slidersContainer) {
+            slidersContainer.innerHTML = "";
+            config.weights.forEach(w => {
+                const group = document.createElement("div");
+                group.className = "weight-group";
+                
+                // Keep class colors aligned with INFRA_COLORS keys
+                const colorClass = w.key.replace(/_/g, "-");
+                
+                group.innerHTML = `
+                    <div class="weight-label">
+                        <span><i class="fa-solid ${w.web_icon} text-${colorClass}"></i> ${w.name}</span>
+                        <span id="val-${w.key}" class="weight-value">${w.default.toFixed(1)}x</span>
+                    </div>
+                    <input type="range" id="weight-${w.key}" min="${w.min}" max="${w.max}" step="${w.step}" value="${w.default}">
+                    <span class="subtext">${w.description}</span>
+                `;
+                slidersContainer.appendChild(group);
+            });
+        }
+
+        // 3. Render presets dynamically
+        const presetList = document.getElementById("preset-list");
+        if (presetList) {
+            presetList.innerHTML = "";
+            config.presets.forEach(p => {
+                const btn = document.createElement("button");
+                btn.className = "preset-item";
+                btn.setAttribute("data-start", p.start.join(","));
+                btn.setAttribute("data-end", p.end.join(","));
+                if (p.waypoints && p.waypoints.length > 0) {
+                    btn.setAttribute("data-waypoints", p.waypoints.map(wp => wp.join(",")).join(";"));
+                }
+                if (p.route_type) {
+                    btn.setAttribute("data-route-type", p.route_type);
+                }
+
+                btn.innerHTML = `
+                    <span class="preset-name">${p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : ''}${p.name}</span>
+                    <span class="preset-desc">${p.desc}</span>
+                `;
+                presetList.appendChild(btn);
+            });
+        }
+        
+        // Initialize sliders and listeners
+        initSliders();
+        initEventListeners();
+        console.log("Successfully loaded backend dynamic configurations.");
+        
+    } catch (err) {
+        console.warn("Failed to load dynamic backend configurations. Using hardcoded web fallbacks:", err);
+        // Fallback to local rendering of original layout if server is down
+        fallbackLocalRendering();
+    }
+}
+
+// Fallback in case python backend is offline on startup
+function fallbackLocalRendering() {
+    // 1. Render default sliders locally
+    const slidersContainer = document.getElementById("sliders-container");
+    if (slidersContainer) {
+        const fallbacks = [
+            { key: "separated_path", name: "Separated Paths", desc: "Multi-use paths, greenways, cycletracks", icon: "fa-leaf", min: 0.1, max: 2.0, step: 0.1, val: 0.5 },
+            { key: "sharrow_minor", name: "Quiet Streets (Sharrows)", desc: "Quiet streets with shared lane markings", icon: "fa-shield", min: 0.5, max: 5.0, step: 0.1, val: 1.5 },
+            { key: "residential", name: "Residential Streets", desc: "Quiet side streets without designations", icon: "fa-house", min: 0.5, max: 5.0, step: 0.1, val: 0.7 },
+            { key: "sidewalk", name: "Sidewalk Routing", desc: "Separate sidewalks, pedestrian ways, slow speed", icon: "fa-walking", min: 1.0, max: 10.0, step: 0.5, val: 2.0 },
+            { key: "busy_with_lane", name: "Busy Roads w/ Bike Lane", desc: "Secondary/tertiary roads with painted lanes", icon: "fa-road", min: 2.0, max: 15.0, step: 0.5, val: 5.0 },
+            { key: "busy_with_sharrow", name: "Busy Roads w/ Sharrows", desc: "Busy arterials with sharrows", icon: "fa-triangle-exclamation", min: 3.0, max: 25.0, step: 1.0, val: 8.0 },
+            { key: "busy_undesignated", name: "Busy Roads (Undesignated)", desc: "Arterials without bike infrastructure (feeder-only)", icon: "fa-skull-crossbones", min: 5.0, max: 50.0, step: 1.0, val: 15.0 },
+            { key: "sidewalk_forced", name: "Sidewalk on 4+ Lanes", desc: "Forced sidewalk walk on 4+ lane roads", icon: "fa-ban", min: 2.0, max: 20.0, step: 1.0, val: 6.0 },
+            { key: "crossing_safe", name: "Safe Crossings", desc: "Signalized, beacon-flashing, or bike crossings", icon: "fa-traffic-light", min: 0.5, max: 3.0, step: 0.1, val: 1.0 },
+            { key: "crossing_unsafe", name: "Unsignalized Crossings", desc: "Unmarked or non-signalized busy street crossings", icon: "fa-triangle-exclamation", min: 1.0, max: 10.0, step: 0.5, val: 6.0 },
+            { key: "stress_low", name: "Low Stress Modifier", desc: "Additional multiplier applied to low stress roads", icon: "fa-heart-circle-check", min: 0.1, max: 1.5, step: 0.1, val: 0.7 },
+            { key: "stress_high", name: "High Stress Modifier", desc: "Additional penalty applied to high stress roads", icon: "fa-circle-exclamation", min: 1.0, max: 10.0, step: 0.5, val: 2.0 },
+            { key: "offstreet_multiuse", name: "Multi-Use Path Modifier", desc: "Additional multiplier applied to off-street paths", icon: "fa-tree-city", min: 0.1, max: 1.5, step: 0.1, val: 0.8 },
+            { key: "ebike_restricted", name: "E-Bike Prohibited Penalty", desc: "Additional penalty applied if e-bikes are prohibited", icon: "fa-bolt-lightning", min: 1.0, max: 10.0, step: 0.5, val: 1.0 }
+        ];
+        slidersContainer.innerHTML = "";
+        fallbacks.forEach(w => {
+            const group = document.createElement("div");
+            group.className = "weight-group";
+            const colorClass = w.key.replace(/_/g, "-");
+            group.innerHTML = `
+                <div class="weight-label">
+                    <span><i class="fa-solid ${w.icon} text-${colorClass}"></i> ${w.name}</span>
+                    <span id="val-${w.key}" class="weight-value">${w.val.toFixed(1)}x</span>
+                </div>
+                <input type="range" id="weight-${w.key}" min="${w.min}" max="${w.max}" step="${w.step}" value="${w.val}">
+                <span class="subtext">${w.desc}</span>
+            `;
+            slidersContainer.appendChild(group);
+        });
+    }
+
+    // 2. Render default presets locally
+    const presetList = document.getElementById("preset-list");
+    if (presetList) {
+        const presets = [
+            { name: "North Boulder ➔ Iris Ave", desc: "Cedar Ave to 28th St & Iris", start: [40.028446, -105.281088], end: [40.038662, -105.263851], waypoints: [], route_type: null },
+            { name: "CU Campus ➔ North Park", desc: "Broadway Path & residential streets", start: [40.007, -105.263], end: [40.028, -105.283], waypoints: [], route_type: null },
+            { name: "Valmont Park ➔ Pearl Street Mall", desc: "Using off-street paths", start: [40.030, -105.234], end: [40.018, -105.279], waypoints: [], route_type: null },
+            { name: "Table Mesa ➔ CU Campus", desc: "Safe commuting corridors", start: [39.986, -105.262], end: [40.007, -105.263], waypoints: [], route_type: null },
+            { name: "Boulder B-180 Loop", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], route_type: "b180" },
+            { name: "Boulder B-360 Loop", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], route_type: "b360" }
+        ];
+        presetList.innerHTML = "";
+        presets.forEach(p => {
+            const btn = document.createElement("button");
+            btn.className = "preset-item";
+            btn.setAttribute("data-start", p.start.join(","));
+            btn.setAttribute("data-end", p.end.join(","));
+            if (p.waypoints.length > 0) btn.setAttribute("data-waypoints", p.waypoints.map(wp => wp.join(",")).join(";"));
+            if (p.route_type) btn.setAttribute("data-route-type", p.route_type);
+            btn.innerHTML = `
+                <span class="preset-name">${p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : ''}${p.name}</span>
+                <span class="preset-desc">${p.desc}</span>
+            `;
+            presetList.appendChild(btn);
+        });
+    }
+    initSliders();
+    initEventListeners();
+}
 
 // Initialize Leaflet Map
 function initMap() {

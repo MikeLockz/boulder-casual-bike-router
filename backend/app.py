@@ -1222,6 +1222,220 @@ def get_current_weights():
     """Get the default and currently configured weighting factors."""
     return jsonify(DEFAULT_WEIGHTS)
 
+# Metadata definitions for sliders and preset routes
+WEIGHTS_METADATA = [
+    {
+        "key": "separated_path",
+        "name": "Separated Paths",
+        "description": "Multi-use paths, greenways, cycletracks",
+        "web_icon": "fa-leaf",
+        "ios_icon": "leaf.fill",
+        "min": 0.1, "max": 2.0, "step": 0.1,
+        "default": 0.5
+    },
+    {
+        "key": "sharrow_minor",
+        "name": "Quiet Streets (Sharrows)",
+        "description": "Quiet streets with shared lane markings",
+        "web_icon": "fa-shield",
+        "ios_icon": "shield.fill",
+        "min": 0.5, "max": 5.0, "step": 0.1,
+        "default": 1.5
+    },
+    {
+        "key": "residential",
+        "name": "Residential Streets",
+        "description": "Quiet side streets without designations",
+        "web_icon": "fa-house",
+        "ios_icon": "house.fill",
+        "min": 0.5, "max": 5.0, "step": 0.1,
+        "default": 0.7
+    },
+    {
+        "key": "sidewalk",
+        "name": "Sidewalk Routing",
+        "description": "Separate sidewalks, pedestrian ways, slow speed",
+        "web_icon": "fa-walking",
+        "ios_icon": "figure.walk",
+        "min": 1.0, "max": 10.0, "step": 0.5,
+        "default": 2.0
+    },
+    {
+        "key": "busy_with_lane",
+        "name": "Busy Roads w/ Bike Lane",
+        "description": "Secondary/tertiary roads with painted lanes",
+        "web_icon": "fa-road",
+        "ios_icon": "road.lanes",
+        "min": 2.0, "max": 15.0, "step": 0.5,
+        "default": 5.0
+    },
+    {
+        "key": "busy_with_sharrow",
+        "name": "Busy Roads w/ Sharrows",
+        "description": "Busy arterials with sharrows",
+        "web_icon": "fa-triangle-exclamation",
+        "ios_icon": "exclamationmark.triangle.fill",
+        "min": 3.0, "max": 25.0, "step": 1.0,
+        "default": 8.0
+    },
+    {
+        "key": "busy_undesignated",
+        "name": "Busy Roads (Undesignated)",
+        "description": "Arterials without bike infrastructure (feeder-only)",
+        "web_icon": "fa-skull-crossbones",
+        "ios_icon": "skull.fill",
+        "min": 5.0, "max": 50.0, "step": 1.0,
+        "default": 15.0
+    },
+    {
+        "key": "sidewalk_forced",
+        "name": "Sidewalk on 4+ Lanes",
+        "description": "Forced sidewalk walk on 4+ lane roads",
+        "web_icon": "fa-ban",
+        "ios_icon": "nosign",
+        "min": 2.0, "max": 20.0, "step": 1.0,
+        "default": 6.0
+    },
+    {
+        "key": "crossing_safe",
+        "name": "Safe Crossings",
+        "description": "Signalized, beacon-flashing, or bike crossings",
+        "web_icon": "fa-traffic-light",
+        "ios_icon": "trafficlight.fill",
+        "min": 0.5, "max": 3.0, "step": 0.1,
+        "default": 1.0
+    },
+    {
+        "key": "crossing_unsafe",
+        "name": "Unsignalized Crossings",
+        "description": "Unmarked or non-signalized busy street crossings",
+        "web_icon": "fa-triangle-exclamation",
+        "ios_icon": "exclamationmark.triangle.fill",
+        "min": 1.0, "max": 10.0, "step": 0.5,
+        "default": 6.0
+    },
+    {
+        "key": "stress_low",
+        "name": "Low Stress Modifier",
+        "description": "Additional multiplier applied to streets matching Low Traffic Stress overlay",
+        "web_icon": "fa-heart-circle-check",
+        "ios_icon": "heart.text.square.fill",
+        "min": 0.1, "max": 1.5, "step": 0.1,
+        "default": 0.7
+    },
+    {
+        "key": "stress_high",
+        "name": "High Stress Modifier",
+        "description": "Additional penalty applied to streets matching High Traffic Stress overlay",
+        "web_icon": "fa-circle-exclamation",
+        "ios_icon": "exclamationmark.circle.fill",
+        "min": 1.0, "max": 10.0, "step": 0.5,
+        "default": 2.0
+    },
+    {
+        "key": "offstreet_multiuse",
+        "name": "Multi-Use Path Modifier",
+        "description": "Additional multiplier applied to off-street Multi-Use Paths",
+        "web_icon": "fa-tree-city",
+        "ios_icon": "tree.fill",
+        "min": 0.1, "max": 1.5, "step": 0.1,
+        "default": 0.8
+    },
+    {
+        "key": "ebike_restricted",
+        "name": "E-Bike Prohibited Penalty",
+        "description": "Additional penalty applied if e-bikes are prohibited on the path",
+        "web_icon": "fa-bolt-lightning",
+        "ios_icon": "bolt.fill",
+        "min": 1.0, "max": 10.0, "step": 0.5,
+        "default": 1.0
+    }
+]
+
+ROUTE_PRESETS = [
+    {
+        "name": "North Boulder ➔ Iris Ave",
+        "desc": "Cedar Ave to 28th St & Iris",
+        "start": [40.028446, -105.281088],
+        "end": [40.038662, -105.263851],
+        "waypoints": [],
+        "route_type": None
+    },
+    {
+        "name": "CU Campus ➔ North Park",
+        "desc": "Broadway Path & residential streets",
+        "start": [40.007, -105.263],
+        "end": [40.028, -105.283],
+        "waypoints": [],
+        "route_type": None
+    },
+    {
+        "name": "Valmont Park ➔ Pearl Street Mall",
+        "desc": "Using off-street multi-use paths",
+        "start": [40.030, -105.234],
+        "end": [40.018, -105.279],
+        "waypoints": [],
+        "route_type": None
+    },
+    {
+        "name": "Table Mesa ➔ CU Campus",
+        "desc": "Safe commuting corridors",
+        "start": [39.986, -105.262],
+        "end": [40.007, -105.263],
+        "waypoints": [],
+        "route_type": None
+    },
+    {
+        "name": "Boulder B-180 Loop",
+        "desc": "12 mi scenic loop (Valmont Park)",
+        "start": [40.030, -105.234],
+        "end": [40.030, -105.234],
+        "waypoints": [
+            [40.033, -105.253],
+            [40.038, -105.263],
+            [40.028, -105.281],
+            [40.028, -105.283],
+            [40.021, -105.291],
+            [40.015, -105.292],
+            [40.014, -105.275],
+            [40.015, -105.253]
+        ],
+        "route_type": "b180"
+    },
+    {
+        "name": "Boulder B-360 Loop",
+        "desc": "24 mi grand loop (Valmont Park)",
+        "start": [40.030, -105.234],
+        "end": [40.030, -105.234],
+        "waypoints": [
+            [40.034, -105.225],
+            [40.052, -105.207],
+            [40.054, -105.228],
+            [40.040, -105.249],
+            [40.046, -105.265],
+            [40.060, -105.275],
+            [40.039, -105.289],
+            [40.028, -105.289],
+            [40.015, -105.292],
+            [39.998, -105.283],
+            [39.991, -105.263],
+            [39.986, -105.238],
+            [39.981, -105.233],
+            [39.998, -105.228],
+            [40.030, -105.210]
+        ],
+        "route_type": "b360"
+    }
+]
+
+@app.route("/api/config", methods=["GET"])
+def get_config():
+    """Get the full list of dynamic configuration presets and sliders metadata."""
+    return jsonify({
+        "weights": WEIGHTS_METADATA,
+        "presets": ROUTE_PRESETS
+    })
+
 @app.route("/api/crossings", methods=["GET"])
 def get_crossings():
     """Get all crossing nodes on 4+ lane roads or safe crossings in the network."""
@@ -1332,7 +1546,47 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
     return response
 
+@app.route("/api/pocketbase-status", methods=["GET"])
+def pocketbase_status():
+    """Check status of PocketBase connection."""
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    try:
+        resp = requests.get(f"{pb_url}/api/health", timeout=2)
+        if resp.status_code == 200:
+            return jsonify({
+                "status": "connected",
+                "url": pb_url,
+                "health": resp.json()
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "url": pb_url,
+                "code": resp.status_code,
+                "message": "PocketBase did not return 200 OK"
+            }), 500
+    except Exception as e:
+        return jsonify({
+            "status": "disconnected",
+            "url": pb_url,
+            "error": str(e)
+        }), 500
+
 if __name__ == "__main__":
     # Pre-build graph on startup
     build_graph()
+    
+    # Verify PocketBase connection
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    print(f"[*] PocketBase connection check: pinging {pb_url}...")
+    try:
+        resp = requests.get(f"{pb_url}/api/health", timeout=2)
+        if resp.status_code == 200:
+            print(f"[+] PocketBase is connected and healthy: {resp.json()}")
+        else:
+            print(f"[-] PocketBase returned status {resp.status_code}")
+    except Exception as e:
+        print(f"[-] PocketBase connection failed: {e}")
+
     app.run(host="0.0.0.0", port=3001, debug=True)
+
