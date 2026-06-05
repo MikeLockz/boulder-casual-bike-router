@@ -986,6 +986,11 @@ async function checkExistingPermission() {
 
 // Automatically locate the user in the background (used when permission was already granted)
 function autoLocateUser() {
+    const mockState = localStorage.getItem("mock_geolocation_state") || "default";
+    if (mockState === "default" && !window.isSecureContext) {
+        prepopulatePoints();
+        return;
+    }
     showToast("Locating your starting position...");
     
     if ("geolocation" in navigator) {
@@ -1043,6 +1048,13 @@ function autoLocateUser() {
 
 // Request location permission and center map (used when user interacts with modal)
 function requestLocation() {
+    const mockState = localStorage.getItem("mock_geolocation_state") || "default";
+    if (mockState === "default" && !window.isSecureContext) {
+        dismissWelcomeModal();
+        showToast("Insecure Context: Geolocation is disabled on HTTP. Please use HTTPS.");
+        prepopulatePoints();
+        return;
+    }
     const overlay = document.getElementById("welcome-modal-overlay");
     if ("geolocation" in navigator) {
         navigator.geolocation.getCurrentPosition(
@@ -1142,6 +1154,13 @@ function onDemandLocate(isRetry = false) {
     
     if (locateBtn) {
         locateBtn.classList.add("locating");
+    }
+    
+    const mockState = localStorage.getItem("mock_geolocation_state") || "default";
+    if (mockState === "default" && !window.isSecureContext) {
+        showToast("Insecure Context: Geolocation is disabled on HTTP. Please use HTTPS or localhost.");
+        if (locateBtn) locateBtn.classList.remove("locating");
+        return;
     }
     
     showToast(isRetry ? "Checking permissions..." : "Acquiring location...");

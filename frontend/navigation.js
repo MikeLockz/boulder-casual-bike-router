@@ -61,6 +61,12 @@ const Navigation = (() => {
 
         // Start GPS
         if ('geolocation' in navigator) {
+            const mockState = localStorage.getItem("mock_geolocation_state") || "default";
+            if (mockState === "default" && !window.isSecureContext) {
+                showToast('Insecure Context: Geolocation requires HTTPS or localhost on mobile.');
+                stop(mapInstance);
+                return;
+            }
             state.watchId = navigator.geolocation.watchPosition(
                 (pos) => onPositionUpdate(pos, mapInstance),
                 (err) => onPositionError(err, mapInstance),
@@ -72,6 +78,7 @@ const Navigation = (() => {
             );
         } else {
             showToast('Geolocation is not supported by this browser.');
+            stop(mapInstance);
         }
 
         // Request device orientation for compass heading (iOS needs permission)
