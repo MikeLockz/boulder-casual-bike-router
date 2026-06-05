@@ -187,6 +187,59 @@
                     </div>
                 </details>
 
+                <!-- Section 5: User Account (Collapsed by default) -->
+                <details class="collapsible-section" id="sec-auth">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-user-circle"></i> User Account</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content">
+                        <!-- Logged Out State -->
+                        <div id="auth-logged-out" class="auth-state-container">
+                            <p class="section-desc" style="margin-bottom: 12px;">Create an account or log in to register your profile.</p>
+                            
+                            <div class="auth-tabs">
+                                <button type="button" id="tab-btn-login" class="auth-tab-btn active">Log In</button>
+                                <button type="button" id="tab-btn-signup" class="auth-tab-btn">Sign Up</button>
+                            </div>
+
+                            <form id="auth-form" class="auth-form">
+                                <div class="form-group">
+                                    <label for="auth-email">Email Address</label>
+                                    <input type="email" id="auth-email" required placeholder="name@example.com">
+                                </div>
+                                <div class="form-group">
+                                    <label for="auth-password">Password</label>
+                                    <input type="password" id="auth-password" required placeholder="Min. 8 characters" minlength="8">
+                                </div>
+                                <div class="form-group hidden" id="signup-confirm-group">
+                                    <label for="auth-password-confirm">Confirm Password</label>
+                                    <input type="password" id="auth-password-confirm" placeholder="Repeat password">
+                                </div>
+                                
+                                <div id="auth-message" class="auth-message error hidden"></div>
+                                <div id="auth-success-message" class="auth-message success hidden"></div>
+                                
+                                <button type="submit" id="auth-submit-btn" class="btn btn-primary btn-auth">Log In</button>
+                            </form>
+                        </div>
+
+                        <!-- Logged In State -->
+                        <div id="auth-logged-in" class="auth-state-container hidden">
+                            <div class="user-profile-info">
+                                <div class="profile-avatar">
+                                    <i class="fa-solid fa-user"></i>
+                                </div>
+                                <div class="profile-details">
+                                    <span class="profile-email" id="user-display-email">-</span>
+                                    <span class="profile-status"><i class="fa-solid fa-circle-check"></i> Authenticated</span>
+                                </div>
+                            </div>
+                            <button type="button" id="btn-logout" class="btn btn-secondary btn-auth-logout"><i class="fa-solid fa-right-from-bracket"></i> Log Out</button>
+                        </div>
+                    </div>
+                </details>
+
                 <!-- Section 4: How to Route (Collapsed by default) -->
                 <details class="collapsible-section" id="sec-instructions">
                     <summary>
@@ -321,44 +374,68 @@
                 
                 <!-- Tab Content: iOS Safari -->
                 <div id="tab-content-ios" class="tab-content active">
-                    <ol class="settings-steps">
+                    <div style="font-size: 12px; font-weight: bold; color: var(--accent-color); margin-bottom: 8px;">Option A: Website Settings</div>
+                    <ol class="settings-steps" style="margin-bottom: 16px;">
                         <li>
                             <span class="step-num">1</span>
-                            <span class="step-text">Tap the <strong>aA</strong> (Website Settings) icon in the URL bar.</span>
+                            <span class="step-text">Tap the <strong>aA</strong> icon in the address bar.</span>
                         </li>
                         <li>
                             <span class="step-num">2</span>
-                            <span class="step-text">Select <strong>Website Settings</strong> from the dropdown.</span>
+                            <span class="step-text">Select <strong>Website Settings</strong>.</span>
                         </li>
                         <li>
                             <span class="step-num">3</span>
-                            <span class="step-text">Change <strong>Location</strong> setting to <strong>Allow</strong>.</span>
+                            <span class="step-text">Change <strong>Location</strong> to <strong>Allow</strong>.</span>
+                        </li>
+                    </ol>
+                    <div style="font-size: 12px; font-weight: bold; color: var(--accent-color); margin-bottom: 8px;">Option B: iOS System Location Services (If blocked)</div>
+                    <ol class="settings-steps">
+                        <li>
+                            <span class="step-num">1</span>
+                            <span class="step-text">Open iPhone <strong>Settings</strong> ➔ <strong>Privacy & Security</strong> ➔ <strong>Location Services</strong>.</span>
                         </li>
                         <li>
-                            <span class="step-num">4</span>
-                            <span class="step-text">Tap <strong>Try Again</strong> below or reload the page.</span>
+                            <span class="step-num">2</span>
+                            <span class="step-text">Ensure <strong>Location Services</strong> is toggled <strong>ON</strong>.</span>
+                        </li>
+                        <li>
+                            <span class="step-num">3</span>
+                            <span class="step-text">Scroll down, tap <strong>Safari Websites</strong>, and select <strong>While Using the App</strong>.</span>
                         </li>
                     </ol>
                 </div>
                 
                 <!-- Tab Content: Android Chrome -->
                 <div id="tab-content-android" class="tab-content">
-                    <ol class="settings-steps">
+                    <div style="font-size: 12px; font-weight: bold; color: var(--accent-color); margin-bottom: 8px;">Option A: Chrome Site Settings</div>
+                    <ol class="settings-steps" style="margin-bottom: 16px;">
                         <li>
                             <span class="step-num">1</span>
-                            <span class="step-text">Tap the <strong>lock / settings icon</strong> to the left of the URL bar.</span>
+                            <span class="step-text">Tap the <strong>lock / settings</strong> icon left of the URL.</span>
                         </li>
                         <li>
                             <span class="step-num">2</span>
-                            <span class="step-text">Tap <strong>Site Settings</strong> or <strong>Permissions</strong>.</span>
+                            <span class="step-text">Select <strong>Site Settings</strong> or <strong>Permissions</strong>.</span>
                         </li>
                         <li>
                             <span class="step-num">3</span>
-                            <span class="step-text">Find <strong>Location</strong> and set it to <strong>Allow</strong>.</span>
+                            <span class="step-text">Set <strong>Location</strong> to <strong>Allow</strong>.</span>
+                        </li>
+                    </ol>
+                    <div style="font-size: 12px; font-weight: bold; color: var(--accent-color); margin-bottom: 8px;">Option B: Android System Permissions (If blocked)</div>
+                    <ol class="settings-steps">
+                        <li>
+                            <span class="step-num">1</span>
+                            <span class="step-text">Open Android <strong>Settings</strong> ➔ <strong>Apps</strong> ➔ <strong>Chrome</strong>.</span>
                         </li>
                         <li>
-                            <span class="step-num">4</span>
-                            <span class="step-text">Tap <strong>Try Again</strong> below or reload the page.</span>
+                            <span class="step-num">2</span>
+                            <span class="step-text">Tap <strong>Permissions</strong> ➔ <strong>Location</strong>.</span>
+                        </li>
+                        <li>
+                            <span class="step-num">3</span>
+                            <span class="step-text">Select <strong>Allow only while using the app</strong> and enable <strong>Use precise location</strong>.</span>
                         </li>
                     </ol>
                 </div>

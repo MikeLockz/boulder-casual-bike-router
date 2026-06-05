@@ -115,6 +115,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     initWelcomeModal();
     loadCrossings();
     loadPlaygrounds();
+    initAuth();
 });
 
 // Load dynamic presets and weight metadata from backend configuration API
@@ -1925,4 +1926,253 @@ function getFitBoundsOptions() {
     }
     
     return options;
+}
+
+// ====================================
+// USER AUTHENTICATION INTEGRATION
+// ====================================
+let PB_URL = "/pb";
+let currentUser = null;
+
+async function initAuth() {
+    await detectPocketBaseUrl();
+    
+    const storedAuth = localStorage.getItem("pocketbase_auth");
+    if (storedAuth) {
+        try {
+            const authData = JSON.parse(storedAuth);
+            if (authData && authData.token && authData.record) {
+                currentUser = authData.record;
+            }
+        } catch (e) {
+            console.error("Failed to parse stored auth session:", e);
+            localStorage.removeItem("pocketbase_auth");
+        }
+    }
+    
+    updateAuthUI();
+    initAuthEventListeners();
+}
+
+async function detectPocketBaseUrl() {
+    try {
+        const resp = await fetch("/pb/api/health", { method: "GET" });
+        if (resp.status === 200) {
+            PB_URL = "/pb";
+            console.log("[Auth] Using Nginx proxied PocketBase route (/pb)");
+            return;
+        }
+    } catch (e) {
+        // Failed
+    }
+    
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+        PB_URL = "http://localhost:8090";
+        console.log("[Auth] Nginx proxy not detected. Falling back to direct PocketBase at " + PB_URL);
+    }
+}
+
+function updateAuthUI() {
+    const loggedOutDiv = document.getElementById("auth-logged-out");
+    const loggedInDiv = document.getElementById("auth-logged-in");
+    const userEmailSpan = document.getElementById("user-display-email");
+    
+    if (!loggedOutDiv || !loggedInDiv) return;
+    
+    if (currentUser) {
+        loggedOutDiv.classList.add("hidden");
+        loggedInDiv.classList.remove("hidden");
+        if (userEmailSpan) {
+            userEmailSpan.textContent = currentUser.email;
+        }
+    } else {
+        loggedInDiv.classList.add("hidden");
+        loggedOutDiv.classList.remove("hidden");
+        if (userEmailSpan) {
+            userEmailSpan.textContent = "-";
+        }
+        document.getElementById("auth-email").value = "";
+        document.getElementById("auth-password").value = "";
+        const confirmField = document.getElementById("auth-password-confirm");
+        if (confirmField) confirmField.value = "";
+        hideAuthMessages();
+    }
+}
+
+function hideAuthMessages() {
+    const errDiv = document.getElementById("auth-message");
+    const succDiv = document.getElementById("auth-success-message");
+    if (errDiv) {
+        errDiv.classList.add("hidden");
+        errDiv.textContent = "";
+    }
+    if (succDiv) {
+        succDiv.classList.add("hidden");
+        succDiv.textContent = "";
+    }
+}
+
+function showAuthError(msg) {
+    const errDiv = document.getElementById("auth-message");
+    const succDiv = document.getElementById("auth-success-message");
+    if (succDiv) succDiv.classList.add("hidden");
+    if (errDiv) {
+        errDiv.textContent = msg;
+        errDiv.classList.remove("hidden");
+    }
+}
+
+function showAuthSuccess(msg) {
+    const errDiv = document.getElementById("auth-message");
+    const succDiv = document.getElementById("auth-success-message");
+    if (errDiv) errDiv.classList.add("hidden");
+    if (succDiv) {
+        succDiv.textContent = msg;
+        succDiv.classList.remove("hidden");
+    }
+}
+
+function initAuthEventListeners() {
+    const tabLogin = document.getElementById("tab-btn-login");
+    const tabSignup = document.getElementById("tab-btn-signup");
+    const confirmGroup = document.getElementById("signup-confirm-group");
+    const submitBtn = document.getElementById("auth-submit-btn");
+    const authForm = document.getElementById("auth-form");
+    const logoutBtn = document.getElementById("btn-logout");
+    
+    let activeTab = "login";
+    
+    if (tabLogin && tabSignup) {
+        tabLogin.addEventListener("click", () => {
+            if (activeTab === "login") return;
+            activeTab = "login";
+            tabLogin.classList.add("active");
+            tabSignup.classList.remove("active");
+            if (confirmGroup) confirmGroup.classList.add("hidden");
+            document.getElementById("auth-password-confirm").removeAttribute("required");
+            if (submitBtn) submitBtn.textContent = "Log In";
+            hideAuthMessages();
+        });
+        
+        tabSignup.addEventListener("click", () => {
+            if (activeTab === "signup") return;
+            activeTab = "signup";
+            tabSignup.classList.add("active");
+            tabLogin.classList.remove("active");
+            if (confirmGroup) confirmGroup.classList.remove("hidden");
+            document.getElementById("auth-password-confirm").setAttribute("required", "required");
+            if (submitBtn) submitBtn.textContent = "Sign Up";
+            hideAuthMessages();
+        });
+    }
+    
+    if (authForm) {
+        authForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            hideAuthMessages();
+            
+            const email = document.getElementById("auth-email").value.trim();
+            const password = document.getElementById("auth-password").value;
+            
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
+            }
+            
+            try {
+                if (activeTab === "signup") {
+                    const confirmPass = document.getElementById("auth-password-confirm").value;
+                    if (password !== confirmPass) {
+                        showAuthError("Passwords do not match.");
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = "Sign Up";
+                        }
+                        return;
+                    }
+                    
+                    const regResp = await fetch(`${PB_URL}/api/collections/users/records`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            email: email,
+                            password: password,
+                            passwordConfirm: confirmPass,
+                            emailVisibility: true
+                        })
+                    });
+                    
+                    const regData = await regResp.json();
+                    if (!regResp.ok) {
+                        const errorMsg = parsePocketBaseError(regData);
+                        throw new Error(errorMsg || "Sign up failed.");
+                    }
+                    
+                    showAuthSuccess("Account created! Logging in...");
+                    await performLogin(email, password);
+                } else {
+                    await performLogin(email, password);
+                }
+            } catch (err) {
+                console.error("[Auth Error]", err);
+                showAuthError(err.message);
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = activeTab === "signup" ? "Sign Up" : "Log In";
+                }
+            }
+        });
+    }
+    
+    if (logoutBtn) {
+        logoutBtn.addEventListener("click", () => {
+            currentUser = null;
+            localStorage.removeItem("pocketbase_auth");
+            updateAuthUI();
+        });
+    }
+}
+
+async function performLogin(email, password) {
+    const resp = await fetch(`${PB_URL}/api/collections/users/auth-with-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            identity: email,
+            password: password
+        })
+    });
+    
+    const data = await resp.json();
+    if (!resp.ok) {
+        const errorMsg = parsePocketBaseError(data);
+        throw new Error(errorMsg || "Invalid email or password.");
+    }
+    
+    localStorage.setItem("pocketbase_auth", JSON.stringify({
+        token: data.token,
+        record: data.record
+    }));
+    
+    currentUser = data.record;
+    updateAuthUI();
+}
+
+function parsePocketBaseError(data) {
+    if (!data) return null;
+    if (data.message) {
+        if (data.data) {
+            const errors = [];
+            for (const key of Object.keys(data.data)) {
+                const errDetail = data.data[key];
+                errors.push(`${key}: ${errDetail.message || JSON.stringify(errDetail)}`);
+            }
+            if (errors.length > 0) {
+                return `${data.message} (${errors.join(", ")})`;
+            }
+        }
+        return data.message;
+    }
+    return null;
 }
