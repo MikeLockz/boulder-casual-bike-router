@@ -862,6 +862,10 @@ def build_graph(weights=None):
     # Pre-build bike routes GeoJSON
     build_bike_routes_geojson()
 
+    # Pre-populate graph with default weights so CLI routing tools remain in sync
+    print("Populating graph with default routing weights...")
+    update_graph_weights(G_connected, weights)
+
 def build_bike_routes_geojson():
     """Load, filter, and simplify official bike routes data into a lightweight FeatureCollection."""
     global bike_routes_geojson_global
@@ -946,37 +950,20 @@ def find_nearest_node(target_coord):
             nearest_node = node
     return nearest_node, min_dist
 
-@app.route("/api/route", methods=["POST", "OPTIONS"])
-def get_route():
-    """API endpoint to request a route between two points with custom weights."""
-    if request.method == "OPTIONS":
-        return "", 200
-        
-    global G_connected
-    data = request.json or {}
-    
-    start_lat = data.get("start_lat")
-    start_lon = data.get("start_lon")
-    end_lat = data.get("end_lat")
-    end_lon = data.get("end_lon")
-    custom_weights = data.get("weights") or DEFAULT_WEIGHTS
-    
-    if not all([start_lat, start_lon, end_lat, end_lon]):
-        return jsonify({"error": "Missing coordinates"}), 400
-
-    # Pre-build facility bonus table from current weights
+def update_graph_weights(G, weights):
+    """Update all edge multipliers and weights in the graph G based on weights dictionary."""
     FACILITY_BONUS_ROUTING = {
-        "Designated Bike Route": custom_weights.get("facility_designated_route", DEFAULT_WEIGHTS.get("facility_designated_route", 0.4)),
-        "Protected Bike Lane":   custom_weights.get("facility_protected_lane",   DEFAULT_WEIGHTS.get("facility_protected_lane",   0.3)),
-        "Separated Bike Lane":   custom_weights.get("facility_protected_lane",   DEFAULT_WEIGHTS.get("facility_protected_lane",   0.3)),
-        "On-Street Bike Lane":   custom_weights.get("facility_onstreet_lane",    DEFAULT_WEIGHTS.get("facility_onstreet_lane",    0.6)),
-        "Bikeable Shoulder":     custom_weights.get("facility_bikeable_shoulder",DEFAULT_WEIGHTS.get("facility_bikeable_shoulder",0.75)),
-        "Contra Flow Bike Lane": custom_weights.get("facility_contraflow",       DEFAULT_WEIGHTS.get("facility_contraflow",       0.5)),
+        "Designated Bike Route": weights.get("facility_designated_route", DEFAULT_WEIGHTS.get("facility_designated_route", 0.55)),
+        "Protected Bike Lane":   weights.get("facility_protected_lane",   DEFAULT_WEIGHTS.get("facility_protected_lane",   0.20)),
+        "Separated Bike Lane":   weights.get("facility_protected_lane",   DEFAULT_WEIGHTS.get("facility_protected_lane",   0.20)),
+        "On-Street Bike Lane":   weights.get("facility_onstreet_lane",    DEFAULT_WEIGHTS.get("facility_onstreet_lane",    0.55)),
+        "Bikeable Shoulder":     weights.get("facility_bikeable_shoulder",DEFAULT_WEIGHTS.get("facility_bikeable_shoulder",0.65)),
+        "Contra Flow Bike Lane": weights.get("facility_contraflow",       DEFAULT_WEIGHTS.get("facility_contraflow",       0.45)),
     }
 
-    for u, v, d in G_connected.edges(data=True):
+    for u, v, d in G.edges(data=True):
         infra_type = d.get("type", "residential")
-        base_multiplier = custom_weights.get(infra_type, DEFAULT_WEIGHTS.get(infra_type, 1.0))
+        base_multiplier = weights.get(infra_type, DEFAULT_WEIGHTS.get(infra_type, 1.0))
 
         # Apply Boulder GIS facility type bonus (official designated routes etc.)
         facility_type = d.get("facility_type", "None")
@@ -1002,46 +989,42 @@ def get_route():
         except:
             pass
 
-        # GIS-authoritative base override:
-        # Boulder's GIS data is more detailed than OSM for bike infrastructure.
-        # If GIS says there's a bike facility, cap the base to something reasonable
-        # regardless of what OSM says (e.g., OSM might say busy_undesignated while
-        # GIS says On-Street Bike Lane — trust GIS).
         highway = tags.get("highway", "")
         is_major_busy_road = (lanes >= 4) or (highway in ["primary", "primary_link", "secondary", "secondary_link"])
 
         if is_major_busy_road:
-            # For 4+ lane streets, only physically separated paths can cap down to low values.
-            # Painted lanes, sharrows, or simple routes remain at higher, realistic base levels.
             GIS_BASE_CAP = {
-                "Protected Bike Lane":   custom_weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
-                "Separated Bike Lane":   custom_weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
-                "On-Street Bike Lane":   custom_weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    5.0)),
-                "Designated Bike Route": custom_weights.get("busy_with_sharrow", DEFAULT_WEIGHTS.get("busy_with_sharrow", 8.0)),
-                "Bikeable Shoulder":     custom_weights.get("busy_undesignated", DEFAULT_WEIGHTS.get("busy_undesignated", 15.0)),
-                "Contra Flow Bike Lane": custom_weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    5.0)),
+                "Protected Bike Lane":   weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
+                "Separated Bike Lane":   weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
+                "On-Street Bike Lane":   weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    5.0)),
+                "Designated Bike Route": weights.get("busy_with_sharrow", DEFAULT_WEIGHTS.get("busy_with_sharrow", 8.0)),
+                "Bikeable Shoulder":     weights.get("busy_undesignated", DEFAULT_WEIGHTS.get("busy_undesignated", 15.0)),
+                "Contra Flow Bike Lane": weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    5.0)),
             }
         else:
             GIS_BASE_CAP = {
-                "Protected Bike Lane":   custom_weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
-                "Separated Bike Lane":   custom_weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
-                "On-Street Bike Lane":   custom_weights.get("sharrow_minor",     DEFAULT_WEIGHTS.get("sharrow_minor",     1.3)),
-                "Designated Bike Route": custom_weights.get("residential",       DEFAULT_WEIGHTS.get("residential",       1.2)),
-                "Bikeable Shoulder":     custom_weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    3.0)),
-                "Contra Flow Bike Lane": custom_weights.get("sharrow_minor",     DEFAULT_WEIGHTS.get("sharrow_minor",     1.3)),
+                "Protected Bike Lane":   weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
+                "Separated Bike Lane":   weights.get("separated_path",    DEFAULT_WEIGHTS.get("separated_path",    0.5)),
+                "On-Street Bike Lane":   weights.get("sharrow_minor",     DEFAULT_WEIGHTS.get("sharrow_minor",     1.3)),
+                "Designated Bike Route": weights.get("residential",       DEFAULT_WEIGHTS.get("residential",       1.2)),
+                "Bikeable Shoulder":     weights.get("busy_with_lane",    DEFAULT_WEIGHTS.get("busy_with_lane",    3.0)),
+                "Contra Flow Bike Lane": weights.get("sharrow_minor",     DEFAULT_WEIGHTS.get("sharrow_minor",     1.3)),
             }
 
         if facility_type in GIS_BASE_CAP:
             # Use whichever is lower: OSM-derived base or GIS cap
             base_multiplier = min(base_multiplier, GIS_BASE_CAP[facility_type])
 
-        # Apply stress modifier if matched
+        # Apply stress modifier if matched (default separated paths to Low stress)
         stress = d.get("bikestress", "None")
+        if stress == "None" and infra_type == "separated_path":
+            stress = "Low"
+
         stress_modifier = 1.0
         if stress == "Low":
-            stress_modifier = custom_weights.get("stress_low", DEFAULT_WEIGHTS.get("stress_low", 0.7))
+            stress_modifier = weights.get("stress_low", DEFAULT_WEIGHTS.get("stress_low", 0.7))
         elif stress == "High":
-            stress_modifier = custom_weights.get("stress_high", DEFAULT_WEIGHTS.get("stress_high", 2.0))
+            stress_modifier = weights.get("stress_high", DEFAULT_WEIGHTS.get("stress_high", 2.0))
 
         # Apply off-street modifiers
         offstreet_modifier = 1.0
@@ -1053,22 +1036,43 @@ def get_route():
         else:
             offstreet_type = d.get("offstreet_type", "None")
             if offstreet_type == "Multi-Use Path":
-                offstreet_modifier = custom_weights.get("offstreet_multiuse", DEFAULT_WEIGHTS.get("offstreet_multiuse", 0.8))
+                offstreet_modifier = weights.get("offstreet_multiuse", DEFAULT_WEIGHTS.get("offstreet_multiuse", 0.8))
 
             ebike_allowed = d.get("ebike_allowed", "Yes")
             ebike_modifier = 1.0
             if ebike_allowed == "No":
-                ebike_modifier = custom_weights.get("ebike_restricted", DEFAULT_WEIGHTS.get("ebike_restricted", 1.0))
+                ebike_modifier = weights.get("ebike_restricted", DEFAULT_WEIGHTS.get("ebike_restricted", 1.0))
 
             final_multiplier = base_multiplier * facility_modifier * stress_modifier * offstreet_modifier * ebike_modifier
 
-        G_connected[u][v]["multiplier"] = final_multiplier
+        G[u][v]["multiplier"] = final_multiplier
 
         length = d.get("length", 0.0)
         if infra_type == "crossing_unsafe":
-            G_connected[u][v]["weight"] = (length + 100.0) * final_multiplier
+            G[u][v]["weight"] = (length + 100.0) * final_multiplier
         else:
-            G_connected[u][v]["weight"] = length * final_multiplier
+            G[u][v]["weight"] = length * final_multiplier
+
+@app.route("/api/route", methods=["POST", "OPTIONS"])
+def get_route():
+    """API endpoint to request a route between two points with custom weights."""
+    if request.method == "OPTIONS":
+        return "", 200
+        
+    global G_connected
+    data = request.json or {}
+    
+    start_lat = data.get("start_lat")
+    start_lon = data.get("start_lon")
+    end_lat = data.get("end_lat")
+    end_lon = data.get("end_lon")
+    custom_weights = data.get("weights") or DEFAULT_WEIGHTS
+    
+    if not all([start_lat, start_lon, end_lat, end_lon]):
+        return jsonify({"error": "Missing coordinates"}), 400
+
+    # Recalculate weights on the graph dynamically using client weights
+    update_graph_weights(G_connected, custom_weights)
 
     waypoints = data.get("waypoints", []) # list of [lat, lon]
     
