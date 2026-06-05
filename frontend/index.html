@@ -135,6 +135,7 @@
 
                         <div class="action-buttons">
                             <button id="btn-reset" class="btn btn-secondary"><i class="fa-solid fa-rotate-left"></i> Reset Defaults</button>
+                            <button id="btn-save-profile" class="btn btn-primary hidden"><i class="fa-solid fa-cloud-arrow-up"></i> Save to Profile</button>
                         </div>
                     </div>
                 </details>
@@ -305,9 +306,34 @@
                 <div class="nav-maneuver-icon-wrap">
                     <i id="nav-maneuver-icon" class="fa-solid fa-location-arrow"></i>
                 </div>
-                <div class="nav-maneuver-info">
+                <div class="nav-maneuver-info" style="width: 100%;">
                     <span id="nav-maneuver-text" class="nav-maneuver-text">Preparing navigation...</span>
                     <span id="nav-maneuver-dist" class="nav-maneuver-dist"></span>
+                    
+                    <!-- Permissions checklist shown while waiting for GPS lock -->
+                    <div id="nav-permissions-panel" class="nav-permissions-panel">
+                        <div class="perm-status-row">
+                            <span class="perm-name"><i class="fa-solid fa-location-crosshairs"></i> GPS Location</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="perm-state status-pending" id="perm-status-gps">Checking...</span>
+                                <button class="btn-perm-action hidden" id="btn-fix-gps">Allow</button>
+                            </div>
+                        </div>
+                        <div class="perm-status-row">
+                            <span class="perm-name"><i class="fa-solid fa-compass"></i> Compass Heading</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="perm-state status-pending" id="perm-status-compass">Checking...</span>
+                                <button class="btn-perm-action hidden" id="btn-fix-compass">Allow</button>
+                            </div>
+                        </div>
+                        <div class="perm-status-row">
+                            <span class="perm-name"><i class="fa-solid fa-mobile-screen-button"></i> Keep Screen On</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="perm-state status-pending" id="perm-status-wakelock">Checking...</span>
+                                <button class="btn-perm-action hidden" id="btn-fix-wakelock">Allow</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="nav-bottom-bar">

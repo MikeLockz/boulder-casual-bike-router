@@ -1431,10 +1431,30 @@ ROUTE_PRESETS = [
 @app.route("/api/config", methods=["GET"])
 def get_config():
     """Get the full list of dynamic configuration presets and sliders metadata."""
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    try:
+        resp = requests.get(f"{pb_url}/api/collections/global_configs/records", timeout=2)
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("items", [])
+            configs_dict = {item.get("key"): item.get("value") for item in items if "key" in item and "value" in item}
+            
+            weights = configs_dict.get("weights")
+            presets = configs_dict.get("presets")
+            
+            if weights and presets:
+                return jsonify({
+                    "weights": weights,
+                    "presets": presets
+                })
+    except Exception as e:
+        print(f"[-] Failed to fetch config from PocketBase: {e}. Falling back to default config.")
+        
     return jsonify({
         "weights": WEIGHTS_METADATA,
         "presets": ROUTE_PRESETS
     })
+
 
 @app.route("/api/crossings", methods=["GET"])
 def get_crossings():

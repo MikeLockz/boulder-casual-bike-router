@@ -107,6 +107,9 @@ let DEFAULT_WEIGHTS = {
     "ebike_restricted": 1.0
 };
 
+let SYSTEM_DEFAULT_WEIGHTS = {};
+
+
 // Initialize app when DOM loads
 document.addEventListener("DOMContentLoaded", async () => {
     initMap();
@@ -116,6 +119,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     loadCrossings();
     loadPlaygrounds();
     initAuth();
+    updateLocateButtonVisuals();
 });
 
 // Load dynamic presets and weight metadata from backend configuration API
@@ -127,6 +131,7 @@ async function loadBackendConfig() {
         // 1. Populate weights metadata and override defaults
         config.weights.forEach(w => {
             DEFAULT_WEIGHTS[w.key] = w.default;
+            SYSTEM_DEFAULT_WEIGHTS[w.key] = w.default;
         });
 
         // 2. Render sliders dynamically
@@ -211,6 +216,8 @@ function fallbackLocalRendering() {
         ];
         slidersContainer.innerHTML = "";
         fallbacks.forEach(w => {
+            DEFAULT_WEIGHTS[w.key] = w.val;
+            SYSTEM_DEFAULT_WEIGHTS[w.key] = w.val;
             const group = document.createElement("div");
             group.className = "weight-group";
             const colorClass = w.key.replace(/_/g, "-");
@@ -362,19 +369,13 @@ function initSliders() {
 // Event Listeners for action buttons, presets, and toggle panels
 function initEventListeners() {
     // Reset weights
-    document.getElementById("btn-reset").addEventListener("click", () => {
-        Object.keys(DEFAULT_WEIGHTS).forEach(key => {
-            const slider = document.getElementById(`weight-${key}`);
-            const valueSpan = document.getElementById(`val-${key}`);
-            if (slider && valueSpan) {
-                slider.value = DEFAULT_WEIGHTS[key];
-                valueSpan.textContent = `${DEFAULT_WEIGHTS[key].toFixed(1)}x`;
-            }
-        });
-        if (startMarker && endMarker) {
-            calculateRoute();
-        }
-    });
+    document.getElementById("btn-reset").addEventListener("click", resetUserWeights);
+
+    // Save to Profile
+    const saveProfileBtn = document.getElementById("btn-save-profile");
+    if (saveProfileBtn) {
+        saveProfileBtn.addEventListener("click", saveUserProfileConfig);
+    }
 
     // Panel toggle button floating
     const panelToggle = document.getElementById("panel-toggle");
@@ -1140,6 +1141,7 @@ function autoLocateUser() {
                 // Keep the flag updated
                 localStorage.setItem("geolocation_granted", "true");
                 localStorage.removeItem("geolocation_denied");
+                updateLocateButtonVisuals();
 
                 if (isWithinBoulder(lat, lon)) {
                     map.setView([lat, lon], 15);
@@ -1170,6 +1172,7 @@ function autoLocateUser() {
                 if (error.code === error.PERMISSION_DENIED) {
                     localStorage.removeItem("geolocation_granted");
                     localStorage.setItem("geolocation_denied", "true");
+                    updateLocateButtonVisuals();
                 }
                 prepopulatePoints();
             },
@@ -1205,6 +1208,7 @@ function requestLocation() {
                 // Store success state in localStorage
                 localStorage.setItem("geolocation_granted", "true");
                 localStorage.removeItem("geolocation_denied");
+                updateLocateButtonVisuals();
 
                 if (isWithinBoulder(lat, lon)) {
                     map.setView([lat, lon], 15);
@@ -1315,6 +1319,7 @@ function onDemandLocate(isRetry = false) {
                 // Store success state
                 localStorage.setItem("geolocation_granted", "true");
                 localStorage.removeItem("geolocation_denied");
+                updateLocateButtonVisuals();
 
                 if (isWithinBoulder(lat, lon)) {
                     map.setView([lat, lon], 15);
@@ -1351,6 +1356,7 @@ function onDemandLocate(isRetry = false) {
                 if (error.code === error.PERMISSION_DENIED) {
                     localStorage.setItem("geolocation_denied", "true");
                     localStorage.removeItem("geolocation_granted");
+                    updateLocateButtonVisuals();
                     
                     // Show settings instructions helper modal
                     showLocationSettingsModal();
@@ -1943,6 +1949,7 @@ async function initAuth() {
             const authData = JSON.parse(storedAuth);
             if (authData && authData.token && authData.record) {
                 currentUser = authData.record;
+                await loadUserProfileConfig();
             }
         } catch (e) {
             console.error("Failed to parse stored auth session:", e);
@@ -1976,18 +1983,25 @@ function updateAuthUI() {
     const loggedOutDiv = document.getElementById("auth-logged-out");
     const loggedInDiv = document.getElementById("auth-logged-in");
     const userEmailSpan = document.getElementById("user-display-email");
+    const saveProfileBtn = document.getElementById("btn-save-profile");
     
     if (!loggedOutDiv || !loggedInDiv) return;
     
     if (currentUser) {
         loggedOutDiv.classList.add("hidden");
         loggedInDiv.classList.remove("hidden");
+        if (saveProfileBtn) {
+            saveProfileBtn.classList.remove("hidden");
+        }
         if (userEmailSpan) {
             userEmailSpan.textContent = currentUser.email;
         }
     } else {
         loggedInDiv.classList.add("hidden");
         loggedOutDiv.classList.remove("hidden");
+        if (saveProfileBtn) {
+            saveProfileBtn.classList.add("hidden");
+        }
         if (userEmailSpan) {
             userEmailSpan.textContent = "-";
         }
@@ -2129,7 +2143,23 @@ function initAuthEventListeners() {
         logoutBtn.addEventListener("click", () => {
             currentUser = null;
             localStorage.removeItem("pocketbase_auth");
+            
+            // Reset weights to system defaults on logout
+            Object.keys(SYSTEM_DEFAULT_WEIGHTS).forEach(key => {
+                DEFAULT_WEIGHTS[key] = SYSTEM_DEFAULT_WEIGHTS[key];
+                const slider = document.getElementById(`weight-${key}`);
+                const valueSpan = document.getElementById(`val-${key}`);
+                if (slider && valueSpan) {
+                    slider.value = SYSTEM_DEFAULT_WEIGHTS[key];
+                    valueSpan.textContent = `${SYSTEM_DEFAULT_WEIGHTS[key].toFixed(1)}x`;
+                }
+            });
+            if (startMarker && endMarker) {
+                calculateRoute();
+            }
+            
             updateAuthUI();
+            showToast("Logged out successfully.");
         });
     }
 }
@@ -2156,6 +2186,7 @@ async function performLogin(email, password) {
     }));
     
     currentUser = data.record;
+    await loadUserProfileConfig();
     updateAuthUI();
 }
 
@@ -2175,4 +2206,222 @@ function parsePocketBaseError(data) {
         return data.message;
     }
     return null;
+}
+
+// Update the locate button's icon and color based on current permission state
+function updateLocateButtonVisuals() {
+    const locateBtn = document.getElementById("btn-locate-map");
+    if (!locateBtn) return;
+
+    const isGranted = localStorage.getItem("geolocation_granted") === "true";
+    const isDenied = localStorage.getItem("geolocation_denied") === "true";
+
+    locateBtn.classList.remove("granted", "denied");
+    
+    if (isGranted) {
+        locateBtn.classList.add("granted");
+        locateBtn.innerHTML = '<i class="fa-solid fa-location-crosshairs"></i>';
+        locateBtn.title = "Location Access Allowed";
+    } else if (isDenied) {
+        locateBtn.classList.add("denied");
+        locateBtn.innerHTML = '<i class="fa-solid fa-location-pin-lock"></i>';
+        locateBtn.title = "Location Access Blocked - Click to resolve";
+    } else {
+        locateBtn.innerHTML = '<i class="fa-solid fa-location-crosshairs"></i>';
+        locateBtn.title = "Find my location";
+    }
+}
+
+// ====================================
+// USER PROFILE SETTINGS SYNC (OPTION A)
+// ====================================
+
+async function loadUserProfileConfig() {
+    if (!currentUser) return;
+    
+    const storedAuth = localStorage.getItem("pocketbase_auth");
+    if (!storedAuth) return;
+    
+    try {
+        const authData = JSON.parse(storedAuth);
+        const token = authData.token;
+        
+        const url = `${PB_URL}/api/collections/user_configs/records?filter=` + encodeURIComponent(`user='${currentUser.id}' && key='weights'`);
+        const resp = await fetch(url, {
+            headers: {
+                "Authorization": `Bearer ${token}`
+            }
+        });
+        
+        if (resp.ok) {
+            const data = await resp.json();
+            const items = data.items || [];
+            if (items.length > 0) {
+                const overrideWeights = items[0].value;
+                console.log("[Auth] Loaded custom user weights override from profile:", overrideWeights);
+                
+                // Apply overridden weights to the sliders
+                for (const [key, val] of Object.entries(overrideWeights)) {
+                    const slider = document.getElementById(`weight-${key}`);
+                    const valDisplay = document.getElementById(`val-${key}`);
+                    if (slider) {
+                        slider.value = val;
+                    }
+                    if (valDisplay) {
+                        valDisplay.textContent = `${val.toFixed(1)}x`;
+                    }
+                    DEFAULT_WEIGHTS[key] = val;
+                }
+                
+                // Recalculate route if markers exist
+                if (startMarker && endMarker) {
+                    calculateRoute();
+                }
+            }
+        }
+    } catch (err) {
+        console.error("[Auth] Failed to load user profile configs:", err);
+    }
+}
+
+async function saveUserProfileConfig() {
+    if (!currentUser) {
+        showToast("Please log in to save settings.");
+        return;
+    }
+    
+    const storedAuth = localStorage.getItem("pocketbase_auth");
+    if (!storedAuth) return;
+    
+    const saveBtn = document.getElementById("btn-save-profile");
+    const originalHtml = saveBtn ? saveBtn.innerHTML : "";
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+    }
+    
+    try {
+        const authData = JSON.parse(storedAuth);
+        const token = authData.token;
+        
+        // Gather current slider weights
+        const weights = getWeightsFromSliders();
+        
+        // Check if there is an existing override record
+        const url = `${PB_URL}/api/collections/user_configs/records?filter=` + encodeURIComponent(`user='${currentUser.id}' && key='weights'`);
+        const checkResp = await fetch(url, {
+            headers: {
+                "Authorization": `Bearer ${token}`
+            }
+        });
+        
+        if (!checkResp.ok) {
+            throw new Error("Failed to check existing config.");
+        }
+        
+        const checkData = await checkResp.json();
+        const items = checkData.items || [];
+        
+        let resp;
+        if (items.length > 0) {
+            // Update existing record
+            const recordId = items[0].id;
+            resp = await fetch(`${PB_URL}/api/collections/user_configs/records/${recordId}`, {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    value: weights
+                })
+            });
+        } else {
+            // Create new record
+            resp = await fetch(`${PB_URL}/api/collections/user_configs/records`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    user: currentUser.id,
+                    key: "weights",
+                    value: weights
+                })
+            });
+        }
+        
+        if (resp.ok) {
+            showToast("Settings saved to your profile successfully!");
+        } else {
+            const errorData = await resp.json();
+            throw new Error(errorData.message || "Failed to save settings.");
+        }
+    } catch (err) {
+        console.error("[Auth] Save settings error:", err);
+        showToast("Error saving settings: " + err.message);
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = originalHtml;
+        }
+    }
+}
+
+async function resetUserWeights() {
+    // 1. Reset client-side weights to system defaults
+    Object.keys(SYSTEM_DEFAULT_WEIGHTS).forEach(key => {
+        DEFAULT_WEIGHTS[key] = SYSTEM_DEFAULT_WEIGHTS[key];
+        const slider = document.getElementById(`weight-${key}`);
+        const valueSpan = document.getElementById(`val-${key}`);
+        if (slider && valueSpan) {
+            slider.value = SYSTEM_DEFAULT_WEIGHTS[key];
+            valueSpan.textContent = `${SYSTEM_DEFAULT_WEIGHTS[key].toFixed(1)}x`;
+        }
+    });
+    
+    // 2. If logged in, delete from database
+    if (currentUser) {
+        const storedAuth = localStorage.getItem("pocketbase_auth");
+        if (storedAuth) {
+            try {
+                const authData = JSON.parse(storedAuth);
+                const token = authData.token;
+                
+                const url = `${PB_URL}/api/collections/user_configs/records?filter=` + encodeURIComponent(`user='${currentUser.id}' && key='weights'`);
+                const checkResp = await fetch(url, {
+                    headers: {
+                        "Authorization": `Bearer ${token}`
+                    }
+                });
+                
+                if (checkResp.ok) {
+                    const checkData = await checkResp.json();
+                    const items = checkData.items || [];
+                    if (items.length > 0) {
+                        const recordId = items[0].id;
+                        const delResp = await fetch(`${PB_URL}/api/collections/user_configs/records/${recordId}`, {
+                            method: "DELETE",
+                            headers: {
+                                "Authorization": `Bearer ${token}`
+                            }
+                        });
+                        if (delResp.ok) {
+                            showToast("Profile settings reset to system defaults.");
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("[Auth] Reset settings error:", err);
+            }
+        }
+    } else {
+        showToast("Settings reset to defaults.");
+    }
+    
+    // 3. Recalculate route if applicable
+    if (startMarker && endMarker) {
+        calculateRoute();
+    }
 }

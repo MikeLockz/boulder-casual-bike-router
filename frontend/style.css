@@ -1797,4 +1797,97 @@ input[type="range"]::-webkit-slider-thumb:hover {
     width: 100%;
 }
 
+/* Locate Button Permission States */
+.map-floating-btn.granted {
+    color: var(--accent-color);
+    border-color: rgba(100, 255, 218, 0.4);
+}
+
+.map-floating-btn.granted:hover {
+    box-shadow: 0 0 15px rgba(100, 255, 218, 0.3);
+}
+
+.map-floating-btn.denied {
+    color: #ffb300;
+    border-color: rgba(255, 179, 0, 0.4);
+}
+
+.map-floating-btn.denied:hover {
+    box-shadow: 0 0 15px rgba(255, 179, 0, 0.3);
+}
+
+/* Nav Permissions Panel Styles */
+.nav-permissions-panel {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 10px;
+}
+
+.perm-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    gap: 12px;
+    color: var(--text-secondary);
+}
+
+.perm-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.perm-name i {
+    color: var(--accent-color);
+    width: 16px;
+    text-align: center;
+}
+
+.perm-state {
+    font-weight: 600;
+}
+
+.status-granted {
+    color: var(--accent-color) !important;
+}
+
+.status-denied {
+    color: #ff1744 !important;
+}
+
+.status-pending {
+    color: #ffb300 !important;
+}
+
+.btn-perm-action {
+    background: rgba(100, 255, 218, 0.1);
+    border: 1px solid var(--accent-color);
+    color: var(--accent-color);
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: 'Outfit', sans-serif;
+    outline: none;
+}
+
+.btn-perm-action:hover {
+    background: var(--accent-color);
+    color: #08090d;
+    box-shadow: 0 0 8px rgba(100, 255, 218, 0.3);
+}
+
+.btn-perm-action.hidden {
+    display: none !important;
+}
+
 

@@ -53,6 +53,45 @@ const Navigation = (() => {
         // Show nav overlay
         showOverlay();
 
+        // Wire up permissions fix buttons
+        const btnFixGps = document.getElementById('btn-fix-gps');
+        if (btnFixGps) {
+            btnFixGps.onclick = () => {
+                const gpsDenied = localStorage.getItem("geolocation_denied") === "true";
+                if (gpsDenied) {
+                    if (window.showLocationSettingsModal) {
+                        window.showLocationSettingsModal();
+                    }
+                } else {
+                    if ('geolocation' in navigator) {
+                        navigator.geolocation.getCurrentPosition(
+                            (pos) => {
+                                showToast("GPS location acquired!");
+                                onPositionUpdate(pos, mapInstance);
+                            },
+                            (err) => {
+                                onPositionError(err, mapInstance);
+                            }
+                        );
+                    }
+                }
+            };
+        }
+
+        const btnFixCompass = document.getElementById('btn-fix-compass');
+        if (btnFixCompass) {
+            btnFixCompass.onclick = () => {
+                requestDeviceOrientation();
+            };
+        }
+
+        const btnFixWakelock = document.getElementById('btn-fix-wakelock');
+        if (btnFixWakelock) {
+            btnFixWakelock.onclick = () => {
+                requestWakeLock();
+            };
+        }
+
         // Zoom in for navigation
         mapInstance.setZoom(17);
 
@@ -173,6 +212,9 @@ const Navigation = (() => {
 
         state.position = { lat: smoothLat, lng: smoothLng, accuracy, speed };
 
+        // Hide permissions checklist on first position lock
+        updateNavPermissionsPanel();
+
         // Calculate GPS-derived bearing if no compass
         if (state.lastPositions.length >= 2) {
             const prev = state.lastPositions[state.lastPositions.length - 2];
@@ -218,6 +260,7 @@ const Navigation = (() => {
                 textEl.textContent = 'Waiting for GPS signal...';
             }
             showToast(`GPS Error: ${err.message}`);
+            updateNavPermissionsPanel();
         }
     }
 
@@ -286,11 +329,20 @@ const Navigation = (() => {
                 .then(response => {
                     if (response === 'granted') {
                         window.addEventListener('deviceorientation', onDeviceOrientation);
+                        state._hasDeviceHeading = true;
+                    } else {
+                        state._hasDeviceHeading = false;
                     }
+                    updateNavPermissionsPanel();
                 })
-                .catch(err => console.warn('DeviceOrientation permission error:', err));
+                .catch(err => {
+                    console.warn('DeviceOrientation permission error:', err);
+                    updateNavPermissionsPanel();
+                });
         } else if ('DeviceOrientationEvent' in window) {
             window.addEventListener('deviceorientation', onDeviceOrientation);
+            state._hasDeviceHeading = true;
+            updateNavPermissionsPanel();
         }
     }
 
@@ -305,7 +357,10 @@ const Navigation = (() => {
         }
         if (heading !== undefined && heading !== null && !isNaN(heading)) {
             state.heading = heading;
-            state._hasDeviceHeading = true;
+            if (!state._hasDeviceHeading) {
+                state._hasDeviceHeading = true;
+                updateNavPermissionsPanel();
+            }
         }
     }
 
@@ -460,10 +515,13 @@ const Navigation = (() => {
                 state.wakeLock = await navigator.wakeLock.request('screen');
                 state.wakeLock.addEventListener('release', () => {
                     state.wakeLock = null;
+                    updateNavPermissionsPanel();
                 });
+                updateNavPermissionsPanel();
             }
         } catch (err) {
             console.warn('Wake lock request failed:', err);
+            updateNavPermissionsPanel();
         }
     }
 
@@ -471,6 +529,92 @@ const Navigation = (() => {
         if (state.wakeLock) {
             state.wakeLock.release();
             state.wakeLock = null;
+        }
+    }
+
+    // Update navigation permissions panel status
+    function updateNavPermissionsPanel() {
+        const panel = document.getElementById('nav-permissions-panel');
+        if (!panel) return;
+
+        // If GPS position is already acquired, hide the permissions checklist completely!
+        if (state.position) {
+            panel.classList.add('hidden');
+            return;
+        }
+
+        panel.classList.remove('hidden');
+
+        // 1. GPS Status
+        const gpsStateEl = document.getElementById('perm-status-gps');
+        const gpsBtn = document.getElementById('btn-fix-gps');
+        const gpsDenied = localStorage.getItem("geolocation_denied") === "true";
+        const gpsGranted = localStorage.getItem("geolocation_granted") === "true";
+
+        if (gpsGranted) {
+            gpsStateEl.className = 'perm-state status-granted';
+            gpsStateEl.textContent = 'Allowed';
+            gpsBtn.classList.add('hidden');
+        } else if (gpsDenied) {
+            gpsStateEl.className = 'perm-state status-denied';
+            gpsStateEl.textContent = 'Blocked';
+            gpsBtn.className = 'btn-perm-action';
+            gpsBtn.textContent = 'Fix';
+        } else {
+            gpsStateEl.className = 'perm-state status-pending';
+            gpsStateEl.textContent = 'Pending Lock...';
+            gpsBtn.className = 'btn-perm-action';
+            gpsBtn.textContent = 'Allow';
+        }
+
+        // 2. Compass Status
+        const compassStateEl = document.getElementById('perm-status-compass');
+        const compassBtn = document.getElementById('btn-fix-compass');
+        const compassMockState = localStorage.getItem("mock_compass_state") || "default";
+
+        if (state._hasDeviceHeading || compassMockState === 'granted') {
+            compassStateEl.className = 'perm-state status-granted';
+            compassStateEl.textContent = 'Allowed';
+            compassBtn.classList.add('hidden');
+        } else if (compassMockState === 'unsupported') {
+            compassStateEl.className = 'perm-state status-denied';
+            compassStateEl.textContent = 'Unsupported';
+            compassBtn.classList.add('hidden');
+        } else if (compassMockState === 'denied') {
+            compassStateEl.className = 'perm-state status-denied';
+            compassStateEl.textContent = 'Blocked';
+            compassBtn.className = 'btn-perm-action';
+            compassBtn.textContent = 'Allow';
+        } else {
+            compassStateEl.className = 'perm-state status-pending';
+            compassStateEl.textContent = 'Pending...';
+            compassBtn.className = 'btn-perm-action';
+            compassBtn.textContent = 'Allow';
+        }
+
+        // 3. Wake Lock Status
+        const wakeStateEl = document.getElementById('perm-status-wakelock');
+        const wakeBtn = document.getElementById('btn-fix-wakelock');
+        const wakeMockState = localStorage.getItem("mock_wakelock_state") || "default";
+
+        if (state.wakeLock || wakeMockState === 'granted') {
+            wakeStateEl.className = 'perm-state status-granted';
+            wakeStateEl.textContent = 'Allowed';
+            wakeBtn.classList.add('hidden');
+        } else if (wakeMockState === 'unsupported' || (!('wakeLock' in navigator) && wakeMockState === 'default')) {
+            wakeStateEl.className = 'perm-state status-denied';
+            wakeStateEl.textContent = 'Unsupported';
+            wakeBtn.classList.add('hidden');
+        } else if (wakeMockState === 'denied') {
+            wakeStateEl.className = 'perm-state status-denied';
+            wakeStateEl.textContent = 'Blocked';
+            wakeBtn.className = 'btn-perm-action';
+            wakeBtn.textContent = 'Request';
+        } else {
+            wakeStateEl.className = 'perm-state status-pending';
+            wakeStateEl.textContent = 'Ready';
+            wakeBtn.className = 'btn-perm-action';
+            wakeBtn.textContent = 'Request';
         }
     }
 
@@ -486,6 +630,9 @@ const Navigation = (() => {
         if (panel) panel.classList.add('collapsed');
         const toggle = document.getElementById('panel-toggle');
         if (toggle) toggle.classList.add('hidden');
+
+        // Show permissions checklist
+        updateNavPermissionsPanel();
     }
 
     function hideOverlay() {
