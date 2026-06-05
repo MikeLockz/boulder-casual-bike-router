@@ -94,7 +94,7 @@ const DEFAULT_WEIGHTS = {
     "separated_path": 0.5,
     "sharrow_minor": 1.5,
     "sidewalk": 2.0,
-    "residential": 1.0,
+    "residential": 0.7,
     "busy_with_lane": 5.0,
     "busy_with_sharrow": 8.0,
     "busy_undesignated": 15.0,

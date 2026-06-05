@@ -31,7 +31,7 @@ DEFAULT_WEIGHTS = {
     "separated_path": 0.5,
     "sharrow_minor": 1.5,
     "sidewalk": 2.0,
-    "residential": 1.0,
+    "residential": 0.7,
     "busy_with_lane": 5.0,
     "busy_with_sharrow": 8.0,
     "busy_undesignated": 15.0,
@@ -44,9 +44,9 @@ DEFAULT_WEIGHTS = {
     "ebike_restricted": 1.0,
     # Boulder GIS FACILITYTYPE bonus multipliers (applied on top of base type)
     # Lower = more preferred. Physical infrastructure beats mere designation.
-    "facility_designated_route": 0.70,  # Designated Bike Route — mild preference (no physical infra)
+    "facility_designated_route": 0.55,  # Designated Bike Route — mild preference (no physical infra)
     "facility_protected_lane": 0.20,    # Protected / Separated Bike Lane — physical barrier
-    "facility_onstreet_lane": 0.35,     # On-Street Bike Lane (painted) — physical lanes
+    "facility_onstreet_lane": 0.55,     # On-Street Bike Lane (painted) — physical lanes
     "facility_bikeable_shoulder": 0.65, # Bikeable Shoulder
     "facility_contraflow": 0.45         # Contra Flow Bike Lane
 }
@@ -959,7 +959,7 @@ def get_route():
     start_lon = data.get("start_lon")
     end_lat = data.get("end_lat")
     end_lon = data.get("end_lon")
-    custom_weights = data.get("weights", DEFAULT_WEIGHTS)
+    custom_weights = data.get("weights") or DEFAULT_WEIGHTS
     
     if not all([start_lat, start_lon, end_lat, end_lon]):
         return jsonify({"error": "Missing coordinates"}), 400
