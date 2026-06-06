@@ -23,7 +23,15 @@ enum APIError: Error, LocalizedError {
 
 /// Service that manages connection to the Biking Boulder backend service.
 actor APIService {
-    private var baseURLLabel: String = "http://localhost:8081" // Default local nginx mapping port
+    private var baseURLLabel: String = {
+        #if targetEnvironment(simulator)
+        // Simulator runs on the developer machine, so localhost works
+        return "http://localhost:8081"
+        #else
+        // Physical device (use the host runner IP on the local network) or production build
+        return "http://192.168.1.44:8081"
+        #endif
+    }()
 
     /// Set a custom base URL (e.g. localhost for simulator testing)
     func setBaseURL(_ urlString: String) {
