@@ -7,6 +7,7 @@ DOCKER_DIR="/root/lockdev-home"
 
 echo "📥 Fetching latest changes from GitHub..."
 cd "$PROJECT_DIR"
+# Clear any local changes on the server to prevent pull conflicts
 git reset --hard
 git pull
 
