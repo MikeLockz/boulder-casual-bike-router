@@ -279,6 +279,53 @@
                         <div id="history-list" class="history-list-container">
                             <p class="subtext" style="color: var(--text-secondary); text-align: center; padding: 20px 0;">No saved adventures yet. Log some routes to see them here.</p>
                         </div>
+                        <div id="history-detail" class="history-detail-card hidden">
+                            <div class="history-detail-topbar">
+                                <button type="button" id="btn-history-detail-back" class="history-icon-btn" aria-label="Back to route history">
+                                    <i class="fa-solid fa-arrow-left"></i>
+                                </button>
+                                <span>Route Details</span>
+                                <button type="button" id="btn-history-detail-edit" class="history-icon-btn" aria-label="Edit route title">
+                                    <i class="fa-solid fa-pen"></i>
+                                </button>
+                            </div>
+                            <div class="history-map-preview" id="history-map-preview">
+                                <div class="history-map-preview-line"></div>
+                                <span>Preview</span>
+                            </div>
+                            <div class="history-detail-header">
+                                <input id="history-detail-title" class="history-detail-title" type="text" readonly>
+                                <p id="history-detail-date" class="history-detail-date"></p>
+                            </div>
+                            <div class="history-detail-stats">
+                                <div class="history-detail-stat">
+                                    <i class="fa-solid fa-route"></i>
+                                    <span>Distance</span>
+                                    <strong id="history-detail-distance">--</strong>
+                                </div>
+                                <div class="history-detail-stat">
+                                    <i class="fa-solid fa-stopwatch"></i>
+                                    <span>Duration</span>
+                                    <strong id="history-detail-duration">--</strong>
+                                </div>
+                                <div class="history-detail-stat">
+                                    <i class="fa-solid fa-gauge-high"></i>
+                                    <span>Speed</span>
+                                    <strong id="history-detail-speed">--</strong>
+                                </div>
+                            </div>
+                            <textarea id="history-detail-notes" class="history-detail-notes" rows="3" placeholder="Add notes about this route..." readonly></textarea>
+                            <button type="button" id="btn-history-view-map" class="btn btn-primary history-detail-primary">
+                                <i class="fa-solid fa-map"></i> View on Map
+                            </button>
+                            <button type="button" id="btn-history-export" class="history-detail-action">
+                                <span><i class="fa-solid fa-file-export"></i> Export Data</span>
+                                <i class="fa-solid fa-chevron-right"></i>
+                            </button>
+                            <button type="button" id="btn-history-delete" class="history-detail-delete">
+                                <i class="fa-solid fa-trash-can"></i> Remove from History
+                            </button>
+                        </div>
                     </div>
                 </details>
 

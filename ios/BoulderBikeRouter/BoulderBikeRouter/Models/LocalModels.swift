@@ -4,6 +4,9 @@ import SwiftData
 @Model
 class LocalRoute {
     @Attribute(.unique) var id: String
+    var serverId: String?
+    var displayName: String?
+    var notes: String?
     var startPointName: String
     var endPointName: String
     var startLat: Double
@@ -26,6 +29,7 @@ class LocalRoute {
     // Sync states
     var userId: String? // nil for guests, PocketBase user ID for signed-in users
     var synced: Bool = false
+    var deleted: Bool = false
     var routeGeojson: String? // Serialized GeoJSON string
     
     // Relationships
@@ -34,6 +38,9 @@ class LocalRoute {
     
     init(
         id: String,
+        serverId: String? = nil,
+        displayName: String? = nil,
+        notes: String? = nil,
         startPointName: String,
         endPointName: String,
         startLat: Double,
@@ -54,9 +61,13 @@ class LocalRoute {
         weights: [String: Double]? = nil,
         userId: String? = nil,
         synced: Bool = false,
+        deleted: Bool = false,
         routeGeojson: String? = nil
     ) {
         self.id = id
+        self.serverId = serverId
+        self.displayName = displayName
+        self.notes = notes
         self.startPointName = startPointName
         self.endPointName = endPointName
         self.startLat = startLat
@@ -77,13 +88,16 @@ class LocalRoute {
         self.weights = weights
         self.userId = userId
         self.synced = synced
+        self.deleted = deleted
         self.routeGeojson = routeGeojson
     }
     
     // Computed property to convert to PastRoute struct
     var toPastRoute: PastRoute {
         PastRoute(
-            id: id,
+            id: serverId ?? id,
+            displayName: displayName,
+            notes: notes,
             startPointName: startPointName,
             endPointName: endPointName,
             startLat: startLat,

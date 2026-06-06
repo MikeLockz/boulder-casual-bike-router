@@ -184,6 +184,8 @@ struct RouteTuningProfile: Codable, Identifiable, Hashable {
 /// Represents a completed route in the navigation history log.
 struct PastRoute: Codable, Identifiable, Hashable {
     let id: String
+    let displayName: String?
+    let notes: String?
     let startPointName: String
     let endPointName: String
     let startLat: Double
@@ -205,6 +207,8 @@ struct PastRoute: Codable, Identifiable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case displayName = "display_name"
+        case notes
         case startPointName = "start_point_name"
         case endPointName = "end_point_name"
         case startLat = "start_lat"
@@ -227,6 +231,9 @@ struct PastRoute: Codable, Identifiable, Hashable {
 
     // Compatibility Computed Properties for existing Views
     var name: String {
+        if let displayName, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return displayName
+        }
         return endPointName.isEmpty ? "Custom Route" : "\(endPointName) Route"
     }
     
@@ -280,6 +287,8 @@ struct GeoJSONFeatureCollection: Codable {
 }
 
 struct NavigationStartRequest: Codable {
+    let displayName: String?
+    let notes: String?
     let startLat: Double
     let startLon: Double
     let endLat: Double
@@ -293,6 +302,8 @@ struct NavigationStartRequest: Codable {
     let weights: [String: Double]
 
     enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
+        case notes
         case startLat = "start_lat"
         case startLon = "start_lon"
         case endLat = "end_lat"
@@ -373,6 +384,8 @@ struct NavigationTick: Codable, Identifiable, Hashable {
 
 struct DetailedRouteResponse: Codable {
     let id: String
+    let displayName: String?
+    let notes: String?
     let startPointName: String
     let endPointName: String
     let startLat: Double
@@ -396,6 +409,8 @@ struct DetailedRouteResponse: Codable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case displayName = "display_name"
+        case notes
         case startPointName = "start_point_name"
         case endPointName = "end_point_name"
         case startLat = "start_lat"
@@ -427,6 +442,20 @@ struct DetailedRouteResponse: Codable {
                 CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
             }
         }
+    }
+}
+
+struct RouteHistoryUpdateRequest: Codable {
+    let displayName: String?
+    let notes: String?
+    let startPointName: String?
+    let endPointName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
+        case notes
+        case startPointName = "start_point_name"
+        case endPointName = "end_point_name"
     }
 }
 

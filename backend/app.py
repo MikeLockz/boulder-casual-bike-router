@@ -1679,6 +1679,66 @@ def route_tuning_record_to_api(record):
         "user": record.get("user")
     }
 
+def sanitize_navigation_route_update_payload(data):
+    """Validate and normalize user-editable navigation route fields."""
+    if not isinstance(data, dict):
+        return None, "Invalid JSON payload"
+
+    payload = {}
+
+    if "display_name" in data:
+        display_name = str(data.get("display_name") or "").strip()
+        payload["display_name"] = display_name[:120]
+
+    if "notes" in data:
+        notes = str(data.get("notes") or "").strip()
+        payload["notes"] = notes[:1000]
+
+    if "start_point_name" in data:
+        start_point_name = str(data.get("start_point_name") or "").strip()
+        if not start_point_name:
+            return None, "Start point name cannot be empty"
+        payload["start_point_name"] = start_point_name[:120]
+
+    if "end_point_name" in data:
+        end_point_name = str(data.get("end_point_name") or "").strip()
+        if not end_point_name:
+            return None, "End point name cannot be empty"
+        payload["end_point_name"] = end_point_name[:120]
+
+    if "status" in data:
+        status = str(data.get("status") or "").strip()
+        if status not in {"active", "completed", "cancelled", "deleted"}:
+            return None, "Invalid route status"
+        payload["status"] = status
+
+    return payload, None
+
+def get_navigation_route_for_user(pb_url, route_id, auth_header):
+    """Fetch a navigation route and verify the current user can mutate it."""
+    user_id = get_auth_user_id(auth_header)
+    if not user_id:
+        return None, None, (jsonify({"error": "Unauthorized"}), 401)
+
+    headers = {"Authorization": auth_header} if auth_header else {}
+    try:
+        resp = requests.get(
+            f"{pb_url}/api/collections/navigation_routes/records/{route_id}",
+            headers=headers,
+            timeout=5
+        )
+    except Exception as e:
+        return None, None, (jsonify({"error": str(e)}), 500)
+
+    if resp.status_code != 200:
+        return None, None, (jsonify({"error": "Route not found"}), 404)
+
+    route = resp.json()
+    if route.get("user") != user_id:
+        return None, None, (jsonify({"error": "Forbidden"}), 403)
+
+    return route, user_id, None
+
 def clear_other_default_route_tuning_profiles(pb_url, user_id, auth_header, selected_id=None):
     try:
         resp = requests.get(
@@ -1719,6 +1779,8 @@ def nav_start():
     
     pb_payload = {
         "user": user_id,
+        "display_name": data.get("display_name"),
+        "notes": data.get("notes"),
         "start_lat": data.get("start_lat"),
         "start_lon": data.get("start_lon"),
         "end_lat": data.get("end_lat"),
@@ -1898,9 +1960,68 @@ def nav_history():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/navigation/<route_id>", methods=["GET"])
+@app.route("/api/navigation/<route_id>", methods=["GET", "PATCH", "DELETE", "OPTIONS"])
 def nav_detail(route_id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+
+    if request.method in ["PATCH", "DELETE"]:
+        auth_header = request.headers.get("Authorization")
+        headers = {"Authorization": auth_header} if auth_header else {}
+        _, _, auth_error = get_navigation_route_for_user(pb_url, route_id, auth_header)
+        if auth_error:
+            return auth_error
+
+        if request.method == "DELETE":
+            try:
+                tick_resp = requests.get(
+                    f"{pb_url}/api/collections/navigation_ticks/records",
+                    headers=headers,
+                    params={
+                        "filter": f"route='{route_id}'",
+                        "limit": 5000
+                    },
+                    timeout=5
+                )
+                if tick_resp.status_code == 200:
+                    for tick in tick_resp.json().get("items", []):
+                        requests.delete(
+                            f"{pb_url}/api/collections/navigation_ticks/records/{tick.get('id')}",
+                            headers=headers,
+                            timeout=3
+                        )
+
+                resp = requests.delete(
+                    f"{pb_url}/api/collections/navigation_routes/records/{route_id}",
+                    headers=headers,
+                    timeout=5
+                )
+                if resp.status_code in [200, 204]:
+                    return jsonify({"status": "success"})
+                return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        payload, error = sanitize_navigation_route_update_payload(request.json or {})
+        if error:
+            return jsonify({"error": error}), 400
+        if not payload:
+            return jsonify({"error": "No supported fields supplied"}), 400
+
+        try:
+            resp = requests.patch(
+                f"{pb_url}/api/collections/navigation_routes/records/{route_id}",
+                json=payload,
+                headers=headers,
+                timeout=5
+            )
+            if resp.status_code == 200:
+                return jsonify(resp.json())
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
     
     try:
         route_resp = requests.get(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", timeout=5)
@@ -2131,13 +2252,41 @@ def nav_sync():
     data = request.json or {}
     routes = data.get("routes", [])
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    headers = {"Authorization": auth_header} if auth_header else {}
     
     synced_routes = []
     
     for r in routes:
         local_id = r.get("local_id")
+        server_id = r.get("server_id")
+        operation = r.get("operation") or ("delete" if r.get("deleted") else "upsert")
+
+        if operation == "delete":
+            if server_id:
+                try:
+                    existing, _, auth_error = get_navigation_route_for_user(pb_url, server_id, auth_header)
+                    if auth_error:
+                        print(f"[-] Skipping route delete {server_id}: authorization failed")
+                        continue
+                    requests.delete(
+                        f"{pb_url}/api/collections/navigation_routes/records/{server_id}",
+                        headers=headers,
+                        timeout=5
+                    )
+                except Exception as e:
+                    print(f"[-] Error deleting route {server_id}: {e}")
+                    continue
+            synced_routes.append({
+                "local_id": local_id,
+                "server_id": server_id,
+                "operation": "delete"
+            })
+            continue
+
         pb_payload = {
             "user": user_id,
+            "display_name": r.get("display_name"),
+            "notes": r.get("notes"),
             "start_lat": r.get("start_lat"),
             "start_lon": r.get("start_lon"),
             "end_lat": r.get("end_lat"),
@@ -2170,14 +2319,31 @@ def nav_sync():
         }
         
         try:
-            resp = requests.post(f"{pb_url}/api/collections/navigation_routes/records", json=pb_payload, timeout=5)
+            if server_id:
+                existing, _, auth_error = get_navigation_route_for_user(pb_url, server_id, auth_header)
+                if auth_error:
+                    print(f"[-] Skipping route update {server_id}: authorization failed")
+                    continue
+                resp = requests.patch(
+                    f"{pb_url}/api/collections/navigation_routes/records/{server_id}",
+                    json=pb_payload,
+                    headers=headers,
+                    timeout=5
+                )
+            else:
+                resp = requests.post(
+                    f"{pb_url}/api/collections/navigation_routes/records",
+                    json=pb_payload,
+                    headers=headers,
+                    timeout=5
+                )
             if resp.status_code in [200, 201]:
                 record = resp.json()
                 server_id = record.get("id")
                 
                 # Sync ticks
                 ticks = r.get("ticks", [])
-                for t in ticks:
+                for t in ticks if not r.get("server_id") else []:
                     pb_tick_payload = {
                         "route": server_id,
                         "lat": t.get("lat"),
@@ -2189,7 +2355,12 @@ def nav_sync():
                         "timestamp": t.get("timestamp"),
                         "battery_level": t.get("battery_level")
                     }
-                    requests.post(f"{pb_url}/api/collections/navigation_ticks/records", json=pb_tick_payload, timeout=3)
+                    requests.post(
+                        f"{pb_url}/api/collections/navigation_ticks/records",
+                        json=pb_tick_payload,
+                        headers=headers,
+                        timeout=3
+                    )
                 
                 synced_routes.append({
                     "local_id": local_id,

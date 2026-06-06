@@ -120,6 +120,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await loadBackendConfig();
     initDebugMode();
     initWelcomeModal();
+    initializeHistoryDetailControls();
     loadCrossings();
     loadPlaygrounds();
     initAuth();
@@ -2829,6 +2830,60 @@ async function resetUserWeights() {
 // --- Adventure History Rendering & Telemetry ---
 let historyMarkers = [];
 let historyPolylines = [];
+let currentHistoryItems = [];
+let currentHistoryRoute = null;
+let isHistoryDetailEditing = false;
+
+function getStoredAuthSession() {
+    const storedAuth = localStorage.getItem("pocketbase_auth");
+    if (!storedAuth) return null;
+    try {
+        const authData = JSON.parse(storedAuth);
+        if (authData && authData.token && authData.record) return authData;
+    } catch (e) {}
+    return null;
+}
+
+function getLocalHistoryRoutes() {
+    try {
+        return JSON.parse(localStorage.getItem("boulder_local_routes") || "[]");
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveLocalHistoryRoutes(routes) {
+    localStorage.setItem("boulder_local_routes", JSON.stringify(routes));
+}
+
+function getHistoryRouteTitle(route) {
+    const displayName = (route.display_name || "").trim();
+    return displayName || (route.end_point_name ? `${route.end_point_name} Route` : "Custom Route");
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+function formatHistoryDate(value) {
+    if (!value) return "";
+    return new Date(value).toLocaleDateString(undefined, {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+    });
+}
+
+function getRouteServerId(route) {
+    return route.server_id || (route.synced ? route.id : null);
+}
 
 async function syncPendingRoutes() {
     const storedAuth = localStorage.getItem("pocketbase_auth");
@@ -2838,10 +2893,7 @@ async function syncPendingRoutes() {
     const isSyncEnabled = (syncSetting === null || syncSetting === "true");
     if (!isSyncEnabled) return;
     
-    let localRoutes = [];
-    try {
-        localRoutes = JSON.parse(localStorage.getItem("boulder_local_routes") || "[]");
-    } catch (e) {}
+    let localRoutes = getLocalHistoryRoutes();
     
     const unsynced = localRoutes.filter(r => !r.synced);
     if (unsynced.length === 0) return;
@@ -2856,6 +2908,11 @@ async function syncPendingRoutes() {
         const payload = {
             routes: unsynced.map(r => ({
                 local_id: r.local_id || r.id,
+                server_id: r.server_id || (r.id && !String(r.id).startsWith("local-") ? r.id : null),
+                operation: r.deleted ? "delete" : "upsert",
+                deleted: Boolean(r.deleted),
+                display_name: r.display_name || "",
+                notes: r.notes || "",
                 start_lat: r.start_lat,
                 start_lon: r.start_lon,
                 end_lat: r.end_lat,
@@ -2892,15 +2949,24 @@ async function syncPendingRoutes() {
         if (resp.ok) {
             const data = await resp.json();
             const syncedMap = {};
+            const syncedDeletes = new Set();
             data.synced_routes.forEach(item => {
                 syncedMap[item.local_id] = item.server_id;
+                if (item.operation === "delete") syncedDeletes.add(item.local_id);
             });
             
+            localRoutes = localRoutes.filter(r => {
+                const localId = r.local_id || r.id;
+                const syncedDelete = r.deleted && (syncedMap[localId] || syncedDeletes.has(localId));
+                return !syncedDelete;
+            });
+
             localRoutes.forEach(r => {
                 const localId = r.local_id || r.id;
                 if (syncedMap[localId]) {
                     r.synced = true;
                     r.userId = userId;
+                    r.server_id = syncedMap[localId];
                 }
             });
             
@@ -2958,6 +3024,7 @@ async function loadHistory() {
     } catch (e) {}
     
     const filteredLocalRoutes = localRoutes.filter(r => {
+        if (r.deleted) return false;
         if (user) {
             return r.userId === user.id || r.userId === null;
         } else {
@@ -2967,15 +3034,16 @@ async function loadHistory() {
     
     const combinedMap = {};
     filteredLocalRoutes.forEach(r => {
-        combinedMap[r.id] = r;
+        combinedMap[r.server_id || r.id] = { ...r, id: r.server_id || r.id };
     });
-    serverRoutes.forEach(r => {
+    serverRoutes.filter(r => !r.deleted).forEach(r => {
         combinedMap[r.id] = r;
     });
     
     const items = Object.values(combinedMap).sort((a, b) => {
         return new Date(b.started_at) - new Date(a.started_at);
     });
+    currentHistoryItems = items;
     
     if (items.length === 0) {
         historyListContainer.innerHTML = '<p class="subtext" style="color: var(--text-secondary); text-align: center; padding: 20px 0;">No saved adventures yet. Log some routes to see them here.</p>';
@@ -3005,7 +3073,7 @@ async function loadHistory() {
         
         el.innerHTML = `
             <div class="history-header">
-                <span class="history-title">${item.end_point_name} Route</span>
+                <span class="history-title">${escapeHtml(getHistoryRouteTitle(item))}</span>
                 <span class="history-date">${date}</span>
             </div>
             <div class="history-stats">
@@ -3025,11 +3093,11 @@ async function loadHistory() {
             <div class="history-endpoints">
                 <div class="history-endpoints-row">
                     <i class="fa-solid fa-circle-dot"></i>
-                    <span>${item.start_point_name}</span>
+                    <span>${escapeHtml(item.start_point_name)}</span>
                 </div>
                 <div class="history-endpoints-row">
                     <i class="fa-solid fa-circle"></i>
-                    <span>${item.end_point_name}</span>
+                    <span>${escapeHtml(item.end_point_name)}</span>
                 </div>
             </div>
         `;
@@ -3037,11 +3105,194 @@ async function loadHistory() {
         el.addEventListener("click", () => {
             document.querySelectorAll(".history-item").forEach(x => x.classList.remove("active"));
             el.classList.add("active");
-            loadHistoryRouteOnMap(item.id);
+            showHistoryDetail(item.id);
         });
         
         historyListContainer.appendChild(el);
     });
+}
+
+async function showHistoryDetail(routeId) {
+    const route = currentHistoryItems.find(item => item.id === routeId || item.local_id === routeId);
+    if (!route) return;
+
+    currentHistoryRoute = route;
+    isHistoryDetailEditing = false;
+
+    document.getElementById("history-list")?.classList.add("hidden");
+    document.getElementById("history-detail")?.classList.remove("hidden");
+    renderHistoryDetail(route);
+}
+
+function hideHistoryDetail() {
+    currentHistoryRoute = null;
+    isHistoryDetailEditing = false;
+    document.getElementById("history-detail")?.classList.add("hidden");
+    document.getElementById("history-list")?.classList.remove("hidden");
+}
+
+function renderHistoryDetail(route) {
+    const titleInput = document.getElementById("history-detail-title");
+    const notesInput = document.getElementById("history-detail-notes");
+    const editIcon = document.querySelector("#btn-history-detail-edit i");
+
+    if (titleInput) {
+        titleInput.value = getHistoryRouteTitle(route);
+        titleInput.readOnly = !isHistoryDetailEditing;
+    }
+    if (notesInput) {
+        notesInput.value = route.notes || "";
+        notesInput.readOnly = !isHistoryDetailEditing;
+    }
+    if (editIcon) {
+        editIcon.className = isHistoryDetailEditing ? "fa-solid fa-check" : "fa-solid fa-pen";
+    }
+
+    const miles = ((route.actual_distance_meters || route.total_length_meters || 0) / 1609.34).toFixed(2);
+    const durationMin = Math.ceil((route.actual_duration_seconds || route.total_estimated_time_seconds || 0) / 60);
+    const speedMph = route.average_speed ? (route.average_speed * 2.23694).toFixed(1) : "0.0";
+
+    const dateEl = document.getElementById("history-detail-date");
+    if (dateEl) dateEl.textContent = formatHistoryDate(route.started_at);
+    document.getElementById("history-detail-distance").textContent = `${miles} mi`;
+    document.getElementById("history-detail-duration").textContent = `${durationMin} min`;
+    document.getElementById("history-detail-speed").textContent = `${speedMph} mph`;
+}
+
+async function toggleHistoryDetailEdit() {
+    if (!currentHistoryRoute) return;
+    if (!isHistoryDetailEditing) {
+        isHistoryDetailEditing = true;
+        renderHistoryDetail(currentHistoryRoute);
+        document.getElementById("history-detail-title")?.focus();
+        return;
+    }
+
+    const title = document.getElementById("history-detail-title")?.value.trim() || getHistoryRouteTitle(currentHistoryRoute);
+    const notes = document.getElementById("history-detail-notes")?.value.trim() || "";
+    await updateHistoryRoute(currentHistoryRoute, { display_name: title, notes });
+    isHistoryDetailEditing = false;
+}
+
+async function updateHistoryRoute(route, changes) {
+    const routeId = route.id;
+    let localRoutes = getLocalHistoryRoutes();
+    const localIndex = localRoutes.findIndex(r => r.id === routeId || r.local_id === routeId || r.server_id === routeId);
+
+    if (localIndex >= 0) {
+        localRoutes[localIndex] = {
+            ...localRoutes[localIndex],
+            ...changes,
+            synced: false,
+            updated_at: new Date().toISOString()
+        };
+        saveLocalHistoryRoutes(localRoutes);
+        currentHistoryRoute = localRoutes[localIndex];
+    } else {
+        currentHistoryRoute = { ...route, ...changes };
+    }
+
+    const authData = getStoredAuthSession();
+    const serverId = getRouteServerId(route);
+    if (authData && serverId) {
+        try {
+            const resp = await fetch(`${API_BASE}/api/navigation/${serverId}`, {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${authData.token}`
+                },
+                body: JSON.stringify(changes)
+            });
+            if (resp.ok) {
+                const updated = await resp.json();
+                currentHistoryRoute = { ...currentHistoryRoute, ...updated, synced: true, server_id: updated.id };
+                if (localIndex >= 0) {
+                    localRoutes = getLocalHistoryRoutes();
+                    localRoutes[localIndex] = { ...localRoutes[localIndex], ...updated, synced: true, server_id: updated.id };
+                    saveLocalHistoryRoutes(localRoutes);
+                }
+            }
+        } catch (err) {
+            console.error("Failed to update route history remotely:", err);
+        }
+    } else {
+        await syncPendingRoutes();
+    }
+
+    showToast("Route details saved.");
+    await loadHistory();
+    if (currentHistoryRoute) {
+        const refreshed = currentHistoryItems.find(item => item.id === currentHistoryRoute.id) || currentHistoryRoute;
+        currentHistoryRoute = refreshed;
+        renderHistoryDetail(refreshed);
+    }
+}
+
+async function deleteHistoryRoute(route) {
+    if (!route) return;
+    if (!confirm("Remove this route from history?")) return;
+
+    const routeId = route.id;
+    let localRoutes = getLocalHistoryRoutes();
+    const localIndex = localRoutes.findIndex(r => r.id === routeId || r.local_id === routeId || r.server_id === routeId);
+    const authData = getStoredAuthSession();
+    const serverId = getRouteServerId(route);
+
+    if (localIndex >= 0) {
+        if (serverId && authData) {
+            localRoutes[localIndex] = { ...localRoutes[localIndex], deleted: true, synced: false };
+        } else {
+            localRoutes.splice(localIndex, 1);
+        }
+        saveLocalHistoryRoutes(localRoutes);
+    }
+
+    if (authData && serverId) {
+        try {
+            const resp = await fetch(`${API_BASE}/api/navigation/${serverId}`, {
+                method: "DELETE",
+                headers: { "Authorization": `Bearer ${authData.token}` }
+            });
+            if (!resp.ok) throw new Error(`Delete failed with status ${resp.status}`);
+            localRoutes = getLocalHistoryRoutes().filter(r => !(r.id === routeId || r.local_id === routeId || r.server_id === serverId));
+            saveLocalHistoryRoutes(localRoutes);
+        } catch (err) {
+            console.error("Failed to delete route history remotely:", err);
+            await syncPendingRoutes();
+        }
+    }
+
+    clearHistoryMapLayers();
+    hideHistoryDetail();
+    await loadHistory();
+    showToast("Route removed from history.");
+}
+
+function exportHistoryRoute(route) {
+    if (!route) return;
+    const blob = new Blob([JSON.stringify(route, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${getHistoryRouteTitle(route).replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "route-history"}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+}
+
+function initializeHistoryDetailControls() {
+    document.getElementById("btn-history-detail-back")?.addEventListener("click", hideHistoryDetail);
+    document.getElementById("btn-history-detail-edit")?.addEventListener("click", toggleHistoryDetailEdit);
+    document.getElementById("btn-history-view-map")?.addEventListener("click", () => {
+        if (currentHistoryRoute) loadHistoryRouteOnMap(currentHistoryRoute.id);
+    });
+    document.getElementById("history-map-preview")?.addEventListener("click", () => {
+        if (currentHistoryRoute) loadHistoryRouteOnMap(currentHistoryRoute.id);
+    });
+    document.getElementById("btn-history-export")?.addEventListener("click", () => exportHistoryRoute(currentHistoryRoute));
+    document.getElementById("btn-history-delete")?.addEventListener("click", () => deleteHistoryRoute(currentHistoryRoute));
 }
 
 async function loadHistoryRouteOnMap(routeId) {
@@ -3050,8 +3301,8 @@ async function loadHistoryRouteOnMap(routeId) {
     
     let localRoute = null;
     try {
-        const localRoutes = JSON.parse(localStorage.getItem("boulder_local_routes") || "[]");
-        localRoute = localRoutes.find(r => r.id === routeId);
+        const localRoutes = getLocalHistoryRoutes();
+        localRoute = localRoutes.find(r => !r.deleted && (r.id === routeId || r.local_id === routeId || r.server_id === routeId));
     } catch (e) {}
     
     try {
@@ -3060,7 +3311,10 @@ async function loadHistoryRouteOnMap(routeId) {
             route = localRoute;
             console.log("[History] Loaded route details from local storage cache.");
         } else {
-            const response = await fetch(`${API_BASE}/api/navigation/${routeId}`);
+            const authData = getStoredAuthSession();
+            const response = await fetch(`${API_BASE}/api/navigation/${routeId}`, {
+                headers: authData ? { "Authorization": `Bearer ${authData.token}` } : {}
+            });
             if (!response.ok) throw new Error("Failed to fetch route details");
             route = await response.json();
         }

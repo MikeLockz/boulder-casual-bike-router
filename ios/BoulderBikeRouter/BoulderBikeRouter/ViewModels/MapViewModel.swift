@@ -488,6 +488,7 @@ class MapViewModel {
                 
                 // Filter routes depending on auth context
                 let filteredLocalRoutes = allLocalRoutes.filter { r in
+                    if r.deleted { return false }
                     if let userId = currentUserId {
                         // Signed-in: Show user's routes and unsynced guest routes
                         return r.userId == userId || r.userId == nil
@@ -521,11 +522,9 @@ class MapViewModel {
     func selectHistoryRoute(_ route: PastRoute) async {
         // First, check if we have the route with detailed ticks locally in SwiftData
         if let context = modelContext {
-            let localId = route.id
-            let descriptor = FetchDescriptor<LocalRoute>(
-                predicate: #Predicate<LocalRoute> { $0.id == localId }
-            )
-            if let localRoute = try? context.fetch(descriptor).first {
+            let routeId = route.id
+            let descriptor = FetchDescriptor<LocalRoute>()
+            if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
                 await MainActor.run {
                     self.selectedHistoryRoute = route
                     self.selectedHistoryRouteTicks = localRoute.ticks.map { $0.toNavigationTick }
@@ -538,6 +537,8 @@ class MapViewModel {
                     
                     self.selectedHistoryRouteDetails = DetailedRouteResponse(
                         id: localRoute.id,
+                        displayName: localRoute.displayName,
+                        notes: localRoute.notes,
                         startPointName: localRoute.startPointName,
                         endPointName: localRoute.endPointName,
                         startLat: localRoute.startLat,
@@ -589,6 +590,99 @@ class MapViewModel {
         self.selectedHistoryRoute = nil
         self.selectedHistoryRouteTicks = []
         self.selectedHistoryRouteDetails = nil
+    }
+
+    @MainActor
+    func updateHistoryRoute(_ route: PastRoute, displayName: String, notes: String) async {
+        let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let context = modelContext {
+            do {
+                let routeId = route.id
+                let descriptor = FetchDescriptor<LocalRoute>()
+                if let localRoute = try context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
+                    localRoute.displayName = trimmedDisplayName
+                    localRoute.notes = trimmedNotes
+                    localRoute.synced = false
+                    try context.save()
+                }
+            } catch {
+                print("Failed to update local history route: \(error.localizedDescription)")
+            }
+        }
+
+        if isUserLoggedIn && isCloudSyncEnabled {
+            do {
+                _ = try await apiService.updateHistoryRoute(
+                    routeId: route.id,
+                    request: RouteHistoryUpdateRequest(
+                        displayName: trimmedDisplayName,
+                        notes: trimmedNotes,
+                        startPointName: nil,
+                        endPointName: nil
+                    )
+                )
+                if let context = modelContext {
+                    let routeId = route.id
+                    let descriptor = FetchDescriptor<LocalRoute>()
+                    if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
+                        localRoute.synced = true
+                        localRoute.serverId = route.id
+                        try? context.save()
+                    }
+                }
+            } catch {
+                print("Failed to update remote history route: \(error.localizedDescription)")
+                await syncService?.syncPendingRoutes()
+            }
+        }
+
+        await loadHistory()
+    }
+
+    @MainActor
+    func deleteHistoryRoute(_ route: PastRoute) async {
+        var shouldDeleteRemote = isUserLoggedIn && isCloudSyncEnabled
+
+        if let context = modelContext {
+            do {
+                let routeId = route.id
+                let descriptor = FetchDescriptor<LocalRoute>()
+                if let localRoute = try context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
+                    if shouldDeleteRemote && localRoute.serverId != nil {
+                        localRoute.deleted = true
+                        localRoute.synced = false
+                    } else {
+                        shouldDeleteRemote = false
+                        context.delete(localRoute)
+                    }
+                    try context.save()
+                }
+            } catch {
+                print("Failed to delete local history route: \(error.localizedDescription)")
+            }
+        }
+
+        if shouldDeleteRemote {
+            do {
+                try await apiService.deleteHistoryRoute(routeId: route.id)
+                if let context = modelContext {
+                    let routeId = route.id
+                    let descriptor = FetchDescriptor<LocalRoute>()
+                    if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
+                        context.delete(localRoute)
+                        try? context.save()
+                    }
+                }
+            } catch {
+                print("Failed to delete remote history route: \(error.localizedDescription)")
+                await syncService?.syncPendingRoutes()
+            }
+        }
+
+        clearHistorySelection()
+        await loadHistory()
     }
 
     func recordCompletedRoute() {

@@ -125,6 +125,11 @@ class SyncService {
                 
                 let routeItem = SyncRouteItem(
                     local_id: localRoute.id,
+                    server_id: localRoute.serverId,
+                    operation: localRoute.deleted ? "delete" : "upsert",
+                    deleted: localRoute.deleted,
+                    display_name: localRoute.displayName,
+                    notes: localRoute.notes,
                     start_lat: localRoute.startLat,
                     start_lon: localRoute.startLon,
                     end_lat: localRoute.endLat,
@@ -181,8 +186,13 @@ class SyncService {
                 // Mark synced routes locally
                 for syncedRoute in syncResponse.syncedRoutes {
                     if let matchingRoute = pendingRoutes.first(where: { $0.id == syncedRoute.localId }) {
+                        if syncedRoute.operation == "delete" {
+                            modelContext.delete(matchingRoute)
+                            continue
+                        }
                         matchingRoute.synced = true
                         matchingRoute.userId = userId
+                        matchingRoute.serverId = syncedRoute.serverId
                         print("[SyncService] Successfully synced route: \(syncedRoute.localId)")
                     }
                 }
@@ -236,6 +246,11 @@ struct SyncRoutesPayload: Codable {
 
 struct SyncRouteItem: Codable {
     let local_id: String
+    let server_id: String?
+    let operation: String
+    let deleted: Bool
+    let display_name: String?
+    let notes: String?
     let start_lat: Double
     let start_lon: Double
     let end_lat: Double
@@ -281,10 +296,12 @@ struct SyncRoutesResponse: Codable {
 
 struct SyncedRouteItem: Codable {
     let localId: String
-    let serverId: String
+    let serverId: String?
+    let operation: String?
     
     enum CodingKeys: String, CodingKey {
         case localId = "local_id"
         case serverId = "server_id"
+        case operation
     }
 }

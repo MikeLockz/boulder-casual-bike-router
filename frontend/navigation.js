@@ -871,6 +871,9 @@ const Navigation = (() => {
         
         state.localStartRequest = {
             local_id: tempId,
+            server_id: null,
+            display_name: "",
+            notes: "",
             start_lat: startLat,
             start_lon: startLon,
             end_lat: endLat,
@@ -909,6 +912,7 @@ const Navigation = (() => {
                     const data = await response.json();
                     state.routeId = data.route_id;
                     state.localStartRequest.local_id = data.route_id; // match IDs
+                    state.localStartRequest.server_id = data.route_id;
                     console.log("[Navigation] Telemetry route created remotely:", state.routeId);
                 }
             } catch (err) {
@@ -1025,6 +1029,9 @@ const Navigation = (() => {
             const localRoute = {
                 local_id: routeId,
                 id: routeId,
+                server_id: startReq.server_id,
+                display_name: startReq.display_name,
+                notes: startReq.notes,
                 start_lat: startReq.start_lat,
                 start_lon: startReq.start_lon,
                 end_lat: startReq.end_lat,

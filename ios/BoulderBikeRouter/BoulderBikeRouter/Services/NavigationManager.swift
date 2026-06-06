@@ -115,6 +115,8 @@ class NavigationManager {
         let weights = [String: Double]()
         
         let startReq = NavigationStartRequest(
+            displayName: nil,
+            notes: nil,
             startLat: startLat,
             startLon: startLon,
             endLat: endLat,
@@ -227,6 +229,9 @@ class NavigationManager {
             let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
             let localRoute = LocalRoute(
                 id: rId,
+                serverId: isSyncActive ? rId : nil,
+                displayName: startReq.displayName,
+                notes: startReq.notes,
                 startPointName: startReq.startPointName,
                 endPointName: startReq.endPointName,
                 startLat: startReq.startLat,

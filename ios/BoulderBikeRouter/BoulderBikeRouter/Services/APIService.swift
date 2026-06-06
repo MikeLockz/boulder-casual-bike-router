@@ -452,6 +452,73 @@ class APIService {
         }
     }
 
+    func updateHistoryRoute(routeId: String, request: RouteHistoryUpdateRequest) async throws -> PastRoute {
+        guard let baseURL = URL(string: baseURLLabel),
+              let routeURL = URL(string: "/api/navigation/\(routeId)", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: routeURL)
+        urlRequest.httpMethod = "PATCH"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(request)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode(PastRoute.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    func deleteHistoryRoute(routeId: String) async throws {
+        guard let baseURL = URL(string: baseURLLabel),
+              let routeURL = URL(string: "/api/navigation/\(routeId)", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: routeURL)
+        urlRequest.httpMethod = "DELETE"
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (_, response): (Data, URLResponse)
+        do {
+            (_, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+    }
+
     /// Sign in to PocketBase using email (identity) and password
     func signIn(email: String, password: String) async throws -> AuthResponse {
         guard let baseURL = URL(string: baseURLLabel),
