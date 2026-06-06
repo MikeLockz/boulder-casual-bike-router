@@ -4,6 +4,7 @@ struct MainTabView: View {
     @State private var viewModel = MapViewModel()
     @State private var selectedTab: Int = 0
     @State private var isDrawerOpen: Bool = false
+    @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -51,6 +52,7 @@ struct MainTabView: View {
         }
         .environment(viewModel)
         .onAppear {
+            viewModel.modelContext = modelContext
             Task {
                 await viewModel.loadConfiguration()
             }

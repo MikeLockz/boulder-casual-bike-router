@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-fixed-dim": "#59dbbf",
+                        "forest-deep": "#0A1F1F",
+                        "error": "#ffb4ab",
+                        "on-primary-container": "#00352c",
+                        "surface-container": "#1e2020",
+                        "tertiary-fixed-dim": "#bacac5",
+                        "secondary": "#8cd3d2",
+                        "surface-variant": "#333535",
+                        "secondary-fixed-dim": "#8cd3d2",
+                        "on-error": "#690005",
+                        "background": "#121414",
+                        "error-container": "#93000a",
+                        "surface-dim": "#121414",
+                        "on-surface": "#e2e2e2",
+                        "tertiary-container": "#8a9995",
+                        "inverse-on-surface": "#2f3131",
+                        "primary": "#59dbbf",
+                        "on-primary-fixed": "#00201a",
+                        "surface-container-lowest": "#0d0f0f",
+                        "surface-bright": "#383939",
+                        "secondary-container": "#005c5c",
+                        "surface-tint": "#59dbbf",
+                        "surface-container-highest": "#333535",
+                        "surface-container-high": "#282a2a",
+                        "error-rose": "#FF5C5C",
+                        "tertiary-fixed": "#d6e6e1",
+                        "on-tertiary": "#253330",
+                        "outline": "#86948f",
+                        "on-primary": "#00382e",
+                        "secondary-fixed": "#a7efee",
+                        "on-error-container": "#ffdad6",
+                        "on-secondary-container": "#8bd2d2",
+                        "tertiary": "#bacac5",
+                        "on-tertiary-fixed": "#101e1b",
+                        "on-secondary": "#003737",
+                        "on-primary-fixed-variant": "#005143",
+                        "primary-container": "#00a98f",
+                        "on-background": "#e2e2e2",
+                        "on-tertiary-fixed-variant": "#3b4a46",
+                        "inverse-surface": "#e2e2e2",
+                        "on-secondary-fixed": "#002020",
+                        "primary-fixed": "#78f8db",
+                        "surface-elevated": "#1C2121",
+                        "outline-variant": "#3c4945",
+                        "on-tertiary-container": "#23312e",
+                        "mint-glow": "#26FFD4",
+                        "on-secondary-fixed-variant": "#004f50",
+                        "surface": "#121414",
+                        "on-surface-variant": "#bbcac4",
+                        "inverse-primary": "#006b5a",
+                        "surface-container-low": "#1a1c1c",
+                        "success-teal": "#00CCAA"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "stack-md": "24px",
+                        "gutter": "24px",
+                        "container-padding-mobile": "16px",
+                        "stack-sm": "12px",
+                        "container-padding-desktop": "32px",
+                        "base-unit": "8px",
+                        "stack-lg": "48px"
+                    },
+                    "fontFamily": {
+                        "label-md": ["Inter"],
+                        "headline-lg-mobile": ["Inter"],
+                        "mono-data": ["Inter"],
+                        "display-lg": ["Inter"],
+                        "body-md": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "body-lg": ["Inter"],
+                        "label-sm": ["Inter"],
+                        "headline-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "label-md": ["14px", {"lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500"}],
+                        "headline-lg-mobile": ["28px", {"lineHeight": "36px", "fontWeight": "600"}],
+                        "mono-data": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "400"}],
+                        "label-sm": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                        "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-edge {
+            border: 1px solid rgba(233, 249, 244, 0.05);
+        }
+        .mint-glow-effect:focus {
+            box-shadow: 0 0 15px rgba(89, 219, 191, 0.15);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-forest-deep text-on-surface min-h-screen relative overflow-hidden">
+<!-- BACKGROUND CONTENT (Planning Mode - Search) -->
+<main class="w-full h-screen relative flex flex-col pointer-events-none opacity-40 brightness-50">
+<!-- TopAppBar (Simulated Background) -->
+<header class="bg-forest-deep text-primary fixed top-0 w-full z-50 border-b border-outline-variant/10 flex justify-between items-center px-container-padding-mobile h-16">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-primary">menu</span>
+<h1 class="font-headline-md text-headline-md font-bold text-mint-glow">Wayfinder</h1>
+</div>
+<div class="w-8 h-8 rounded-full bg-surface-variant overflow-hidden border border-primary/20">
+<img alt="Profile" data-alt="A professional headshot of a young man with a friendly expression, captured with soft cinematic lighting against a dark, minimalist background. The style is crisp and modern, featuring deep forest green tones and subtle teal highlights that align with a premium wealth management app's aesthetic. High-quality digital photography with a shallow depth of field." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAfgD_xAAKMb8FcVfp2odeYBa76F9vCW__fI-oDa4DXth-kUIC18LS0KAI-m7Ev9YDCoa9zwuzCxm21kcu5zVaXzDD6UZil-55JF_HhE_3bWnkExd0FYRvdTeyuS8q3-gThrAkcISvV-gxJwM9mLRX_vTI0GuioMqNm-tQG8BipmFSqYN8WarIL8vyyuFi95ZyJr0rqtz1OGptti3U6_MNx2sJuzLoKR-KOI0cBedO8Tx3iLL4g2i9XV9pvTT3k4QBvU7ibZhAhJpPV"/>
+</div>
+</header>
+<!-- Main Canvas (Map & Search) -->
+<div class="flex-1 mt-16 p-stack-md flex flex-col gap-stack-md">
+<!-- Map Placeholder -->
+<div class="flex-1 rounded-xl bg-surface-container-high overflow-hidden relative glass-edge" data-location="Swiss Alps" style="">
+<div class="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&amp;fit=crop&amp;q=80&amp;w=1200')] bg-cover bg-center opacity-60"></div>
+<!-- Search UI -->
+<div class="absolute top-stack-md left-stack-md right-stack-md z-10 flex flex-col gap-stack-sm">
+<div class="bg-surface-elevated/90 backdrop-blur-md p-4 rounded-xl flex items-center gap-4 border border-outline-variant/20">
+<span class="material-symbols-outlined text-primary">search</span>
+<span class="font-body-md text-body-md text-on-surface-variant">Search for trails, peaks, or routes...</span>
+</div>
+</div>
+</div>
+<!-- Bento Grid of Suggestions -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-gutter h-48">
+<div class="col-span-2 bg-surface-container rounded-xl p-4 glass-edge flex flex-col justify-end">
+<span class="font-label-sm text-label-sm text-primary uppercase">Trending</span>
+<h3 class="font-headline-md text-headline-md">Highland Loop</h3>
+</div>
+<div class="bg-surface-container rounded-xl p-4 glass-edge">
+<span class="material-symbols-outlined text-primary mb-2">filter_hdr</span>
+<p class="font-label-md text-label-md">Peaks</p>
+</div>
+<div class="bg-surface-container rounded-xl p-4 glass-edge">
+<span class="material-symbols-outlined text-primary mb-2">water_drop</span>
+<p class="font-label-md text-label-md">Lakes</p>
+</div>
+</div>
+</div>
+<!-- Bottom Navigation (Simulated Background) -->
+<nav class="bg-surface-dim text-primary fixed bottom-0 w-full z-50 rounded-t-xl border-t border-outline-variant/10 shadow-lg flex justify-around items-center h-20 pb-safe">
+<div class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-4 py-1">
+<span class="material-symbols-outlined">explore</span>
+<span class="font-label-sm text-label-sm">Plan</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant">
+<span class="material-symbols-outlined">map</span>
+<span class="font-label-sm text-label-sm">Routes</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant">
+<span class="material-symbols-outlined">history</span>
+<span class="font-label-sm text-label-sm">History</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-label-sm text-label-sm">Settings</span>
+</div>
+</nav>
+</main>
+<!-- OVERLAY SHIM -->
+<div class="fixed inset-0 bg-black/60 z-50 transition-opacity duration-300" id="drawer-shim"></div>
+<!-- NavigationDrawer (SHARED COMPONENT) -->
+<aside class="fixed left-0 top-0 h-full w-80 z-[60] bg-surface text-primary font-body-md text-body-md flex flex-col p-stack-md shadow-xl transition-transform duration-300 ease-in-out" id="main-drawer">
+<!-- Drawer Header -->
+<div class="flex flex-col gap-4 pb-stack-md mb-stack-md border-b border-outline-variant/10">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full overflow-hidden border-2 border-primary/30">
+<img alt="User profile photo" data-alt="Detailed portrait of Alex Wayfarer, a professional hiker and pro member, showing a warm smile. The lighting is dramatic and moody with teal edge lights, matching the high-end finance-tech aesthetic of the app. The environment is a blurred outdoor landscape with dark forest tones." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAjAf3BnitNtsJIMZL4wAFW4yJvUyc0VprjOu0IUzQdnMhlcrb35z4fD_oW-bbEGQJXikkFRyMR7cGEggxWPdm0lCLFlla7h1JJuTDcESTyHWZPEyEzs7H2PkJNibimFPbyWkNqui1st2prlJs1OBxwahqXOpzAihPF1rAXjtNQrqHOKyGUYnWSk7rF3pDbPNPM2oIjVDndKGbEun0x5f3MttHumTTyr1Bc43QVcWzL1bviE-1PXw9BLZ1vZqQLkrimQX6IsfmsxSVE"/>
+</div>
+<div class="flex flex-col">
+<h2 class="font-headline-md text-on-surface">Alex Wayfarer</h2>
+<span class="font-label-sm text-primary uppercase tracking-wider">Pro Member</span>
+</div>
+</div>
+<div class="flex items-center justify-between px-2">
+<div class="h-1 flex-1 bg-surface-variant rounded-full overflow-hidden mr-4">
+<div class="h-full w-3/4 bg-gradient-to-r from-secondary to-primary rounded-full"></div>
+</div>
+<span class="font-mono-data text-on-surface-variant text-xs">75%</span>
+</div>
+</div>
+<!-- Menu Navigation -->
+<nav class="flex flex-col gap-1 flex-1">
+<a class="flex items-center gap-4 p-3 rounded-lg text-primary font-bold bg-primary-container/10 transition-colors" href="#">
+<span class="material-symbols-outlined">explore</span>
+<span class="font-body-md text-body-md">Plan</span>
+</a>
+<a class="flex items-center gap-4 p-3 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">map</span>
+<span class="font-body-md text-body-md">Routes</span>
+</a>
+<a class="flex items-center gap-4 p-3 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">history</span>
+<span class="font-body-md text-body-md">History</span>
+</a>
+<a class="flex items-center gap-4 p-3 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">bookmark</span>
+<span class="font-body-md text-body-md">Saved Places</span>
+</a>
+<div class="my-4 border-t border-outline-variant/10"></div>
+<a class="flex items-center gap-4 p-3 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">help</span>
+<span class="font-body-md text-body-md">Help</span>
+</a>
+<a class="flex items-center gap-4 p-3 rounded-lg text-on-surface-variant hover:bg-surface-variant transition-colors group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary">settings</span>
+<span class="font-body-md text-body-md">Settings</span>
+</a>
+</nav>
+<!-- Drawer Footer -->
+<div class="pt-stack-md mt-auto flex items-center justify-between border-t border-outline-variant/10">
+<span class="font-mono-data text-xs text-outline">v2.4.0</span>
+<div class="flex items-center gap-2 text-on-surface-variant hover:text-error transition-colors cursor-pointer">
+<span class="font-label-sm">Logout</span>
+<span class="material-symbols-outlined text-sm">logout</span>
+</div>
+</div>
+</aside>
+<script>
+        // Simple Micro-interaction for drawer
+        const drawer = document.getElementById('main-drawer');
+        const shim = document.getElementById('drawer-shim');
+        
+        // Function to close drawer (for testing interaction)
+        function toggleDrawer(isOpen) {
+            if (isOpen) {
+                drawer.style.transform = 'translateX(0)';
+                shim.style.opacity = '1';
+                shim.style.pointerEvents = 'auto';
+            } else {
+                drawer.style.transform = 'translateX(-100%)';
+                shim.style.opacity = '0';
+                shim.style.pointerEvents = 'none';
+            }
+        }
+
+        shim.addEventListener('click', () => toggleDrawer(false));
+
+        // Initial state is open as per user request
+        window.onload = () => {
+            drawer.style.transform = 'translateX(0)';
+        };
+    </script>
+</body></html>

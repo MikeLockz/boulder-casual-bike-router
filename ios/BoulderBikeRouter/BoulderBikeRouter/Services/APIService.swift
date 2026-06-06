@@ -69,8 +69,11 @@ class APIService {
             throw APIError.requestFailed(error)
         }
 
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw APIError.serverError("Invalid HTTP status code")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
 
         do {
@@ -103,8 +106,11 @@ class APIService {
             throw APIError.requestFailed(error)
         }
 
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw APIError.serverError("Invalid HTTP status code")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
 
         do {
@@ -133,8 +139,11 @@ class APIService {
             throw APIError.requestFailed(error)
         }
 
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw APIError.serverError("Invalid HTTP status code")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
 
         do {
@@ -175,8 +184,11 @@ class APIService {
             throw APIError.requestFailed(error)
         }
 
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw APIError.serverError("Invalid HTTP status code")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
 
         do {
@@ -212,8 +224,11 @@ class APIService {
             throw APIError.requestFailed(error)
         }
 
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw APIError.serverError("Invalid HTTP status code")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
     }
 
@@ -242,18 +257,22 @@ class APIService {
             throw APIError.requestFailed(error)
         }
 
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw APIError.serverError("Invalid HTTP status code")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
     }
 
     /// Retrieve previous routes navigation history log from the server.
     func fetchHistory(routeIds: [String]? = nil) async throws -> [PastRoute] {
-        guard let baseURL = URL(string: baseURLLabel) else {
+        guard let baseURL = URL(string: baseURLLabel),
+              let historyBaseURL = URL(string: "/api/navigation/history", relativeTo: baseURL) else {
             throw APIError.invalidURL
         }
         
-        var components = URLComponents(url: baseURL.appendingPathComponent("/api/navigation/history"), resolvingAgainstBaseURL: true)
+        var components = URLComponents(url: historyBaseURL, resolvingAgainstBaseURL: true)
         if let routeIds = routeIds, !routeIds.isEmpty {
             components?.queryItems = [URLQueryItem(name: "route_ids", value: routeIds.joined(separator: ","))]
         }
@@ -277,8 +296,11 @@ class APIService {
             throw APIError.requestFailed(error)
         }
 
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw APIError.serverError("Invalid HTTP status code")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
 
         do {
@@ -306,8 +328,11 @@ class APIService {
             throw APIError.requestFailed(error)
         }
 
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw APIError.serverError("Invalid HTTP status code")
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
 
         do {
@@ -315,5 +340,106 @@ class APIService {
         } catch {
             throw APIError.decodingError(error)
         }
+    }
+
+    /// Sign in to PocketBase using email (identity) and password
+    func signIn(email: String, password: String) async throws -> AuthResponse {
+        guard let baseURL = URL(string: baseURLLabel),
+              let authURL = URL(string: "/pb/api/collections/users/auth-with-password", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: authURL)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: String] = [
+            "identity": email,
+            "password": password
+        ]
+
+        do {
+            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response")
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw parsePBError(data: data, httpResponse: httpResponse)
+        }
+
+        do {
+            return try JSONDecoder().decode(AuthResponse.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    /// Create a new user account in PocketBase
+    func signUp(email: String, password: String) async throws {
+        guard let baseURL = URL(string: baseURLLabel),
+              let registerURL = URL(string: "/pb/api/collections/users/records", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: registerURL)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "email": email,
+            "password": password,
+            "passwordConfirm": password,
+            "emailVisibility": true
+        ]
+
+        do {
+            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response")
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw parsePBError(data: data, httpResponse: httpResponse)
+        }
+    }
+
+    private func parsePBError(data: Data, httpResponse: HTTPURLResponse) -> Error {
+        if let pbError = try? JSONDecoder().decode(PocketBaseError.self, from: data) {
+            var details = [String]()
+            if let dataDict = pbError.data {
+                for (key, detail) in dataDict {
+                    details.append("\(key): \(detail.message)")
+                }
+            }
+            let detailsStr = details.joined(separator: ", ")
+            let msg = detailsStr.isEmpty ? pbError.message : "\(pbError.message) (\(detailsStr))"
+            return APIError.serverError(msg)
+        }
+        return APIError.serverError("Server returned status \(httpResponse.statusCode)")
     }
 }

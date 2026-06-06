@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Wayfinder - Discover Your Path</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-container": "#23312e",
+                        "tertiary-container": "#8a9995",
+                        "error-container": "#93000a",
+                        "on-secondary-fixed-variant": "#004f50",
+                        "inverse-primary": "#006b5a",
+                        "primary": "#59dbbf",
+                        "primary-fixed-dim": "#59dbbf",
+                        "surface-container": "#1e2020",
+                        "tertiary-fixed": "#d6e6e1",
+                        "secondary-container": "#005c5c",
+                        "primary-container": "#00a98f",
+                        "on-tertiary-fixed": "#101e1b",
+                        "on-primary-fixed": "#00201a",
+                        "secondary-fixed": "#a7efee",
+                        "on-secondary-fixed": "#002020",
+                        "error": "#ffb4ab",
+                        "primary-fixed": "#78f8db",
+                        "on-error": "#690005",
+                        "mint-glow": "#26FFD4",
+                        "surface-tint": "#59dbbf",
+                        "on-primary-fixed-variant": "#005143",
+                        "secondary": "#8cd3d2",
+                        "outline": "#86948f",
+                        "surface": "#121414",
+                        "surface-dim": "#121414",
+                        "error-rose": "#FF5C5C",
+                        "surface-variant": "#333535",
+                        "secondary-fixed-dim": "#8cd3d2",
+                        "on-surface": "#e2e2e2",
+                        "surface-container-highest": "#333535",
+                        "surface-container-lowest": "#0d0f0f",
+                        "background": "#121414",
+                        "surface-elevated": "#1C2121",
+                        "on-primary": "#00382e",
+                        "tertiary": "#bacac5",
+                        "on-tertiary-fixed-variant": "#3b4a46",
+                        "on-background": "#e2e2e2",
+                        "on-error-container": "#ffdad6",
+                        "forest-deep": "#0A1F1F",
+                        "tertiary-fixed-dim": "#bacac5",
+                        "on-surface-variant": "#bbcac4",
+                        "inverse-on-surface": "#2f3131",
+                        "outline-variant": "#3c4945",
+                        "on-secondary-container": "#8bd2d2",
+                        "inverse-surface": "#e2e2e2",
+                        "surface-container-low": "#1a1c1c",
+                        "on-tertiary": "#253330",
+                        "on-primary-container": "#00352c",
+                        "on-secondary": "#003737",
+                        "success-teal": "#00CCAA",
+                        "surface-container-high": "#282a2a",
+                        "surface-bright": "#383939"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "container-padding-mobile": "16px",
+                        "stack-md": "24px",
+                        "gutter": "24px",
+                        "stack-sm": "12px",
+                        "stack-lg": "48px",
+                        "container-padding-desktop": "32px",
+                        "base-unit": "8px"
+                    },
+                    "fontFamily": {
+                        "body-md": ["Inter"],
+                        "label-md": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "headline-lg-mobile": ["Inter"],
+                        "display-lg": ["Inter"],
+                        "body-lg": ["Inter"],
+                        "label-sm": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "mono-data": ["Inter"]
+                    },
+                    "fontSize": {
+                        "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "label-md": ["14px", {"lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "500"}],
+                        "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                        "headline-lg-mobile": ["28px", {"lineHeight": "36px", "fontWeight": "600"}],
+                        "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "400"}],
+                        "label-sm": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                        "headline-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "mono-data": ["14px", {"lineHeight": "20px", "fontWeight": "400"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            background-color: #121414;
+            color: #e2e2e2;
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .map-overlay {
+            background: radial-gradient(circle at center, transparent 0%, rgba(10, 31, 31, 0.4) 100%);
+        }
+        .glass-edge {
+            border: 1px solid rgba(233, 249, 244, 0.05);
+        }
+        .mint-glow-effect {
+            box-shadow: 0 0 15px rgba(38, 255, 212, 0.1);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="dark h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="flex justify-between items-center px-container-padding-mobile h-16 w-full fixed top-0 z-50 bg-surface dark:bg-surface">
+<div class="flex items-center gap-4">
+<button class="hover:bg-surface-variant/50 transition-colors p-2 rounded-full active:scale-95 duration-200">
+<span class="material-symbols-outlined text-primary dark:text-primary" data-icon="menu">menu</span>
+</button>
+<h1 class="font-headline-md text-headline-md font-bold text-mint-glow">Wayfinder</h1>
+</div>
+<div class="flex items-center">
+<button class="w-10 h-10 rounded-full overflow-hidden border-2 border-primary-container active:scale-95 duration-200">
+<img alt="User avatar" class="w-full h-full object-cover" data-alt="A professional and sleek user profile avatar with a minimalist aesthetic. The image features a stylized human silhouette against a backdrop of deep forest green and mint teal gradients. The lighting is soft and modern, reflecting a premium fintech user experience. The overall mood is sophisticated, private, and high-tech." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA0r-fCz7Nxa7sKE46yGcKLa34fLIt6zmJEZqZXbn_dfyxHqYuUEA2TZmoVFR8bszhsHvC6DaZsqGgqrdBuPuFR8Z2LGqL_SYBnVEYu5Nt8_Ih-KTW3zlwSbspGF1m2dsXtkZ77M3bGd4S0QLmyN8f72zk0fQsE64LH9dI6uosFFF1B-b-seOj1QuOg-HNbMeeRTamS9SigSMX3BgHYzxsVEO7qWBavF5HW4J0VVvAzZwSjgokAo6DOzkuSHfyM-Do4AfieOAMj6Kzk"/>
+</button>
+</div>
+</header>
+<!-- Main Content Area (Map Background) -->
+<main class="relative flex-1 w-full mt-16 overflow-hidden">
+<!-- Full Screen Map -->
+<div class="absolute inset-0 z-0">
+<div class="w-full h-full bg-[#0A1F1F]" data-location="San Francisco" style="">
+<!-- Using a background image to simulate the dark mint map -->
+<div class="w-full h-full opacity-60 grayscale-[0.8] contrast-[1.2] brightness-[0.7] sepia-[0.2] hue-rotate-[120deg]" data-alt="A high-contrast, dark-themed digital map of a modern metropolitan city at night. The streets are illuminated with thin, glowing mint teal lines that trace the grid of the city. The water bodies are a deep forest green, and the landmarks are highlighted with soft cyan pulses. The aesthetic is clean, precise, and tech-forward, matching a professional financial navigation tool." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuB1pM_0s5ZBwdf12CxVXNclVH1C62v3vxrUifIWfBh7kZANj89Y_skyo8fx_ArjGcWan0hFuW4jCgiWgT5iXvLyYv1K8dqM5H8RXlLlU3zaZEdibUcAO2U025ab3cWa3-8xzzBqsHoYAXkjOxNYJkNu8fjaVsiBo9CbU-2kxvm5EP2u_9BwERH8UW6wAhBWqax1Op3bQBFKQ1e8WFwO0nfa6PYUV4MIFpfpbgCkWddDN3thD7M5og9LSry23Ddh1RHxBWluhyiTbM0q'); background-size: cover; background-position: center;">
+</div>
+</div>
+<div class="absolute inset-0 map-overlay pointer-events-none"></div>
+</div>
+<!-- Centered Search Box -->
+<div class="relative z-10 w-full flex justify-center pt-24 px-4 md:pt-32">
+<div class="w-full max-w-lg glass-edge bg-surface-elevated/90 backdrop-blur-md rounded-full px-6 py-4 flex items-center shadow-2xl transition-all hover:scale-[1.01] group">
+<span class="material-symbols-outlined text-primary mr-4" data-icon="search">search</span>
+<input class="bg-transparent border-none focus:ring-0 text-on-surface font-body-lg text-body-lg placeholder-on-surface-variant w-full" placeholder="Where to?" type="text"/>
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary" data-icon="mic">mic</span>
+</div>
+</div>
+<!-- Current Location FAB -->
+<div class="absolute bottom-24 right-6 z-20 md:bottom-28 md:right-10">
+<button class="w-14 h-14 bg-primary text-on-primary rounded-full flex items-center justify-center shadow-lg active:scale-90 duration-150 transition-all mint-glow-effect">
+<span class="material-symbols-outlined" data-icon="my_location">my_location</span>
+</button>
+</div>
+<!-- Interactive Map Micro-interaction Elements -->
+<div class="absolute bottom-32 left-6 z-20 hidden md:block">
+<div class="glass-edge bg-surface-elevated/80 backdrop-blur-sm p-3 rounded-xl flex flex-col gap-3">
+<button class="p-2 hover:bg-primary/20 rounded-lg text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="add">add</span>
+</button>
+<div class="h-px bg-outline-variant w-full"></div>
+<button class="p-2 hover:bg-primary/20 rounded-lg text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="remove">remove</span>
+</button>
+</div>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 py-2 bg-surface-container dark:bg-surface-container rounded-t-xl shadow-lg">
+<!-- Plan (Active) -->
+<a class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-4 py-1 active:scale-90 duration-150 transition-all" href="#">
+<span class="material-symbols-outlined" data-icon="explore" style="font-variation-settings: 'FILL' 1;">explore</span>
+<span class="font-label-md text-label-md">Plan</span>
+</a>
+<!-- Routes -->
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary transition-all active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="directions">directions</span>
+<span class="font-label-md text-label-md">Routes</span>
+</a>
+<!-- History -->
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary transition-all active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+<span class="font-label-md text-label-md">History</span>
+</a>
+<!-- Settings -->
+<a class="flex flex-col items-center justify-center text-on-surface-variant hover:text-primary transition-all active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-label-md text-label-md">Settings</span>
+</a>
+</nav>
+<script>
+        // Simple map interaction simulation
+        const searchInput = document.querySelector('input');
+        searchInput.addEventListener('focus', () => {
+            const container = searchInput.parentElement;
+            container.classList.add('ring-2', 'ring-primary', 'ring-opacity-50');
+        });
+        searchInput.addEventListener('blur', () => {
+            const container = searchInput.parentElement;
+            container.classList.remove('ring-2', 'ring-primary', 'ring-opacity-50');
+        });
+
+        // Add a subtle drift effect to the map background
+        const mapBg = document.querySelector('[data-alt*="map"]');
+        let posX = 50;
+        let posY = 50;
+        
+        document.addEventListener('mousemove', (e) => {
+            const moveX = (e.clientX / window.innerWidth - 0.5) * 2;
+            const moveY = (e.clientY / window.innerHeight - 0.5) * 2;
+            mapBg.style.backgroundPosition = `${posX + moveX}% ${posY + moveY}%`;
+        });
+    </script>
+</body></html>

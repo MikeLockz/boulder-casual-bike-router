@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 @main
 struct BoulderBikeRouterApp: App {
@@ -6,5 +7,6 @@ struct BoulderBikeRouterApp: App {
         WindowGroup {
             MainTabView()
         }
+        .modelContainer(for: [LocalRoute.self, LocalNavigationTick.self])
     }
 }

@@ -2,6 +2,7 @@ import Foundation
 import CoreLocation
 import AVFoundation
 import UIKit
+import SwiftData
 
 /// Represents a single maneuver instruction during active navigation.
 struct Maneuver: Identifiable, Equatable {
@@ -42,6 +43,13 @@ class NavigationManager {
     private var lastLoggedTime: Date? = nil
     private let apiService = APIService()
     
+    // Local persistence properties
+    private var modelContext: ModelContext? = nil
+    private var localTicksCache: [NavigationTickRequest] = []
+    private var localStartRequest: NavigationStartRequest? = nil
+    private var routeGeojsonString: String? = nil
+    private var startedAtString: String? = nil
+    
     // Proximity triggers to prevent repeating announcements
     private var announcedPre = Set<Int>()
     private var announcedConfirm = Set<Int>()
@@ -50,9 +58,16 @@ class NavigationManager {
     private let confirmDistance: Double = 30.0     // meters (~100 ft)
     private let casualSpeedMps = 4.47              // 10 mph in meters/second
 
-    func start(segments: [RouteSegment]) {
+    private var isSyncActive: Bool {
+        let hasToken = UserDefaults.standard.string(forKey: "pocketbase_token") != nil
+        let isSyncEnabled = UserDefaults.standard.object(forKey: "cloud_sync_enabled") as? Bool ?? true
+        return hasToken && isSyncEnabled
+    }
+
+    func start(segments: [RouteSegment], modelContext: ModelContext) {
         guard !segments.isEmpty else { return }
         
+        self.modelContext = modelContext
         self.segments = segments
         self.routeCoords = flattenSegments(segments)
         self.maneuvers = buildManeuvers(from: segments)
@@ -60,6 +75,10 @@ class NavigationManager {
         self.announcedPre.removeAll()
         self.announcedConfirm.removeAll()
         self.isActive = true
+        
+        let now = Date()
+        let isoFormatter = ISO8601DateFormatter()
+        self.startedAtString = isoFormatter.string(from: now)
         
         // Prevent screen sleep during navigation
         UIApplication.shared.isIdleTimerDisabled = true
@@ -70,7 +89,7 @@ class NavigationManager {
         // Setup battery monitoring
         UIDevice.current.isBatteryMonitoringEnabled = true
         
-        // Send start request asynchronously
+        // Prepare start request
         let startLat = segments.first?.coords.first?.first ?? 0.0
         let startLon = segments.first?.coords.first?.last ?? 0.0
         
@@ -109,17 +128,38 @@ class NavigationManager {
             weights: weights
         )
         
-        Task {
-            do {
-                let rId = try await apiService.startNavigation(request: startReq)
-                await MainActor.run {
-                    self.activeRouteId = rId
-                    self.lastLoggedTime = Date()
-                    print("[NavigationManager] Telemetry route started: \(rId)")
+        self.localStartRequest = startReq
+        self.localTicksCache.removeAll()
+        
+        // Save GeoJSON string representation
+        let encoder = JSONEncoder()
+        if let geojsonData = try? encoder.encode(geojson),
+           let geojsonStr = String(data: geojsonData, encoding: .utf8) {
+            self.routeGeojsonString = geojsonStr
+        }
+        
+        if isSyncActive {
+            Task {
+                do {
+                    let rId = try await apiService.startNavigation(request: startReq)
+                    await MainActor.run {
+                        self.activeRouteId = rId
+                        self.lastLoggedTime = Date()
+                        print("[NavigationManager] Telemetry route started remotely: \(rId)")
+                    }
+                } catch {
+                    print("[NavigationManager] Failed to start telemetry route remotely: \(error.localizedDescription)")
+                    // Fall back to local ID if API fails
+                    await MainActor.run {
+                        self.activeRouteId = UUID().uuidString
+                        self.lastLoggedTime = Date()
+                    }
                 }
-            } catch {
-                print("[NavigationManager] Failed to start telemetry route: \(error.localizedDescription)")
             }
+        } else {
+            self.activeRouteId = UUID().uuidString
+            self.lastLoggedTime = Date()
+            print("[NavigationManager] Navigation session starting locally (Cloud Sync is disabled or guest).")
         }
     }
 
@@ -135,28 +175,110 @@ class NavigationManager {
         
         speak("Navigation ended.")
         
-        // End telemetry session
-        if let rId = activeRouteId {
-            let now = Date()
-            let isoFormatter = ISO8601DateFormatter()
-            let endedAtStr = isoFormatter.string(from: now)
-            
-            var status = "cancelled"
-            var finalLat: Double? = nil
-            var finalLon: Double? = nil
-            
-            if let currentLoc = lastLoggedLocation {
-                finalLat = currentLoc.coordinate.latitude
-                finalLon = currentLoc.coordinate.longitude
-                if let dest = routeCoords.last {
-                    let destLoc = CLLocation(latitude: dest.latitude, longitude: dest.longitude)
-                    let dist = currentLoc.distance(from: destLoc)
-                    if dist <= 50.0 {
-                        status = "completed"
-                    }
+        guard let rId = activeRouteId else { return }
+        
+        let now = Date()
+        let isoFormatter = ISO8601DateFormatter()
+        let endedAtStr = isoFormatter.string(from: now)
+        
+        var status = "cancelled"
+        var finalLat: Double? = nil
+        var finalLon: Double? = nil
+        
+        if let currentLoc = lastLoggedLocation {
+            finalLat = currentLoc.coordinate.latitude
+            finalLon = currentLoc.coordinate.longitude
+            if let dest = routeCoords.last {
+                let destLoc = CLLocation(latitude: dest.latitude, longitude: dest.longitude)
+                let dist = currentLoc.distance(from: destLoc)
+                if dist <= 50.0 {
+                    status = "completed"
                 }
             }
+        }
+        
+        // 1. Calculate actual distance and duration locally from cached ticks
+        var actualDistance = 0.0
+        if localTicksCache.count >= 2 {
+            for i in 0..<(localTicksCache.count - 1) {
+                let t1 = localTicksCache[i]
+                let t2 = localTicksCache[i+1]
+                let loc1 = CLLocation(latitude: t1.lat, longitude: t1.lon)
+                let loc2 = CLLocation(latitude: t2.lat, longitude: t2.lon)
+                actualDistance += loc1.distance(from: loc2)
+            }
+        }
+        
+        var actualDuration = 0.0
+        if let firstTick = localTicksCache.first,
+           let lastTick = localTicksCache.last {
+            let fTime = isoFormatter.date(from: firstTick.timestamp) ?? Date()
+            let lTime = isoFormatter.date(from: lastTick.timestamp) ?? Date()
+            actualDuration = lTime.timeIntervalSince(fTime)
+        }
+        if actualDuration <= 0 {
+            actualDuration = Double(localTicksCache.count) * 3.0
+        }
+        
+        let avgSpeed = actualDuration > 0 ? (actualDistance / actualDuration) : 0.0
+        
+        // 2. Save locally to SwiftData
+        if let startReq = localStartRequest, let context = modelContext {
+            let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
+            let localRoute = LocalRoute(
+                id: rId,
+                startPointName: startReq.startPointName,
+                endPointName: startReq.endPointName,
+                startLat: startReq.startLat,
+                startLon: startReq.startLon,
+                endLat: startReq.endLat,
+                endLon: startReq.endLon,
+                totalLengthMeters: startReq.totalLengthMeters,
+                totalEstimatedTimeSeconds: startReq.totalEstimatedTimeSeconds,
+                status: status,
+                startedAt: startedAtString ?? endedAtStr,
+                endedAt: endedAtStr,
+                endedLat: finalLat,
+                endedLon: finalLon,
+                actualDistanceMeters: actualDistance,
+                actualDurationSeconds: actualDuration,
+                averageSpeed: avgSpeed,
+                deviceType: "ios",
+                weights: startReq.weights,
+                userId: currentUserId,
+                synced: isSyncActive,
+                routeGeojson: routeGeojsonString
+            )
             
+            context.insert(localRoute)
+            
+            // Insert ticks associated with the route
+            for (idx, t) in localTicksCache.enumerated() {
+                let tickModel = LocalNavigationTick(
+                    id: "\(rId)-\(idx)",
+                    lat: t.lat,
+                    lon: t.lon,
+                    speed: t.speed,
+                    direction: t.direction,
+                    accuracy: t.accuracy,
+                    altitude: t.altitude,
+                    timestamp: t.timestamp,
+                    batteryLevel: t.batteryLevel,
+                    route: localRoute
+                )
+                context.insert(tickModel)
+            }
+            
+            do {
+                try context.save()
+                print("[NavigationManager] Session successfully saved locally to SwiftData: \(rId)")
+            } catch {
+                print("[NavigationManager] SwiftData save error: \(error.localizedDescription)")
+            }
+        }
+        
+        // 3. Close the telemetry session on the server if sync is active
+        if isSyncActive {
             let endReq = NavigationEndRequest(
                 status: status,
                 endedLat: finalLat,
@@ -167,24 +289,27 @@ class NavigationManager {
             Task {
                 do {
                     try await apiService.endNavigation(routeId: rId, request: endReq)
-                    print("[NavigationManager] Telemetry route closed successfully.")
-                    
-                    await MainActor.run {
-                        let savedHist = UserDefaults.standard.stringArray(forKey: "guest_routes_history") ?? []
-                        var newHist = savedHist
-                        newHist.insert(rId, at: 0)
-                        UserDefaults.standard.set(newHist, forKey: "guest_routes_history")
-                        
-                        NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: nil)
-                    }
+                    print("[NavigationManager] Telemetry route closed remotely successfully.")
                 } catch {
-                    print("[NavigationManager] Failed to end telemetry route: \(error.localizedDescription)")
+                    print("[NavigationManager] Failed to end telemetry route remotely: \(error.localizedDescription)")
+                }
+                
+                await MainActor.run {
+                    NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: nil)
                 }
             }
+        } else {
+            NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: nil)
         }
         
+        // Cleanup local states
+        activeRouteId = nil
         lastLoggedLocation = nil
         lastLoggedTime = nil
+        localStartRequest = nil
+        routeGeojsonString = nil
+        startedAtString = nil
+        localTicksCache.removeAll()
     }
 
     func toggleMute() {
@@ -482,11 +607,16 @@ class NavigationManager {
             batteryLevel: Double(UIDevice.current.batteryLevel)
         )
         
-        Task {
-            do {
-                try await apiService.sendLocationTick(routeId: routeId, request: tickReq)
-            } catch {
-                print("[NavigationManager] Failed to send telemetry tick: \(error.localizedDescription)")
+        // Cache locally in ticks buffer
+        localTicksCache.append(tickReq)
+        
+        if isSyncActive {
+            Task {
+                do {
+                    try await apiService.sendLocationTick(routeId: routeId, request: tickReq)
+                } catch {
+                    print("[NavigationManager] Failed to send telemetry tick: \(error.localizedDescription)")
+                }
             }
         }
     }

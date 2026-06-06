@@ -1819,6 +1819,94 @@ def nav_detail(route_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/navigation/sync", methods=["POST", "OPTIONS"])
+def nav_sync():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    
+    auth_header = request.headers.get("Authorization")
+    user_id = get_auth_user_id(auth_header)
+    
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+        
+    data = request.json or {}
+    routes = data.get("routes", [])
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    
+    synced_routes = []
+    
+    for r in routes:
+        local_id = r.get("local_id")
+        pb_payload = {
+            "user": user_id,
+            "start_lat": r.get("start_lat"),
+            "start_lon": r.get("start_lon"),
+            "end_lat": r.get("end_lat"),
+            "end_lon": r.get("end_lon"),
+            "start_point_name": r.get("start_point_name") or "Start Point",
+            "end_point_name": r.get("end_point_name") or "Destination",
+            "route_geojson": r.get("route_geojson") or {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [
+                        [r.get("start_lon") or 0.0, r.get("start_lat") or 0.0],
+                        [r.get("end_lon") or 0.0, r.get("end_lat") or 0.0]
+                    ]
+                },
+                "properties": {}
+            },
+            "total_length_meters": r.get("total_length_meters", 0.0),
+            "total_estimated_time_seconds": r.get("total_estimated_time_seconds", 0.0),
+            "status": r.get("status") or "completed",
+            "started_at": r.get("started_at"),
+            "ended_at": r.get("ended_at"),
+            "ended_lat": r.get("ended_lat"),
+            "ended_lon": r.get("ended_lon"),
+            "actual_distance_meters": r.get("actual_distance_meters"),
+            "actual_duration_seconds": r.get("actual_duration_seconds"),
+            "average_speed": r.get("average_speed"),
+            "device_type": r.get("device_type") or "web",
+            "weights": r.get("weights") or {}
+        }
+        
+        try:
+            resp = requests.post(f"{pb_url}/api/collections/navigation_routes/records", json=pb_payload, timeout=5)
+            if resp.status_code in [200, 201]:
+                record = resp.json()
+                server_id = record.get("id")
+                
+                # Sync ticks
+                ticks = r.get("ticks", [])
+                for t in ticks:
+                    pb_tick_payload = {
+                        "route": server_id,
+                        "lat": t.get("lat"),
+                        "lon": t.get("lon"),
+                        "speed": t.get("speed"),
+                        "direction": t.get("direction"),
+                        "accuracy": t.get("accuracy"),
+                        "altitude": t.get("altitude"),
+                        "timestamp": t.get("timestamp"),
+                        "battery_level": t.get("battery_level")
+                    }
+                    requests.post(f"{pb_url}/api/collections/navigation_ticks/records", json=pb_tick_payload, timeout=3)
+                
+                synced_routes.append({
+                    "local_id": local_id,
+                    "server_id": server_id
+                })
+            else:
+                print(f"[-] PocketBase route save returned {resp.status_code}: {resp.text}")
+        except Exception as e:
+            print(f"[-] Error syncing route {local_id}: {e}")
+            
+    return jsonify({
+        "status": "success",
+        "synced_routes": synced_routes
+    }), 200
+
 if __name__ == "__main__":
     # Pre-build graph on startup
     build_graph()

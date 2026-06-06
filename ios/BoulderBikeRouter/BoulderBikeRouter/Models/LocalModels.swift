@@ -1,0 +1,160 @@
+import Foundation
+import SwiftData
+
+@Model
+class LocalRoute {
+    @Attribute(.unique) var id: String
+    var startPointName: String
+    var endPointName: String
+    var startLat: Double
+    var startLon: Double
+    var endLat: Double
+    var endLon: Double
+    var totalLengthMeters: Double
+    var totalEstimatedTimeSeconds: Double
+    var status: String
+    var startedAt: String
+    var endedAt: String?
+    var endedLat: Double?
+    var endedLon: Double?
+    var actualDistanceMeters: Double?
+    var actualDurationSeconds: Double?
+    var averageSpeed: Double?
+    var deviceType: String?
+    var weights: [String: Double]?
+    
+    // Sync states
+    var userId: String? // nil for guests, PocketBase user ID for signed-in users
+    var synced: Bool = false
+    var routeGeojson: String? // Serialized GeoJSON string
+    
+    // Relationships
+    @Relationship(deleteRule: .cascade, inverse: \LocalNavigationTick.route)
+    var ticks: [LocalNavigationTick] = []
+    
+    init(
+        id: String,
+        startPointName: String,
+        endPointName: String,
+        startLat: Double,
+        startLon: Double,
+        endLat: Double,
+        endLon: Double,
+        totalLengthMeters: Double,
+        totalEstimatedTimeSeconds: Double,
+        status: String,
+        startedAt: String,
+        endedAt: String? = nil,
+        endedLat: Double? = nil,
+        endedLon: Double? = nil,
+        actualDistanceMeters: Double? = nil,
+        actualDurationSeconds: Double? = nil,
+        averageSpeed: Double? = nil,
+        deviceType: String? = nil,
+        weights: [String: Double]? = nil,
+        userId: String? = nil,
+        synced: Bool = false,
+        routeGeojson: String? = nil
+    ) {
+        self.id = id
+        self.startPointName = startPointName
+        self.endPointName = endPointName
+        self.startLat = startLat
+        self.startLon = startLon
+        self.endLat = endLat
+        self.endLon = endLon
+        self.totalLengthMeters = totalLengthMeters
+        self.totalEstimatedTimeSeconds = totalEstimatedTimeSeconds
+        self.status = status
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.endedLat = endedLat
+        self.endedLon = endedLon
+        self.actualDistanceMeters = actualDistanceMeters
+        self.actualDurationSeconds = actualDurationSeconds
+        self.averageSpeed = averageSpeed
+        self.deviceType = deviceType
+        self.weights = weights
+        self.userId = userId
+        self.synced = synced
+        self.routeGeojson = routeGeojson
+    }
+    
+    // Computed property to convert to PastRoute struct
+    var toPastRoute: PastRoute {
+        PastRoute(
+            id: id,
+            startPointName: startPointName,
+            endPointName: endPointName,
+            startLat: startLat,
+            startLon: startLon,
+            endLat: endLat,
+            endLon: endLon,
+            totalLengthMeters: totalLengthMeters,
+            totalEstimatedTimeSeconds: totalEstimatedTimeSeconds,
+            status: status,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            endedLat: endedLat,
+            endedLon: endedLon,
+            actualDistanceMeters: actualDistanceMeters,
+            actualDurationSeconds: actualDurationSeconds,
+            averageSpeed: averageSpeed,
+            deviceType: deviceType,
+            weights: weights
+        )
+    }
+}
+
+@Model
+class LocalNavigationTick {
+    var id: String // timestamp as unique string
+    var lat: Double
+    var lon: Double
+    var speed: Double?
+    var direction: Double?
+    var accuracy: Double?
+    var altitude: Double?
+    var timestamp: String
+    var batteryLevel: Double?
+    
+    // Relationship
+    var route: LocalRoute?
+    
+    init(
+        id: String,
+        lat: Double,
+        lon: Double,
+        speed: Double? = nil,
+        direction: Double? = nil,
+        accuracy: Double? = nil,
+        altitude: Double? = nil,
+        timestamp: String,
+        batteryLevel: Double? = nil,
+        route: LocalRoute? = nil
+    ) {
+        self.id = id
+        self.lat = lat
+        self.lon = lon
+        self.speed = speed
+        self.direction = direction
+        self.accuracy = accuracy
+        self.altitude = altitude
+        self.timestamp = timestamp
+        self.batteryLevel = batteryLevel
+        self.route = route
+    }
+    
+    var toNavigationTick: NavigationTick {
+        NavigationTick(
+            lat: lat,
+            lon: lon,
+            speed: speed,
+            direction: direction,
+            accuracy: accuracy,
+            altitude: altitude,
+            timestamp: timestamp,
+            batteryLevel: batteryLevel
+        )
+    }
+}

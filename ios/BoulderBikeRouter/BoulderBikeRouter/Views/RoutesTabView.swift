@@ -112,29 +112,7 @@ struct RoutesTabView: View {
                             )
                         }
                     }
-                    
-                    // Section 3: Sliders Weights Configurations
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("ROUTING WEIGHTS AND OFFSETS")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.onSurfaceVariant)
-                            .tracking(1)
-                            .padding(.horizontal, 4)
-                        
-                        WeightSlidersView(
-                            weights: $viewModel.weights,
-                            metadata: viewModel.weightsMetadata,
-                            isLocked: viewModel.isWeightsLocked,
-                            onReset: { viewModel.resetWeights() }
-                        )
-                        .padding(16)
-                        .background(Color.surfaceDim)
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.onSurfaceVariant.opacity(0.05), lineWidth: 1)
-                        )
-                    }
+
                 }
                 .padding(24)
             }

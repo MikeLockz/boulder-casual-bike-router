@@ -786,6 +786,23 @@ const Navigation = (() => {
         return headers;
     }
 
+    function isSyncActive() {
+        const hasAuth = localStorage.getItem("pocketbase_auth") !== null;
+        const syncSetting = localStorage.getItem("cloud_sync_enabled");
+        const isSyncEnabled = (syncSetting === null || syncSetting === "true");
+        return hasAuth && isSyncEnabled;
+    }
+
+    function generateUUID() {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+            return crypto.randomUUID();
+        }
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
     async function startRouteLogging(segments) {
         if (!segments || segments.length === 0) return;
         
@@ -846,35 +863,59 @@ const Navigation = (() => {
         const endLat = segments[segments.length - 1].coords[segments[segments.length - 1].coords.length - 1][0];
         const endLon = segments[segments.length - 1].coords[segments[segments.length - 1].coords.length - 1][1];
         
-        const payload = {
+        const tempId = generateUUID();
+        state.routeId = tempId;
+        state.lastLoggedTime = Date.now();
+        state.localTicksCache = [];
+        state.routeGeojson = routeGeojson;
+        
+        state.localStartRequest = {
+            local_id: tempId,
             start_lat: startLat,
             start_lon: startLon,
             end_lat: endLat,
             end_lon: endLon,
             start_point_name: startName,
             end_point_name: endName,
-            route_geojson: routeGeojson,
             total_length_meters: totalLength,
             total_estimated_time_seconds: totalEstimatedTime,
-            device_type: "web",
+            started_at: new Date().toISOString(),
             weights: weights
         };
-        
-        try {
-            const base = typeof API_BASE !== "undefined" ? API_BASE : "";
-            const response = await fetch(`${base}/api/navigation/start`, {
-                method: "POST",
-                headers: getAuthHeaders(),
-                body: JSON.stringify(payload)
-            });
-            if (response.ok) {
-                const data = await response.json();
-                state.routeId = data.route_id;
-                state.lastLoggedTime = Date.now();
-                console.log("[Navigation] Telemetry route created:", state.routeId);
+
+        if (isSyncActive()) {
+            const payload = {
+                start_lat: startLat,
+                start_lon: startLon,
+                end_lat: endLat,
+                end_lon: endLon,
+                start_point_name: startName,
+                end_point_name: endName,
+                route_geojson: routeGeojson,
+                total_length_meters: totalLength,
+                total_estimated_time_seconds: totalEstimatedTime,
+                device_type: "web",
+                weights: weights
+            };
+            
+            try {
+                const base = typeof API_BASE !== "undefined" ? API_BASE : "";
+                const response = await fetch(`${base}/api/navigation/start`, {
+                    method: "POST",
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(payload)
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    state.routeId = data.route_id;
+                    state.localStartRequest.local_id = data.route_id; // match IDs
+                    console.log("[Navigation] Telemetry route created remotely:", state.routeId);
+                }
+            } catch (err) {
+                console.error("[Navigation] Failed to start route recording remotely:", err);
             }
-        } catch (err) {
-            console.error("[Navigation] Failed to start route recording:", err);
+        } else {
+            console.log("[Navigation] Guest or Sync Disabled: session running locally:", state.routeId);
         }
     }
 
@@ -902,7 +943,7 @@ const Navigation = (() => {
         state.lastLoggedPosition = { lat, lng };
         state.lastLoggedTime = now;
         
-        const payload = {
+        const tick = {
             lat: lat,
             lon: lng,
             speed: speed || 0,
@@ -912,15 +953,19 @@ const Navigation = (() => {
             timestamp: new Date().toISOString()
         };
         
-        try {
-            const base = typeof API_BASE !== "undefined" ? API_BASE : "";
-            await fetch(`${base}/api/navigation/${state.routeId}/tick`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-        } catch (err) {
-            console.error("[Navigation] Failed to log telemetry tick:", err);
+        state.localTicksCache.push(tick);
+        
+        if (isSyncActive()) {
+            try {
+                const base = typeof API_BASE !== "undefined" ? API_BASE : "";
+                await fetch(`${base}/api/navigation/${state.routeId}/tick`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(tick)
+                });
+            } catch (err) {
+                console.error("[Navigation] Failed to log telemetry tick remotely:", err);
+            }
         }
     }
 
@@ -944,42 +989,114 @@ const Navigation = (() => {
             }
         }
         
-        const payload = {
-            status: status,
-            ended_lat: finalLat,
-            ended_lon: finalLon,
-            ended_at: new Date().toISOString()
-        };
-        
-        try {
-            const base = typeof API_BASE !== "undefined" ? API_BASE : "";
-            const response = await fetch(`${base}/api/navigation/${routeId}/end`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                console.log("[Navigation] Navigation ended successfully", data);
-                
-                let guestHistory = [];
-                try {
-                    guestHistory = JSON.parse(localStorage.getItem("guest_routes_history") || "[]");
-                } catch (e) {}
-                guestHistory.unshift(routeId);
-                localStorage.setItem("guest_routes_history", JSON.stringify(guestHistory));
-                
-                if (window.loadHistory) {
-                    window.loadHistory();
-                }
+        // 1. Calculate stats locally
+        let actualDistance = 0.0;
+        if (state.localTicksCache.length >= 2) {
+            for (let i = 0; i < state.localTicksCache.length - 1; i++) {
+                const t1 = state.localTicksCache[i];
+                const t2 = state.localTicksCache[i+1];
+                actualDistance += getDistance(t1.lat, t1.lon, t2.lat, t2.lon);
             }
-        } catch (err) {
-            console.error("[Navigation] Failed to stop route recording:", err);
+        }
+        
+        let actualDuration = 0.0;
+        if (state.localTicksCache.length >= 2) {
+            const first = new Date(state.localTicksCache[0].timestamp).getTime();
+            const last = new Date(state.localTicksCache[state.localTicksCache.length - 1].timestamp).getTime();
+            actualDuration = (last - first) / 1000;
+        }
+        if (actualDuration <= 0) {
+            actualDuration = state.localTicksCache.length * 3;
+        }
+        
+        const avgSpeed = actualDuration > 0 ? (actualDistance / actualDuration) : 0.0;
+        const startReq = state.localStartRequest;
+        
+        // 2. Save locally to localStorage
+        const currentAuth = localStorage.getItem("pocketbase_auth");
+        let currentUserId = null;
+        if (currentAuth) {
+            try {
+                currentUserId = JSON.parse(currentAuth).record.id;
+            } catch (e) {}
+        }
+        
+        if (startReq) {
+            const localRoute = {
+                local_id: routeId,
+                id: routeId,
+                start_lat: startReq.start_lat,
+                start_lon: startReq.start_lon,
+                end_lat: startReq.end_lat,
+                end_lon: startReq.end_lon,
+                start_point_name: startReq.start_point_name,
+                end_point_name: startReq.end_point_name,
+                route_geojson: state.routeGeojson,
+                total_length_meters: startReq.total_length_meters,
+                total_estimated_time_seconds: startReq.total_estimated_time_seconds,
+                status: status,
+                started_at: startReq.started_at,
+                ended_at: new Date().toISOString(),
+                ended_lat: finalLat,
+                ended_lon: finalLon,
+                actual_distance_meters: actualDistance,
+                actual_duration_seconds: actualDuration,
+                average_speed: avgSpeed,
+                device_type: "web",
+                weights: startReq.weights,
+                userId: currentUserId,
+                synced: isSyncActive(),
+                ticks: state.localTicksCache
+            };
+            
+            let localRoutes = [];
+            try {
+                localRoutes = JSON.parse(localStorage.getItem("boulder_local_routes") || "[]");
+            } catch (e) {}
+            localRoutes.unshift(localRoute);
+            localStorage.setItem("boulder_local_routes", JSON.stringify(localRoutes));
+            console.log("[Navigation] Saved route locally to localStorage.");
+        }
+        
+        // 3. Complete remote logging if sync was active
+        if (isSyncActive()) {
+            const endPayload = {
+                status: status,
+                ended_lat: finalLat,
+                ended_lon: finalLon,
+                ended_at: new Date().toISOString()
+            };
+            
+            try {
+                const base = typeof API_BASE !== "undefined" ? API_BASE : "";
+                const response = await fetch(`${base}/api/navigation/${routeId}/end`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(endPayload)
+                });
+                
+                if (response.ok) {
+                    console.log("[Navigation] Telemetry ended remotely successfully.");
+                }
+            } catch (err) {
+                console.error("[Navigation] Failed to stop route recording remotely:", err);
+            }
+        }
+        
+        if (window.loadHistory) {
+            window.loadHistory();
+        }
+        
+        // Auto-trigger background sync if logged in
+        if (window.syncPendingRoutes) {
+            window.syncPendingRoutes();
         }
         
         state.lastLoggedPosition = null;
         state.lastLoggedTime = 0;
+        state.localStartRequest = null;
+        state.routeGeojson = null;
+        state.localTicksCache = [];
     }
 
     // --- Expose public API ---

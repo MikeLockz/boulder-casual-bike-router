@@ -1,6 +1,7 @@
 import Foundation
 import CoreLocation
 import SwiftUI
+import SwiftData
 
 @Observable
 class MapViewModel {
@@ -27,9 +28,46 @@ class MapViewModel {
     var isConfigLoaded: Bool = false
     var isWeightsLocked: Bool = false
 
-    // Navigation preferences
-    var avoidTolls: Bool = false
-    var avoidHighways: Bool = false
+    // User session properties
+    var currentUserEmail: String? = UserDefaults.standard.string(forKey: "logged_in_user_email")
+    var currentUserId: String? = UserDefaults.standard.string(forKey: "logged_in_user_id")
+    var pocketbaseToken: String? = UserDefaults.standard.string(forKey: "pocketbase_token")
+    
+    var isUserLoggedIn: Bool {
+        pocketbaseToken != nil
+    }
+    
+    // SwiftData Context & Services
+    var modelContext: ModelContext? = nil {
+        didSet {
+            if modelContext != nil {
+                Task {
+                    await syncService?.syncPendingRoutes()
+                    await loadHistory()
+                }
+            }
+        }
+    }
+    
+    var syncService: SyncService? {
+        guard let context = modelContext else { return nil }
+        return SyncService(modelContext: context)
+    }
+    
+    var isCloudSyncEnabled: Bool {
+        get {
+            UserDefaults.standard.object(forKey: "cloud_sync_enabled") as? Bool ?? true
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "cloud_sync_enabled")
+            if newValue {
+                Task {
+                    await syncService?.syncPendingRoutes()
+                    await loadHistory()
+                }
+            }
+        }
+    }
     
     // History list
     var pastRoutes: [PastRoute] = []
@@ -58,6 +96,18 @@ class MapViewModel {
             queue: .main
         ) { [weak self] _ in
             Task {
+                await self?.loadHistory()
+            }
+        }
+        
+        // Listen for app foregrounding to trigger auto-sync
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task {
+                await self?.syncService?.syncPendingRoutes()
                 await self?.loadHistory()
             }
         }
@@ -213,21 +263,114 @@ class MapViewModel {
         self.weights = newWeights
     }
 
-    /// Load telemetry route history from the backend.
+    /// Load telemetry route history from both remote server (if sync is enabled) and SwiftData.
     func loadHistory() async {
-        do {
-            let guestHistory = UserDefaults.standard.stringArray(forKey: "guest_routes_history")
-            let routes = try await apiService.fetchHistory(routeIds: guestHistory)
-            await MainActor.run {
-                self.pastRoutes = routes
-                print("Loaded \(routes.count) past routes from telemetry history.")
+        let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
+        let isSyncActive = isUserLoggedIn && isCloudSyncEnabled
+        
+        var serverRoutes: [PastRoute] = []
+        
+        // 1. Fetch remote routes if cloud sync is active
+        if isSyncActive {
+            do {
+                serverRoutes = try await apiService.fetchHistory(routeIds: nil)
+            } catch {
+                print("Failed to load telemetry history from server: \(error.localizedDescription)")
             }
-        } catch {
-            print("Failed to load telemetry history: \(error.localizedDescription)")
+        }
+        
+        // 2. Fetch local routes from SwiftData
+        var localRoutes: [PastRoute] = []
+        if let context = modelContext {
+            do {
+                let descriptor = FetchDescriptor<LocalRoute>(
+                    sortBy: [SortDescriptor(\.startedAt, order: .reverse)]
+                )
+                let allLocalRoutes = try context.fetch(descriptor)
+                
+                // Filter routes depending on auth context
+                let filteredLocalRoutes = allLocalRoutes.filter { r in
+                    if let userId = currentUserId {
+                        // Signed-in: Show user's routes and unsynced guest routes
+                        return r.userId == userId || r.userId == nil
+                    } else {
+                        // Guest: Show only guest routes
+                        return r.userId == nil
+                    }
+                }
+                
+                localRoutes = filteredLocalRoutes.map { $0.toPastRoute }
+            } catch {
+                print("Failed to load local routes from SwiftData: \(error.localizedDescription)")
+            }
+        }
+        
+        // 3. Combine and sort
+        await MainActor.run {
+            var combinedMap: [String: PastRoute] = [:]
+            for r in localRoutes {
+                combinedMap[r.id] = r
+            }
+            for r in serverRoutes {
+                combinedMap[r.id] = r
+            }
+            
+            self.pastRoutes = combinedMap.values.sorted(by: { $0.startedAt > $1.startedAt })
+            print("Loaded \(self.pastRoutes.count) past routes (Local: \(localRoutes.count), Server: \(serverRoutes.count)).")
         }
     }
     
     func selectHistoryRoute(_ route: PastRoute) async {
+        // First, check if we have the route with detailed ticks locally in SwiftData
+        if let context = modelContext {
+            let localId = route.id
+            let descriptor = FetchDescriptor<LocalRoute>(
+                predicate: #Predicate<LocalRoute> { $0.id == localId }
+            )
+            if let localRoute = try? context.fetch(descriptor).first {
+                await MainActor.run {
+                    self.selectedHistoryRoute = route
+                    self.selectedHistoryRouteTicks = localRoute.ticks.map { $0.toNavigationTick }
+                    
+                    var routeGeojsonObj: GeoJSONFeatureCollection? = nil
+                    if let geojsonStr = localRoute.routeGeojson,
+                       let geojsonData = geojsonStr.data(using: .utf8) {
+                        routeGeojsonObj = try? JSONDecoder().decode(GeoJSONFeatureCollection.self, from: geojsonData)
+                    }
+                    
+                    self.selectedHistoryRouteDetails = DetailedRouteResponse(
+                        id: localRoute.id,
+                        startPointName: localRoute.startPointName,
+                        endPointName: localRoute.endPointName,
+                        startLat: localRoute.startLat,
+                        startLon: localRoute.startLon,
+                        endLat: localRoute.endLat,
+                        endLon: localRoute.endLon,
+                        totalLengthMeters: localRoute.totalLengthMeters,
+                        totalEstimatedTimeSeconds: localRoute.totalEstimatedTimeSeconds,
+                        status: localRoute.status,
+                        startedAt: localRoute.startedAt,
+                        endedAt: localRoute.endedAt,
+                        endedLat: localRoute.endedLat,
+                        endedLon: localRoute.endedLon,
+                        actualDistanceMeters: localRoute.actualDistanceMeters,
+                        actualDurationSeconds: localRoute.actualDurationSeconds,
+                        averageSpeed: localRoute.averageSpeed,
+                        deviceType: localRoute.deviceType,
+                        weights: localRoute.weights,
+                        routeGeojson: routeGeojsonObj,
+                        ticks: localRoute.ticks.map { $0.toNavigationTick }
+                    )
+                    
+                    self.startLocation = nil
+                    self.endLocation = nil
+                    self.routeResponse = nil
+                }
+                return
+            }
+        }
+        
+        // Fallback: load details from backend server
         do {
             let details = try await apiService.fetchRouteDetails(routeId: route.id)
             await MainActor.run {
@@ -235,7 +378,6 @@ class MapViewModel {
                 self.selectedHistoryRouteTicks = details.ticks
                 self.selectedHistoryRouteDetails = details
                 
-                // Clear active planner route when viewing history detail
                 self.startLocation = nil
                 self.endLocation = nil
                 self.routeResponse = nil
@@ -252,38 +394,63 @@ class MapViewModel {
     }
 
     func recordCompletedRoute() {
-        guard let route = routeResponse else { return }
-        let startName = selectedPresetName != nil ? "Start Point" : "Dropped Pin"
-        let endName = selectedPlayground?.name ?? "Destination"
-        let durationSeconds = Int(route.totalLengthMeters / 5.3)
+        // Logic handled by NavigationManager & SwiftData; kept for backward compatibility
+    }
+
+    // MARK: - User Authentication Actions
+    
+    @MainActor
+    func signIn(email: String, password: String) async throws {
+        let auth = try await apiService.signIn(email: email, password: password)
         
-        let startLat = startLocation?.latitude ?? 0.0
-        let startLon = startLocation?.longitude ?? 0.0
-        let endLat = endLocation?.latitude ?? 0.0
-        let endLon = endLocation?.longitude ?? 0.0
+        UserDefaults.standard.set(auth.token, forKey: "pocketbase_token")
+        UserDefaults.standard.set(auth.record.email, forKey: "logged_in_user_email")
+        UserDefaults.standard.set(auth.record.id, forKey: "logged_in_user_id")
         
-        let newRoute = PastRoute(
-            id: UUID().uuidString,
-            startPointName: startName,
-            endPointName: endName,
-            startLat: startLat,
-            startLon: startLon,
-            endLat: endLat,
-            endLon: endLon,
-            totalLengthMeters: route.totalLengthMeters,
-            totalEstimatedTimeSeconds: Double(durationSeconds),
-            status: "completed",
-            startedAt: ISO8601DateFormatter().string(from: Date()),
-            endedAt: ISO8601DateFormatter().string(from: Date()),
-            endedLat: endLat,
-            endedLon: endLon,
-            actualDistanceMeters: route.totalLengthMeters,
-            actualDurationSeconds: Double(durationSeconds),
-            averageSpeed: 5.3,
-            deviceType: "ios",
-            weights: weights
-        )
+        // Enable Cloud Sync by default on sign-in
+        UserDefaults.standard.set(true, forKey: "cloud_sync_enabled")
         
-        pastRoutes.insert(newRoute, at: 0)
+        self.pocketbaseToken = auth.token
+        self.currentUserEmail = auth.record.email
+        self.currentUserId = auth.record.id
+        
+        // Trigger batch upload of any pending offline guest routes
+        if let sync = syncService {
+            await sync.syncPendingRoutes()
+        }
+        
+        // Reload telemetry history for the logged-in user
+        await loadHistory()
+    }
+    
+    @MainActor
+    func signUp(email: String, password: String) async throws {
+        // 1. Create the account
+        try await apiService.signUp(email: email, password: password)
+        
+        // 2. Automatically log in after successful registration
+        try await signIn(email: email, password: password)
+    }
+    
+    @MainActor
+    func signOut() {
+        // Clear synced authenticated user routes from local DB on sign-out
+        if let sync = syncService {
+            sync.clearUserSyncedData()
+        }
+        
+        UserDefaults.standard.removeObject(forKey: "pocketbase_token")
+        UserDefaults.standard.removeObject(forKey: "logged_in_user_email")
+        UserDefaults.standard.removeObject(forKey: "logged_in_user_id")
+        UserDefaults.standard.removeObject(forKey: "cloud_sync_enabled") // Reset toggle
+        
+        self.pocketbaseToken = nil
+        self.currentUserEmail = nil
+        self.currentUserId = nil
+        
+        // Reload telemetry history for the guest
+        Task {
+            await loadHistory()
+        }
     }
 }

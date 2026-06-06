@@ -13,6 +13,6 @@ git pull
 
 echo "🏗️ Rebuilding and restarting containers..."
 cd "$DOCKER_DIR"
-docker compose up -d --build boulder-backend boulder-frontend
+docker compose up -d --build --force-recreate boulder-backend boulder-frontend
 
 echo "✅ Update complete!"

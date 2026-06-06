@@ -403,3 +403,30 @@ struct DetailedRouteResponse: Codable {
     }
 }
 
+// MARK: - User Authentication Models
+
+/// Response containing the PocketBase user auth token and user details.
+struct AuthResponse: Codable {
+    let token: String
+    let record: UserRecord
+}
+
+/// Details of the authenticated user.
+struct UserRecord: Codable {
+    let id: String
+    let email: String
+}
+
+/// Detailed PocketBase response on validation failures or generic server errors.
+struct PocketBaseError: Codable {
+    let code: Int
+    let message: String
+    let data: [String: PocketBaseErrorDetail]?
+}
+
+struct PocketBaseErrorDetail: Codable {
+    let code: String
+    let message: String
+}
+
+

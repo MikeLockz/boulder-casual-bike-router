@@ -1964,6 +1964,13 @@ async function initAuth() {
             if (authData && authData.token && authData.record) {
                 currentUser = authData.record;
                 await loadUserProfileConfig();
+                
+                // Set default Cloud Sync settings on load if not defined
+                if (localStorage.getItem("cloud_sync_enabled") === null) {
+                    localStorage.setItem("cloud_sync_enabled", "true");
+                }
+                // Auto sync pending local/guest routes on load
+                setTimeout(() => syncPendingRoutes(), 500);
             }
         } catch (e) {
             console.error("Failed to parse stored auth session:", e);
@@ -2009,6 +2016,22 @@ function updateAuthUI() {
         }
         if (userEmailSpan) {
             userEmailSpan.textContent = currentUser.email;
+        }
+        
+        // Setup Cloud Sync Toggle checkbox state
+        const syncToggle = document.getElementById("toggle-cloud-sync");
+        if (syncToggle) {
+            const syncSetting = localStorage.getItem("cloud_sync_enabled");
+            syncToggle.checked = (syncSetting === null || syncSetting === "true");
+            
+            syncToggle.onchange = function() {
+                localStorage.setItem("cloud_sync_enabled", this.checked ? "true" : "false");
+                if (this.checked) {
+                    syncPendingRoutes();
+                } else {
+                    loadHistory();
+                }
+            };
         }
     } else {
         loggedInDiv.classList.add("hidden");
@@ -2161,6 +2184,16 @@ function initAuthEventListeners() {
             currentUser = null;
             localStorage.removeItem("pocketbase_auth");
             
+            // Clear authenticated synced routes on logout
+            let localRoutes = [];
+            try {
+                localRoutes = JSON.parse(localStorage.getItem("boulder_local_routes") || "[]");
+            } catch (e) {}
+            // Keep only unauthenticated (guest) routes (where userId is null) and unsynced ones
+            localRoutes = localRoutes.filter(r => r.userId === null && !r.synced);
+            localStorage.setItem("boulder_local_routes", JSON.stringify(localRoutes));
+            localStorage.removeItem("cloud_sync_enabled"); // Reset toggle settings
+            
             // Reset weights to system defaults on logout
             Object.keys(SYSTEM_DEFAULT_WEIGHTS).forEach(key => {
                 DEFAULT_WEIGHTS[key] = SYSTEM_DEFAULT_WEIGHTS[key];
@@ -2202,9 +2235,15 @@ async function performLogin(email, password) {
         record: data.record
     }));
     
+    // Enable Cloud Sync by default on sign-in
+    localStorage.setItem("cloud_sync_enabled", "true");
+    
     currentUser = data.record;
     await loadUserProfileConfig();
     updateAuthUI();
+    
+    // Sync any pending routes immediately after login
+    await syncPendingRoutes();
 }
 
 function parsePocketBaseError(data) {
@@ -2447,120 +2486,240 @@ async function resetUserWeights() {
 let historyMarkers = [];
 let historyPolylines = [];
 
+async function syncPendingRoutes() {
+    const storedAuth = localStorage.getItem("pocketbase_auth");
+    if (!storedAuth) return;
+    
+    const syncSetting = localStorage.getItem("cloud_sync_enabled");
+    const isSyncEnabled = (syncSetting === null || syncSetting === "true");
+    if (!isSyncEnabled) return;
+    
+    let localRoutes = [];
+    try {
+        localRoutes = JSON.parse(localStorage.getItem("boulder_local_routes") || "[]");
+    } catch (e) {}
+    
+    const unsynced = localRoutes.filter(r => !r.synced);
+    if (unsynced.length === 0) return;
+    
+    console.log(`[Sync] Found ${unsynced.length} unsynced local routes. Syncing...`);
+    
+    try {
+        const authData = JSON.parse(storedAuth);
+        const token = authData.token;
+        const userId = authData.record.id;
+        
+        const payload = {
+            routes: unsynced.map(r => ({
+                local_id: r.local_id || r.id,
+                start_lat: r.start_lat,
+                start_lon: r.start_lon,
+                end_lat: r.end_lat,
+                end_lon: r.end_lon,
+                start_point_name: r.start_point_name,
+                end_point_name: r.end_point_name,
+                route_geojson: r.route_geojson,
+                total_length_meters: r.total_length_meters,
+                total_estimated_time_seconds: r.total_estimated_time_seconds,
+                status: r.status,
+                started_at: r.started_at,
+                ended_at: r.ended_at,
+                ended_lat: r.ended_lat,
+                ended_lon: r.ended_lon,
+                actual_distance_meters: r.actual_distance_meters,
+                actual_duration_seconds: r.actual_duration_seconds,
+                average_speed: r.average_speed,
+                device_type: "web",
+                weights: r.weights || {},
+                ticks: r.ticks || []
+            }))
+        };
+        
+        const base = typeof API_BASE !== "undefined" ? API_BASE : "";
+        const resp = await fetch(`${base}/api/navigation/sync`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        if (resp.ok) {
+            const data = await resp.json();
+            const syncedMap = {};
+            data.synced_routes.forEach(item => {
+                syncedMap[item.local_id] = item.server_id;
+            });
+            
+            localRoutes.forEach(r => {
+                const localId = r.local_id || r.id;
+                if (syncedMap[localId]) {
+                    r.synced = true;
+                    r.userId = userId;
+                }
+            });
+            
+            localStorage.setItem("boulder_local_routes", JSON.stringify(localRoutes));
+            console.log("[Sync] Batch sync successfully completed.");
+            loadHistory();
+        } else {
+            console.error("[Sync] Sync request returned status:", resp.status);
+        }
+    } catch (err) {
+        console.error("[Sync] Sync error:", err);
+    }
+}
+window.syncPendingRoutes = syncPendingRoutes;
+
 async function loadHistory() {
     const historyListContainer = document.getElementById("history-list");
     if (!historyListContainer) return;
     
-    const headers = {};
     const storedAuth = localStorage.getItem("pocketbase_auth");
     let user = null;
+    let token = null;
     if (storedAuth) {
         try {
             const authData = JSON.parse(storedAuth);
             if (authData && authData.token && authData.record) {
-                headers["Authorization"] = `Bearer ${authData.token}`;
                 user = authData.record;
+                token = authData.token;
             }
         } catch(e) {}
     }
     
-    let url = `${API_BASE}/api/navigation/history`;
-    if (!user) {
-        let guestHistory = [];
+    const syncSetting = localStorage.getItem("cloud_sync_enabled");
+    const isSyncEnabled = user && (syncSetting === null || syncSetting === "true");
+    
+    let serverRoutes = [];
+    
+    if (isSyncEnabled) {
         try {
-            guestHistory = JSON.parse(localStorage.getItem("guest_routes_history") || "[]");
-        } catch (e) {}
-        if (guestHistory.length === 0) {
-            historyListContainer.innerHTML = '<p class="subtext" style="color: var(--text-secondary); text-align: center; padding: 20px 0;">No saved adventures yet. Log some routes to see them here.</p>';
-            return;
+            const url = `${API_BASE}/api/navigation/history`;
+            const response = await fetch(url, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                serverRoutes = await response.json();
+            }
+        } catch (err) {
+            console.error("Failed to load telemetry history from server:", err);
         }
-        url += `?route_ids=${guestHistory.join(",")}`;
     }
     
+    let localRoutes = [];
     try {
-        const response = await fetch(url, { headers });
-        if (!response.ok) throw new Error("Failed to fetch history");
-        const items = await response.json();
-        
-        if (items.length === 0) {
-            historyListContainer.innerHTML = '<p class="subtext" style="color: var(--text-secondary); text-align: center; padding: 20px 0;">No saved adventures yet. Log some routes to see them here.</p>';
-            return;
+        localRoutes = JSON.parse(localStorage.getItem("boulder_local_routes") || "[]");
+    } catch (e) {}
+    
+    const filteredLocalRoutes = localRoutes.filter(r => {
+        if (user) {
+            return r.userId === user.id || r.userId === null;
+        } else {
+            return r.userId === null;
         }
-        
-        historyListContainer.innerHTML = "";
-        items.forEach(item => {
-            const el = document.createElement("div");
-            el.className = "history-item";
-            el.setAttribute("data-id", item.id);
-            
-            const date = new Date(item.started_at).toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit"
-            });
-            
-            const miles = (item.total_length_meters / 1609.34).toFixed(2);
-            const actualMiles = item.actual_distance_meters ? (item.actual_distance_meters / 1609.34).toFixed(2) : "0.00";
-            
-            const durMin = Math.ceil(item.total_estimated_time_seconds / 60);
-            const actualDurMin = item.actual_duration_seconds ? Math.ceil(item.actual_duration_seconds / 60) : 0;
-            
-            const speedMph = item.average_speed ? (item.average_speed * 2.23694).toFixed(1) : "0.0";
-            
-            el.innerHTML = `
-                <div class="history-header">
-                    <span class="history-title">${item.end_point_name} Route</span>
-                    <span class="history-date">${date}</span>
-                </div>
-                <div class="history-stats">
-                    <div class="history-stat-box">
-                        <span class="label">Distance</span>
-                        <span class="value">${actualMiles} / ${miles} mi</span>
-                    </div>
-                    <div class="history-stat-box">
-                        <span class="label">Duration</span>
-                        <span class="value">${actualDurMin} / ${durMin} min</span>
-                    </div>
-                    <div class="history-stat-box">
-                        <span class="label">Speed</span>
-                        <span class="value">${speedMph} mph</span>
-                    </div>
-                </div>
-                <div class="history-endpoints">
-                    <div class="history-endpoints-row">
-                        <i class="fa-solid fa-circle-dot"></i>
-                        <span>${item.start_point_name}</span>
-                    </div>
-                    <div class="history-endpoints-row">
-                        <i class="fa-solid fa-circle"></i>
-                        <span>${item.end_point_name}</span>
-                    </div>
-                </div>
-            `;
-            
-            el.addEventListener("click", () => {
-                document.querySelectorAll(".history-item").forEach(x => x.classList.remove("active"));
-                el.classList.add("active");
-                loadHistoryRouteOnMap(item.id);
-            });
-            
-            historyListContainer.appendChild(el);
-        });
-    } catch (err) {
-        console.error("Error loading history:", err);
-        historyListContainer.innerHTML = '<p class="subtext" style="color: #ff1744; text-align: center; padding: 20px 0;">Error loading history.</p>';
+    });
+    
+    const combinedMap = {};
+    filteredLocalRoutes.forEach(r => {
+        combinedMap[r.id] = r;
+    });
+    serverRoutes.forEach(r => {
+        combinedMap[r.id] = r;
+    });
+    
+    const items = Object.values(combinedMap).sort((a, b) => {
+        return new Date(b.started_at) - new Date(a.started_at);
+    });
+    
+    if (items.length === 0) {
+        historyListContainer.innerHTML = '<p class="subtext" style="color: var(--text-secondary); text-align: center; padding: 20px 0;">No saved adventures yet. Log some routes to see them here.</p>';
+        return;
     }
+    
+    historyListContainer.innerHTML = "";
+    items.forEach(item => {
+        const el = document.createElement("div");
+        el.className = "history-item";
+        el.setAttribute("data-id", item.id);
+        
+        const date = new Date(item.started_at).toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit"
+        });
+        
+        const miles = (item.total_length_meters / 1609.34).toFixed(2);
+        const actualMiles = item.actual_distance_meters ? (item.actual_distance_meters / 1609.34).toFixed(2) : "0.00";
+        
+        const durMin = Math.ceil(item.total_estimated_time_seconds / 60);
+        const actualDurMin = item.actual_duration_seconds ? Math.ceil(item.actual_duration_seconds / 60) : 0;
+        
+        const speedMph = item.average_speed ? (item.average_speed * 2.23694).toFixed(1) : "0.0";
+        
+        el.innerHTML = `
+            <div class="history-header">
+                <span class="history-title">${item.end_point_name} Route</span>
+                <span class="history-date">${date}</span>
+            </div>
+            <div class="history-stats">
+                <div class="history-stat-box">
+                    <span class="label">Distance</span>
+                    <span class="value">${actualMiles} / ${miles} mi</span>
+                </div>
+                <div class="history-stat-box">
+                    <span class="label">Duration</span>
+                    <span class="value">${actualDurMin} / ${durMin} min</span>
+                </div>
+                <div class="history-stat-box">
+                    <span class="label">Speed</span>
+                    <span class="value">${speedMph} mph</span>
+                </div>
+            </div>
+            <div class="history-endpoints">
+                <div class="history-endpoints-row">
+                    <i class="fa-solid fa-circle-dot"></i>
+                    <span>${item.start_point_name}</span>
+                </div>
+                <div class="history-endpoints-row">
+                    <i class="fa-solid fa-circle"></i>
+                    <span>${item.end_point_name}</span>
+                </div>
+            </div>
+        `;
+        
+        el.addEventListener("click", () => {
+            document.querySelectorAll(".history-item").forEach(x => x.classList.remove("active"));
+            el.classList.add("active");
+            loadHistoryRouteOnMap(item.id);
+        });
+        
+        historyListContainer.appendChild(el);
+    });
 }
 
 async function loadHistoryRouteOnMap(routeId) {
     clearRoute();
     clearHistoryMapLayers();
     
+    let localRoute = null;
     try {
-        const response = await fetch(`${API_BASE}/api/navigation/${routeId}`);
-        if (!response.ok) throw new Error("Failed to fetch route details");
-        const route = await response.json();
+        const localRoutes = JSON.parse(localStorage.getItem("boulder_local_routes") || "[]");
+        localRoute = localRoutes.find(r => r.id === routeId);
+    } catch (e) {}
+    
+    try {
+        let route;
+        if (localRoute) {
+            route = localRoute;
+            console.log("[History] Loaded route details from local storage cache.");
+        } else {
+            const response = await fetch(`${API_BASE}/api/navigation/${routeId}`);
+            if (!response.ok) throw new Error("Failed to fetch route details");
+            route = await response.json();
+        }
         
         if (route.route_geojson) {
             const geojsonLayer = L.geoJSON(route.route_geojson, {

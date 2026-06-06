@@ -11,6 +11,7 @@ struct MainMapView: View {
     @Binding var isDrawerOpen: Bool
     @State private var locationManager = LocationManager()
     @State private var navigationManager = NavigationManager()
+    @Environment(\.modelContext) private var modelContext
     
     // UI state
     @State private var cameraPosition: MapCameraPosition = .region(
@@ -118,35 +119,43 @@ struct MainMapView: View {
         }
         .onChange(of: locationManager.currentLocation) { _, newLocation in
             if let loc = newLocation {
-                // Auto-initialize starting point to current location if not set yet
-                if viewModel.startLocation == nil {
-                    viewModel.startLocation = loc.coordinate
-                }
-                
-                if navigationManager.isActive {
-                    navigationManager.updateLocation(loc)
-                    updateCameraHeading(loc)
+                DispatchQueue.main.async {
+                    // Auto-initialize starting point to current location if not set yet
+                    if viewModel.startLocation == nil {
+                        viewModel.startLocation = loc.coordinate
+                    }
+                    
+                    if navigationManager.isActive {
+                        navigationManager.updateLocation(loc)
+                        updateCameraHeading(loc)
+                    }
                 }
             }
         }
         .onChange(of: viewModel.startLocation) { _, newLoc in
-            if let loc = newLoc {
-                startLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
-            } else {
-                startLocationText = ""
+            DispatchQueue.main.async {
+                if let loc = newLoc {
+                    startLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
+                } else {
+                    startLocationText = ""
+                }
             }
         }
         .onChange(of: viewModel.endLocation) { _, newLoc in
-            if let loc = newLoc {
-                endLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
-            } else {
-                endLocationText = ""
+            DispatchQueue.main.async {
+                if let loc = newLoc {
+                    endLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
+                } else {
+                    endLocationText = ""
+                }
             }
         }
         .onChange(of: viewModel.routeResponse) { _, newResponse in
             if newResponse != nil {
-                withAnimation {
-                    isSearchExpanded = false
+                DispatchQueue.main.async {
+                    withAnimation {
+                        isSearchExpanded = false
+                    }
                 }
             }
         }
@@ -161,13 +170,15 @@ struct MainMapView: View {
                 let latDelta = abs(startCoord.latitude - endCoord.latitude) * 1.5
                 let lonDelta = abs(startCoord.longitude - endCoord.longitude) * 1.5
                 
-                withAnimation {
-                    cameraPosition = .region(
-                        MKCoordinateRegion(
-                            center: CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon),
-                            span: MKCoordinateSpan(latitudeDelta: max(0.01, latDelta), longitudeDelta: max(0.01, lonDelta))
+                DispatchQueue.main.async {
+                    withAnimation {
+                        cameraPosition = .region(
+                            MKCoordinateRegion(
+                                center: CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon),
+                                span: MKCoordinateSpan(latitudeDelta: max(0.01, latDelta), longitudeDelta: max(0.01, lonDelta))
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -216,7 +227,7 @@ struct MainMapView: View {
         locationManager.isSimulating = false
         #endif
         
-        navigationManager.start(segments: route.segments)
+        navigationManager.start(segments: route.segments, modelContext: modelContext)
         locationManager.startUpdating()
     }
 
