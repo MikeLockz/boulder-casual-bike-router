@@ -371,14 +371,6 @@ function initSliders() {
         }
     });
 
-    const offsetsEditor = document.getElementById("route-offsets-json");
-    if (offsetsEditor) {
-        offsetsEditor.addEventListener("change", () => {
-            if (startMarker && endMarker) {
-                debouncedCalculateRoute();
-            }
-        });
-    }
 }
 
 // Event Listeners for action buttons, presets, and toggle panels
@@ -599,30 +591,12 @@ function getWeightsFromSliders() {
 }
 
 function getRouteOffsetsFromEditor() {
-    const editor = document.getElementById("route-offsets-json");
-    if (!editor) return {};
-    try {
-        const parsed = JSON.parse(editor.value || "{}");
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error("Offsets must be a JSON object.");
-        }
-        const offsets = {};
-        Object.entries(parsed).forEach(([key, value]) => {
-            const numeric = Number(value);
-            if (Number.isFinite(numeric)) offsets[key] = numeric;
-        });
-        return offsets;
-    } catch (err) {
-        showToast("Invalid offsets JSON: " + err.message);
-        return {};
-    }
+    const profile = routeTuningProfiles.find(item => item.local_id === activeRouteTuningProfileId && !item.deleted);
+    return profile?.offsets || {};
 }
 
 function setRouteOffsetsEditor(offsets = {}) {
-    const editor = document.getElementById("route-offsets-json");
-    if (editor) {
-        editor.value = JSON.stringify(offsets || {}, null, 2);
-    }
+    void offsets;
 }
 
 function getAuthSession() {
@@ -789,7 +763,7 @@ async function createRouteTuningProfile() {
         local_id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         name: name.trim(),
         weights: getWeightsFromSliders(),
-        offsets: getRouteOffsetsFromEditor(),
+        offsets: {},
         is_default: getVisibleRouteTuningProfiles().length === 0,
         userId,
         synced: false
@@ -809,7 +783,7 @@ async function saveActiveRouteTuningProfile() {
     profile = {
         ...profile,
         weights: getWeightsFromSliders(),
-        offsets: getRouteOffsetsFromEditor(),
+        offsets: profile.offsets || {},
         synced: false,
         updated_at: new Date().toISOString()
     };

@@ -4,7 +4,6 @@ struct SettingsTabView: View {
     @Bindable var viewModel: MapViewModel
     @State private var isAuthSheetPresented = false
     @State private var newProfileName = "Custom Routing Profile"
-    @State private var offsetsJSON = "{}"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,12 +161,6 @@ struct SettingsTabView: View {
         .sheet(isPresented: $isAuthSheetPresented) {
             AuthView(viewModel: viewModel)
         }
-        .onAppear {
-            offsetsJSON = encodeOffsets(viewModel.routeOffsets)
-        }
-        .onChange(of: viewModel.routeOffsets) { _, newOffsets in
-            offsetsJSON = encodeOffsets(newOffsets)
-        }
     }
 
     private var routeTuningProfileControls: some View {
@@ -201,23 +194,9 @@ struct SettingsTabView: View {
                 .tint(.primaryMint)
             }
 
-            Text("Offsets JSON")
-                .font(.caption)
-                .foregroundColor(.onSurfaceVariant)
-
-            TextEditor(text: $offsetsJSON)
-                .font(.system(size: 12, design: .monospaced))
-                .frame(minHeight: 72)
-                .padding(6)
-                .background(Color.black.opacity(0.18))
-                .cornerRadius(8)
-
             HStack(spacing: 8) {
                 Button("Save") {
-                    if let offsets = decodeOffsets(offsetsJSON) {
-                        viewModel.routeOffsets = offsets
-                        Task { await viewModel.saveActiveRouteTuningProfile() }
-                    }
+                    Task { await viewModel.saveActiveRouteTuningProfile() }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.primaryMint)
@@ -243,27 +222,5 @@ struct SettingsTabView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.onSurfaceVariant.opacity(0.05), lineWidth: 1)
         )
-    }
-
-    private func encodeOffsets(_ offsets: [String: Double]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: offsets, options: [.prettyPrinted]),
-              let string = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return string
-    }
-
-    private func decodeOffsets(_ string: String) -> [String: Double]? {
-        guard let data = string.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        var offsets: [String: Double] = [:]
-        for (key, value) in object {
-            if let number = value as? NSNumber {
-                offsets[key] = number.doubleValue
-            }
-        }
-        return offsets
     }
 }
