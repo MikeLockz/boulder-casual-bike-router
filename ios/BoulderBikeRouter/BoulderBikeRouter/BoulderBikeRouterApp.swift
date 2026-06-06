@@ -4,7 +4,7 @@ import SwiftUI
 struct BoulderBikeRouterApp: App {
     var body: some Scene {
         WindowGroup {
-            MainMapView()
+            MainTabView()
         }
     }
 }

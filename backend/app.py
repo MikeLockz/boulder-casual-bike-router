@@ -1592,6 +1592,233 @@ def pocketbase_status():
             "error": str(e)
         }), 500
 
+def get_auth_user_id(auth_header):
+    if not auth_header:
+        return None
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    try:
+        resp = requests.post(f"{pb_url}/api/collections/users/auth-refresh", headers={"Authorization": auth_header}, timeout=2)
+        if resp.status_code == 200:
+            user_data = resp.json()
+            return user_data.get("record", {}).get("id")
+    except Exception as e:
+        print(f"Error validating token with PocketBase: {e}")
+    return None
+
+@app.route("/api/navigation/start", methods=["POST", "OPTIONS"])
+def nav_start():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    data = request.json or {}
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    
+    auth_header = request.headers.get("Authorization")
+    user_id = get_auth_user_id(auth_header)
+    
+    import datetime
+    now_str = datetime.datetime.utcnow().isoformat() + "Z"
+    
+    pb_payload = {
+        "user": user_id,
+        "start_lat": data.get("start_lat"),
+        "start_lon": data.get("start_lon"),
+        "end_lat": data.get("end_lat"),
+        "end_lon": data.get("end_lon"),
+        "start_point_name": data.get("start_point_name") or "Start Point",
+        "end_point_name": data.get("end_point_name") or "Destination",
+        "route_geojson": data.get("route_geojson"),
+        "total_length_meters": data.get("total_length_meters", 0),
+        "total_estimated_time_seconds": data.get("total_estimated_time_seconds", 0),
+        "status": "active",
+        "started_at": now_str,
+        "device_type": data.get("device_type") or "web",
+        "weights": data.get("weights") or {}
+    }
+    
+    try:
+        resp = requests.post(f"{pb_url}/api/collections/navigation_routes/records", json=pb_payload, timeout=5)
+        if resp.status_code in [200, 201]:
+            record = resp.json()
+            return jsonify({
+                "status": "success",
+                "route_id": record.get("id"),
+                "started_at": record.get("started_at")
+            }), 201
+        else:
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/navigation/<route_id>/tick", methods=["POST", "OPTIONS"])
+def nav_tick(route_id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    data = request.json or {}
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    
+    import datetime
+    ts = data.get("timestamp") or datetime.datetime.utcnow().isoformat() + "Z"
+    
+    pb_payload = {
+        "route": route_id,
+        "lat": data.get("lat"),
+        "lon": data.get("lon"),
+        "speed": data.get("speed"),
+        "direction": data.get("direction"),
+        "accuracy": data.get("accuracy"),
+        "altitude": data.get("altitude"),
+        "timestamp": ts,
+        "battery_level": data.get("battery_level")
+    }
+    
+    try:
+        resp = requests.post(f"{pb_url}/api/collections/navigation_ticks/records", json=pb_payload, timeout=5)
+        if resp.status_code in [200, 201]:
+            return jsonify({"status": "success"}), 201
+        else:
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/navigation/<route_id>/end", methods=["POST", "OPTIONS"])
+def nav_end(route_id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+    data = request.json or {}
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    
+    import datetime
+    now_str = data.get("ended_at") or datetime.datetime.utcnow().isoformat() + "Z"
+    status = data.get("status") or "completed"
+    
+    ticks = []
+    started_at_str = None
+    try:
+        route_resp = requests.get(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", timeout=5)
+        if route_resp.status_code == 200:
+            route_record = route_resp.json()
+            started_at_str = route_record.get("started_at")
+        
+        ticks_resp = requests.get(f"{pb_url}/api/collections/navigation_ticks/records?filter=route='{route_id}'&sort=timestamp&limit=5000", timeout=5)
+        if ticks_resp.status_code == 200:
+            ticks = ticks_resp.json().get("items", [])
+    except Exception as e:
+        print(f"Error fetching ticks for calculations: {e}")
+    
+    actual_distance = 0.0
+    if len(ticks) >= 2:
+        for i in range(len(ticks) - 1):
+            pt1 = (ticks[i].get("lat"), ticks[i].get("lon"))
+            pt2 = (ticks[i+1].get("lat"), ticks[i+1].get("lon"))
+            if pt1[0] is not None and pt1[1] is not None and pt2[0] is not None and pt2[1] is not None:
+                actual_distance += haversine_distance(pt1, pt2)
+    
+    actual_duration = 0.0
+    
+    def parse_pb_date(d_str):
+        if not d_str: return None
+        d_str = d_str.replace("Z", "")
+        if "." in d_str:
+            d_str = d_str.split(".")[0]
+        return datetime.datetime.fromisoformat(d_str)
+
+    if started_at_str:
+        try:
+            t_start = parse_pb_date(started_at_str)
+            t_end = parse_pb_date(now_str)
+            if t_start and t_end:
+                actual_duration = (t_end - t_start).total_seconds()
+        except Exception as e:
+            print(f"Error parsing dates: {e}")
+            
+    if actual_duration <= 0 and len(ticks) >= 2:
+        try:
+            t_start = parse_pb_date(ticks[0].get("timestamp"))
+            t_end = parse_pb_date(ticks[-1].get("timestamp"))
+            if t_start and t_end:
+                actual_duration = (t_end - t_start).total_seconds()
+        except:
+            pass
+    
+    if actual_duration <= 0:
+        actual_duration = 0.0
+        
+    average_speed = actual_distance / actual_duration if actual_duration > 0 else 0.0
+    
+    pb_update = {
+        "status": status,
+        "ended_at": now_str,
+        "ended_lat": data.get("ended_lat"),
+        "ended_lon": data.get("ended_lon"),
+        "actual_distance_meters": actual_distance,
+        "actual_duration_seconds": actual_duration,
+        "average_speed": average_speed
+    }
+    
+    try:
+        resp = requests.patch(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", json=pb_update, timeout=5)
+        if resp.status_code == 200:
+            return jsonify({
+                "status": "success",
+                "actual_distance_meters": actual_distance,
+                "actual_duration_seconds": actual_duration,
+                "average_speed": average_speed
+            })
+        else:
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/navigation/history", methods=["GET"])
+def nav_history():
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    
+    auth_header = request.headers.get("Authorization")
+    user_id = get_auth_user_id(auth_header)
+    
+    if user_id:
+        url = f"{pb_url}/api/collections/navigation_routes/records?filter=user='{user_id}'&sort=-started_at&limit=50"
+    else:
+        route_ids_str = request.args.get("route_ids")
+        if route_ids_str:
+            route_ids = [rid.strip() for rid in route_ids_str.split(",") if rid.strip()]
+            if not route_ids:
+                return jsonify([])
+            filter_query = "||".join([f"id='{rid}'" for rid in route_ids])
+            url = f"{pb_url}/api/collections/navigation_routes/records?filter=({filter_query})&sort=-started_at&limit=50"
+        else:
+            return jsonify([])
+            
+    try:
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            items = resp.json().get("items", [])
+            return jsonify(items)
+        else:
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/navigation/<route_id>", methods=["GET"])
+def nav_detail(route_id):
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    
+    try:
+        route_resp = requests.get(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", timeout=5)
+        if route_resp.status_code != 200:
+            return jsonify({"error": "Route not found"}), 404
+        route = route_resp.json()
+        
+        ticks_resp = requests.get(f"{pb_url}/api/collections/navigation_ticks/records?filter=route='{route_id}'&sort=timestamp&limit=5000", timeout=5)
+        ticks = []
+        if ticks_resp.status_code == 200:
+            ticks = ticks_resp.json().get("items", [])
+            
+        route["ticks"] = ticks
+        return jsonify(route)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     # Pre-build graph on startup
     build_graph()

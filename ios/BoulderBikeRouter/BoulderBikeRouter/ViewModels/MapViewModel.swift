@@ -27,12 +27,40 @@ class MapViewModel {
     var isConfigLoaded: Bool = false
     var isWeightsLocked: Bool = false
 
+    // Navigation preferences
+    var avoidTolls: Bool = false
+    var avoidHighways: Bool = false
+    
+    // History list
+    var pastRoutes: [PastRoute] = []
+    
+    // Telemetry selection state
+    var selectedHistoryRoute: PastRoute? = nil
+    var selectedHistoryRouteTicks: [NavigationTick] = []
+    var selectedHistoryRouteDetails: DetailedRouteResponse? = nil
+
     // Services
     private let apiService = APIService()
 
     init() {
         // Populate local fallback configurations so the app works offline
         loadLocalFallbacks()
+        
+        // Load telemetry history asynchronously
+        Task {
+            await loadHistory()
+        }
+        
+        // Listen for updates when a route ends
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("TelemetryRouteEnded"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task {
+                await self?.loadHistory()
+            }
+        }
     }
 
     /// Primary dynamic bootstrapper loaded on view appear
@@ -183,5 +211,81 @@ class MapViewModel {
             newWeights[w.key] = w.default
         }
         self.weights = newWeights
+    }
+
+    /// Load telemetry route history from the backend.
+    func loadHistory() async {
+        do {
+            let guestHistory = UserDefaults.standard.stringArray(forKey: "guest_routes_history")
+            let routes = try await apiService.fetchHistory(routeIds: guestHistory)
+            await MainActor.run {
+                self.pastRoutes = routes
+                print("Loaded \(routes.count) past routes from telemetry history.")
+            }
+        } catch {
+            print("Failed to load telemetry history: \(error.localizedDescription)")
+        }
+    }
+    
+    func selectHistoryRoute(_ route: PastRoute) async {
+        do {
+            let details = try await apiService.fetchRouteDetails(routeId: route.id)
+            await MainActor.run {
+                self.selectedHistoryRoute = route
+                self.selectedHistoryRouteTicks = details.ticks
+                self.selectedHistoryRouteDetails = details
+                
+                // Clear active planner route when viewing history detail
+                self.startLocation = nil
+                self.endLocation = nil
+                self.routeResponse = nil
+            }
+        } catch {
+            print("Failed to load history route details: \(error.localizedDescription)")
+        }
+    }
+    
+    func clearHistorySelection() {
+        self.selectedHistoryRoute = nil
+        self.selectedHistoryRouteTicks = []
+        self.selectedHistoryRouteDetails = nil
+    }
+
+    func recordCompletedRoute() {
+        guard let route = routeResponse else { return }
+        let name = selectedPresetName ?? selectedPlayground?.name ?? "Custom Route"
+        let startName = selectedPresetName != nil ? "Start Point" : "Dropped Pin"
+        let endName = selectedPlayground?.name ?? "Destination"
+        let distanceMiles = route.totalLengthMeters / 1609.34
+        let durationSeconds = Int(route.totalLengthMeters / 5.3)
+        
+        let startLat = startLocation?.latitude ?? 0.0
+        let startLon = startLocation?.longitude ?? 0.0
+        let endLat = endLocation?.latitude ?? 0.0
+        let endLon = endLocation?.longitude ?? 0.0
+        
+        let newRoute = PastRoute(
+            id: UUID().uuidString,
+            startPointName: startName,
+            endPointName: endName,
+            startLat: startLat,
+            startLon: startLon,
+            endLat: endLat,
+            endLon: endLon,
+            totalLengthMeters: route.totalLengthMeters,
+            totalEstimatedTimeSeconds: Double(durationSeconds),
+            status: "completed",
+            startedAt: ISO8601DateFormatter().string(from: Date()),
+            endedAt: ISO8601DateFormatter().string(from: Date()),
+            endedLat: endLat,
+            endedLon: endLon,
+            actualDistanceMeters: route.totalLengthMeters,
+            actualDurationSeconds: Double(durationSeconds),
+            averageSpeed: 5.3,
+            deviceType: "ios",
+            weights: weights
+        )
+        
+        pastRoutes.insert(newRoute, at: 0)
     }
 }

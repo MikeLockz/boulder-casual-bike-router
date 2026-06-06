@@ -18,7 +18,10 @@ const Navigation = (() => {
         mapPaneEl: null,
         userMarker: null,
         headingConeMarker: null,
-        originalMapState: null // { center, zoom, bearing } to restore on exit
+        originalMapState: null, // { center, zoom, bearing } to restore on exit
+        routeId: null,
+        lastLoggedPosition: null,
+        lastLoggedTime: 0
     };
 
     // --- Constants ---
@@ -97,6 +100,9 @@ const Navigation = (() => {
 
         // Request wake lock
         requestWakeLock();
+        
+        // Start route recording
+        startRouteLogging(segments);
 
         // Start GPS
         if ('geolocation' in navigator) {
@@ -138,6 +144,9 @@ const Navigation = (() => {
 
         // Release wake lock
         releaseWakeLock();
+        
+        // End route logging
+        endRouteLogging();
 
         // Remove user marker
         if (state.userMarker && mapInstance) {
@@ -243,6 +252,9 @@ const Navigation = (() => {
 
         // Update bottom bar
         updateBottomBar();
+        
+        // Telemetry logging to backend
+        logTick(smoothLat, smoothLng, accuracy, speed);
     }
 
     function onPositionError(err, mapInstance) {
@@ -753,6 +765,221 @@ const Navigation = (() => {
         }
         const miles = (meters / 1609.34).toFixed(1);
         return `${miles} miles`;
+    }
+
+    // --- Telemetry Logging API Gateway Calls ---
+    function getAuthHeaders() {
+        const headers = {
+            "Content-Type": "application/json"
+        };
+        const storedAuth = localStorage.getItem("pocketbase_auth");
+        if (storedAuth) {
+            try {
+                const authData = JSON.parse(storedAuth);
+                if (authData && authData.token) {
+                    headers["Authorization"] = `Bearer ${authData.token}`;
+                }
+            } catch (e) {
+                console.error("Error reading auth token", e);
+            }
+        }
+        return headers;
+    }
+
+    async function startRouteLogging(segments) {
+        if (!segments || segments.length === 0) return;
+        
+        let totalLength = 0;
+        segments.forEach(seg => totalLength += seg.length);
+        
+        const CASUAL_SPEED_MPS = 4.47;
+        const totalEstimatedTime = totalLength / CASUAL_SPEED_MPS;
+        
+        let startName = "Start Point";
+        let endName = "Destination";
+        
+        const activePreset = document.querySelector(".preset-item.active");
+        if (activePreset) {
+            const nameSpan = activePreset.querySelector(".preset-name");
+            if (nameSpan) {
+                const text = nameSpan.textContent.trim();
+                if (text.includes("➔")) {
+                    const parts = text.split("➔");
+                    startName = parts[0].trim();
+                    endName = parts[1].trim();
+                } else {
+                    endName = text;
+                }
+            }
+        } else {
+            const playSelect = document.getElementById("playground-select");
+            if (playSelect && playSelect.selectedIndex > 0) {
+                endName = playSelect.options[playSelect.selectedIndex].text.trim();
+            }
+        }
+        
+        const routeGeojson = {
+            type: "FeatureCollection",
+            features: segments.map(seg => ({
+                type: "Feature",
+                geometry: {
+                    type: "LineString",
+                    coordinates: seg.coords.map(c => [c[1], c[0]])
+                },
+                properties: {
+                    name: seg.name,
+                    type: seg.type,
+                    length: seg.length
+                }
+            }))
+        };
+        
+        const weights = {};
+        if (typeof getWeightsFromSliders === "function") {
+            Object.assign(weights, getWeightsFromSliders());
+        } else if (typeof DEFAULT_WEIGHTS !== "undefined") {
+            Object.assign(weights, DEFAULT_WEIGHTS);
+        }
+        
+        const startLat = segments[0].coords[0][0];
+        const startLon = segments[0].coords[0][1];
+        const endLat = segments[segments.length - 1].coords[segments[segments.length - 1].coords.length - 1][0];
+        const endLon = segments[segments.length - 1].coords[segments[segments.length - 1].coords.length - 1][1];
+        
+        const payload = {
+            start_lat: startLat,
+            start_lon: startLon,
+            end_lat: endLat,
+            end_lon: endLon,
+            start_point_name: startName,
+            end_point_name: endName,
+            route_geojson: routeGeojson,
+            total_length_meters: totalLength,
+            total_estimated_time_seconds: totalEstimatedTime,
+            device_type: "web",
+            weights: weights
+        };
+        
+        try {
+            const base = typeof API_BASE !== "undefined" ? API_BASE : "";
+            const response = await fetch(`${base}/api/navigation/start`, {
+                method: "POST",
+                headers: getAuthHeaders(),
+                body: JSON.stringify(payload)
+            });
+            if (response.ok) {
+                const data = await response.json();
+                state.routeId = data.route_id;
+                state.lastLoggedTime = Date.now();
+                console.log("[Navigation] Telemetry route created:", state.routeId);
+            }
+        } catch (err) {
+            console.error("[Navigation] Failed to start route recording:", err);
+        }
+    }
+
+    async function logTick(lat, lng, accuracy, speed) {
+        if (!state.routeId) return;
+        
+        const now = Date.now();
+        const timeElapsed = (now - state.lastLoggedTime) / 1000;
+        
+        let shouldLog = false;
+        if (!state.lastLoggedPosition) {
+            shouldLog = true;
+        } else {
+            const dist = getDistance(
+                state.lastLoggedPosition.lat, state.lastLoggedPosition.lng,
+                lat, lng
+            );
+            if (dist >= 2.0 || timeElapsed >= 3.0) {
+                shouldLog = true;
+            }
+        }
+        
+        if (!shouldLog) return;
+        
+        state.lastLoggedPosition = { lat, lng };
+        state.lastLoggedTime = now;
+        
+        const payload = {
+            lat: lat,
+            lon: lng,
+            speed: speed || 0,
+            direction: state.heading || 0,
+            accuracy: accuracy || 0,
+            altitude: 0,
+            timestamp: new Date().toISOString()
+        };
+        
+        try {
+            const base = typeof API_BASE !== "undefined" ? API_BASE : "";
+            await fetch(`${base}/api/navigation/${state.routeId}/tick`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+        } catch (err) {
+            console.error("[Navigation] Failed to log telemetry tick:", err);
+        }
+    }
+
+    async function endRouteLogging() {
+        if (!state.routeId) return;
+        
+        const routeId = state.routeId;
+        state.routeId = null;
+        
+        let status = "cancelled";
+        let finalLat = null;
+        let finalLon = null;
+        
+        if (state.position && state.routeCoords.length > 0) {
+            finalLat = state.position.lat;
+            finalLon = state.position.lng;
+            const dest = state.routeCoords[state.routeCoords.length - 1];
+            const distToDest = getDistance(finalLat, finalLon, dest[0], dest[1]);
+            if (distToDest <= 50.0) {
+                status = "completed";
+            }
+        }
+        
+        const payload = {
+            status: status,
+            ended_lat: finalLat,
+            ended_lon: finalLon,
+            ended_at: new Date().toISOString()
+        };
+        
+        try {
+            const base = typeof API_BASE !== "undefined" ? API_BASE : "";
+            const response = await fetch(`${base}/api/navigation/${routeId}/end`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                console.log("[Navigation] Navigation ended successfully", data);
+                
+                let guestHistory = [];
+                try {
+                    guestHistory = JSON.parse(localStorage.getItem("guest_routes_history") || "[]");
+                } catch (e) {}
+                guestHistory.unshift(routeId);
+                localStorage.setItem("guest_routes_history", JSON.stringify(guestHistory));
+                
+                if (window.loadHistory) {
+                    window.loadHistory();
+                }
+            }
+        } catch (err) {
+            console.error("[Navigation] Failed to stop route recording:", err);
+        }
+        
+        state.lastLoggedPosition = null;
+        state.lastLoggedTime = 0;
     }
 
     // --- Expose public API ---

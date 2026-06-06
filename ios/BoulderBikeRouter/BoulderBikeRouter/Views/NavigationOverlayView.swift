@@ -27,44 +27,54 @@ struct NavigationOverlayView: View {
     // MARK: - Subviews
 
     private var topBannerView: some View {
-        HStack(spacing: 16) {
-            // Maneuver symbol icon
-            ZStack {
-                Circle()
-                    .fill(Color.emeraldGreen.opacity(0.15))
-                    .frame(width: 50, height: 50)
-                
-                Image(systemName: maneuver?.iconName ?? "location.fill")
-                    .font(.title2)
-                    .foregroundColor(.emeraldGreen)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(maneuver?.instruction ?? "Preparing navigation...")
-                    .font(.headline)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .lineLimit(2)
-                
-                if !distanceToNext.isEmpty {
-                    Text(distanceToNext)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.emeraldGreen)
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                // Maneuver symbol icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.primaryMint.opacity(0.15))
+                        .frame(width: 52, height: 52)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primaryMint.opacity(0.3), lineWidth: 1))
+                    
+                    Image(systemName: maneuver?.iconName ?? "location.fill")
+                        .font(.title2)
+                        .foregroundColor(.primaryMint)
                 }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(maneuver?.instruction ?? "Preparing navigation...")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.onSurface)
+                        .lineLimit(2)
+                    
+                    if !distanceToNext.isEmpty {
+                        Text("in \(distanceToNext)")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.primaryMint)
+                    }
+                }
+                Spacer()
             }
-            Spacer()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+            
+            // Progress Line matching mockups
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.white.opacity(0.05))
+                    .frame(height: 5)
+                
+                Rectangle()
+                    .fill(Color.primaryMint)
+                    .frame(width: 200, height: 5) // Mock progress width
+                    .shadow(color: Color.primaryMint.opacity(0.5), radius: 4, x: 0, y: 0)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color(white: 0.1))
-                .opacity(0.95)
-        )
+        .background(Color.forestDeep)
+        .cornerRadius(12)
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primaryMint.opacity(0.2), lineWidth: 1)
         )
         .padding(.horizontal, 16)
     }
@@ -76,25 +86,35 @@ struct NavigationOverlayView: View {
                     Image(systemName: "play.circle.fill")
                     Text("GPS Replay Simulation Active")
                 }
-                .font(.caption2)
-                .fontWeight(.bold)
-                .foregroundColor(.amberGold)
+                .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
-                .background(Color.amberGold.opacity(0.15))
+                .background(Color.surfaceElevated.opacity(0.8))
             }
 
             HStack {
                 // Trip ETA & Distance
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(eta)
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(formatDuration(remainingDistance))
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(.primaryMint)
+                        Text("min")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.primaryMint)
+                    }
                     
-                    Text(remainingDistance)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    HStack(spacing: 6) {
+                        Text(remainingDistance)
+                            .font(.system(size: 14))
+                            .foregroundColor(.onSurfaceVariant)
+                        Text("•")
+                            .font(.caption2)
+                            .foregroundColor(.onSurfaceVariant)
+                        Text(eta)
+                            .font(.system(size: 14))
+                            .foregroundColor(.onSurfaceVariant)
+                    }
                 }
                 
                 Spacer()
@@ -107,35 +127,55 @@ struct NavigationOverlayView: View {
                             .frame(width: 44, height: 44)
                         
                         Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.3.fill")
-                            .foregroundColor(.white)
+                            .foregroundColor(.onSurface)
                             .font(.title3)
                     }
                 }
+                .padding(.trailing, 8)
                 
-                // Exit navigation button
+                // Exit navigation button (End)
                 Button(action: onExit) {
-                    HStack {
-                        Image(systemName: "xmark.circle.fill")
+                    HStack(spacing: 6) {
+                        Image(systemName: "close")
+                            .font(.caption)
                         Text("End")
+                            .font(.system(size: 16, weight: .bold))
                     }
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .padding(.vertical, 12)
-                    .padding(.horizontal, 20)
-                    .background(Color.crimsonRed)
-                    .cornerRadius(10)
+                    .foregroundColor(.onErrorContainer)
+                    .padding(.vertical, 14)
+                    .padding(.horizontal, 22)
+                    .background(Color.errorContainer)
+                    .cornerRadius(28)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 28)
+                            .stroke(Color.errorRose.opacity(0.3), lineWidth: 1)
+                    )
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            .padding(.top, 16)
+            .padding(.bottom, safeAreaBottomPadding)
         }
-        .background(
-            Color(white: 0.1)
-                .opacity(0.95)
-                .background(.ultraThinMaterial)
-        )
+        .background(Color.surfaceContainer)
         .cornerRadius(16, corners: [.topLeft, .topRight])
-        .shadow(color: Color.black.opacity(0.3), radius: 10, x: 0, y: -5)
+        .shadow(color: Color.black.opacity(0.4), radius: 12, x: 0, y: -4)
+    }
+    
+    // Help helper for duration estimation formatting from string
+    private func formatDuration(_ text: String) -> String {
+        // Simple extraction: e.g. "2.4 miles" -> 12 mins
+        let val = text.replacingOccurrences(of: " miles", with: "").replacingOccurrences(of: " mile", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let d = Double(val) {
+            return String(Int(d * 5))
+        }
+        return "8"
+    }
+
+    private var safeAreaBottomPadding: CGFloat {
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let safeAreaInsets = windowScene.windows.first?.safeAreaInsets {
+            return safeAreaInsets.bottom > 0 ? safeAreaInsets.bottom : 16
+        }
+        return 16
     }
 }

@@ -578,6 +578,20 @@ function clearRoute() {
     }
     updatePlaygroundStartText("Cedar Ave");
     clearInspectHighlight();
+
+    // Reset history states
+    if (typeof clearHistoryMapLayers === "function") {
+        clearHistoryMapLayers();
+    }
+    const costContainer = document.getElementById("info-cost-container");
+    if (costContainer) {
+        costContainer.style.display = "";
+    }
+    const startNavBtn = document.getElementById("btn-start-nav");
+    if (startNavBtn) {
+        startNavBtn.style.display = "";
+    }
+    document.querySelectorAll(".history-item").forEach(x => x.classList.remove("active"));
 }
 
 function clearWaypoints() {
@@ -2011,6 +2025,9 @@ function updateAuthUI() {
         if (confirmField) confirmField.value = "";
         hideAuthMessages();
     }
+    
+    // Load navigation adventures history
+    loadHistory();
 }
 
 function hideAuthMessages() {
@@ -2424,4 +2441,229 @@ async function resetUserWeights() {
     if (startMarker && endMarker) {
         calculateRoute();
     }
+}
+
+// --- Adventure History Rendering & Telemetry ---
+let historyMarkers = [];
+let historyPolylines = [];
+
+async function loadHistory() {
+    const historyListContainer = document.getElementById("history-list");
+    if (!historyListContainer) return;
+    
+    const headers = {};
+    const storedAuth = localStorage.getItem("pocketbase_auth");
+    let user = null;
+    if (storedAuth) {
+        try {
+            const authData = JSON.parse(storedAuth);
+            if (authData && authData.token && authData.record) {
+                headers["Authorization"] = `Bearer ${authData.token}`;
+                user = authData.record;
+            }
+        } catch(e) {}
+    }
+    
+    let url = `${API_BASE}/api/navigation/history`;
+    if (!user) {
+        let guestHistory = [];
+        try {
+            guestHistory = JSON.parse(localStorage.getItem("guest_routes_history") || "[]");
+        } catch (e) {}
+        if (guestHistory.length === 0) {
+            historyListContainer.innerHTML = '<p class="subtext" style="color: var(--text-secondary); text-align: center; padding: 20px 0;">No saved adventures yet. Log some routes to see them here.</p>';
+            return;
+        }
+        url += `?route_ids=${guestHistory.join(",")}`;
+    }
+    
+    try {
+        const response = await fetch(url, { headers });
+        if (!response.ok) throw new Error("Failed to fetch history");
+        const items = await response.json();
+        
+        if (items.length === 0) {
+            historyListContainer.innerHTML = '<p class="subtext" style="color: var(--text-secondary); text-align: center; padding: 20px 0;">No saved adventures yet. Log some routes to see them here.</p>';
+            return;
+        }
+        
+        historyListContainer.innerHTML = "";
+        items.forEach(item => {
+            const el = document.createElement("div");
+            el.className = "history-item";
+            el.setAttribute("data-id", item.id);
+            
+            const date = new Date(item.started_at).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+            });
+            
+            const miles = (item.total_length_meters / 1609.34).toFixed(2);
+            const actualMiles = item.actual_distance_meters ? (item.actual_distance_meters / 1609.34).toFixed(2) : "0.00";
+            
+            const durMin = Math.ceil(item.total_estimated_time_seconds / 60);
+            const actualDurMin = item.actual_duration_seconds ? Math.ceil(item.actual_duration_seconds / 60) : 0;
+            
+            const speedMph = item.average_speed ? (item.average_speed * 2.23694).toFixed(1) : "0.0";
+            
+            el.innerHTML = `
+                <div class="history-header">
+                    <span class="history-title">${item.end_point_name} Route</span>
+                    <span class="history-date">${date}</span>
+                </div>
+                <div class="history-stats">
+                    <div class="history-stat-box">
+                        <span class="label">Distance</span>
+                        <span class="value">${actualMiles} / ${miles} mi</span>
+                    </div>
+                    <div class="history-stat-box">
+                        <span class="label">Duration</span>
+                        <span class="value">${actualDurMin} / ${durMin} min</span>
+                    </div>
+                    <div class="history-stat-box">
+                        <span class="label">Speed</span>
+                        <span class="value">${speedMph} mph</span>
+                    </div>
+                </div>
+                <div class="history-endpoints">
+                    <div class="history-endpoints-row">
+                        <i class="fa-solid fa-circle-dot"></i>
+                        <span>${item.start_point_name}</span>
+                    </div>
+                    <div class="history-endpoints-row">
+                        <i class="fa-solid fa-circle"></i>
+                        <span>${item.end_point_name}</span>
+                    </div>
+                </div>
+            `;
+            
+            el.addEventListener("click", () => {
+                document.querySelectorAll(".history-item").forEach(x => x.classList.remove("active"));
+                el.classList.add("active");
+                loadHistoryRouteOnMap(item.id);
+            });
+            
+            historyListContainer.appendChild(el);
+        });
+    } catch (err) {
+        console.error("Error loading history:", err);
+        historyListContainer.innerHTML = '<p class="subtext" style="color: #ff1744; text-align: center; padding: 20px 0;">Error loading history.</p>';
+    }
+}
+
+async function loadHistoryRouteOnMap(routeId) {
+    clearRoute();
+    clearHistoryMapLayers();
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/navigation/${routeId}`);
+        if (!response.ok) throw new Error("Failed to fetch route details");
+        const route = await response.json();
+        
+        if (route.route_geojson) {
+            const geojsonLayer = L.geoJSON(route.route_geojson, {
+                style: function (feature) {
+                    return {
+                        color: "#94a3b8",
+                        weight: 4,
+                        opacity: 0.6,
+                        dashArray: "6, 6"
+                    };
+                }
+            }).addTo(map);
+            historyPolylines.push(geojsonLayer);
+        }
+        
+        const startIcon = createCustomIcon("green");
+        const endIcon = createCustomIcon("red");
+        
+        const startMarkerLoc = L.marker([route.start_lat, route.start_lon], { icon: startIcon, interactive: true })
+            .bindPopup(`<strong>Start point:</strong> ${route.start_point_name}`)
+            .addTo(map);
+        historyMarkers.push(startMarkerLoc);
+        
+        const endMarkerLoc = L.marker([route.end_lat, route.end_lon], { icon: endIcon, interactive: true })
+            .bindPopup(`<strong>Destination:</strong> ${route.end_point_name}`)
+            .addTo(map);
+        historyMarkers.push(endMarkerLoc);
+        
+        if (route.ticks && route.ticks.length > 0) {
+            const dotCoords = [];
+            route.ticks.forEach((tick, index) => {
+                const tickLatLng = [tick.lat, tick.lon];
+                dotCoords.push(tickLatLng);
+                
+                const time = new Date(tick.timestamp).toLocaleTimeString();
+                const speed = (tick.speed * 2.23694).toFixed(1);
+                const direction = Math.round(tick.direction);
+                
+                const dotMarker = L.marker(tickLatLng, {
+                    icon: L.divIcon({
+                        html: '<div class="history-dot-inner"></div>',
+                        iconSize: [8, 8],
+                        iconAnchor: [4, 4],
+                        className: 'history-dot-marker'
+                    }),
+                    interactive: true
+                }).bindTooltip(`
+                    <strong>GPS Telemetry Point #${index + 1}</strong><br>
+                    Time: ${time}<br>
+                    Speed: ${speed} mph<br>
+                    Heading: ${direction}°<br>
+                    Accuracy: ${tick.accuracy ? tick.accuracy.toFixed(1) + 'm' : 'N/A'}
+                `, { sticky: true, opacity: 0.9 }).addTo(map);
+                
+                historyMarkers.push(dotMarker);
+            });
+            
+            const bounds = L.latLngBounds(dotCoords.concat([[route.start_lat, route.start_lon], [route.end_lat, route.end_lon]]));
+            map.fitBounds(bounds, { padding: [40, 40] });
+        } else {
+            const bounds = L.latLngBounds([[route.start_lat, route.start_lon], [route.end_lat, route.end_lon]]);
+            map.fitBounds(bounds, { padding: [40, 40] });
+        }
+        
+        const distanceMiles = route.actual_distance_meters ? (route.actual_distance_meters / 1609.34).toFixed(2) : "0.00";
+        const estimatedMiles = (route.total_length_meters / 1609.34).toFixed(2);
+        
+        const durationMin = route.actual_duration_seconds ? Math.ceil(route.actual_duration_seconds / 60) : 0;
+        const estimatedMin = Math.ceil(route.total_estimated_time_seconds / 60);
+        
+        const avgSpeedMph = route.average_speed ? (route.average_speed * 2.23694).toFixed(1) : "0.0";
+        
+        document.getElementById("info-distance").innerHTML = `
+            <strong>Actual:</strong> ${distanceMiles} mi <span style="font-size:11px; color:var(--text-secondary);">(Est: ${estimatedMiles} mi)</span><br>
+            <strong>Duration:</strong> ${durationMin} min <span style="font-size:11px; color:var(--text-secondary);">(Est: ${estimatedMin} min)</span><br>
+            <strong>Avg Speed:</strong> ${avgSpeedMph} mph
+        `;
+        
+        const costContainer = document.getElementById("info-cost-container");
+        if (costContainer) {
+            costContainer.style.display = "none";
+        }
+        
+        const startNavBtn = document.getElementById("btn-start-nav");
+        if (startNavBtn) {
+            startNavBtn.style.display = "none";
+        }
+        const tbtContainer = document.getElementById("turn-by-turn-container");
+        if (tbtContainer) {
+            tbtContainer.classList.add("hidden");
+        }
+        
+        document.getElementById("route-info").classList.remove("hidden");
+        
+    } catch (err) {
+        console.error("Error drawing history route:", err);
+        alert("Unable to draw history route telemetry on map.");
+    }
+}
+
+function clearHistoryMapLayers() {
+    historyMarkers.forEach(m => map.removeLayer(m));
+    historyMarkers = [];
+    historyPolylines.forEach(p => map.removeLayer(p));
+    historyPolylines = [];
 }

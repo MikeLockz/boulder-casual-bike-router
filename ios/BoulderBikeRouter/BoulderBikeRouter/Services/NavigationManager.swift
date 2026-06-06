@@ -36,6 +36,12 @@ class NavigationManager {
     private var segments: [RouteSegment] = []
     private let speechSynthesizer = AVSpeechSynthesizer()
     
+    // Telemetry properties
+    private var activeRouteId: String? = nil
+    private var lastLoggedLocation: CLLocation? = nil
+    private var lastLoggedTime: Date? = nil
+    private let apiService = APIService()
+    
     // Proximity triggers to prevent repeating announcements
     private var announcedPre = Set<Int>()
     private var announcedConfirm = Set<Int>()
@@ -60,6 +66,61 @@ class NavigationManager {
         
         speak("Starting navigation to destination. Stay safe.")
         updateOverlay(distanceFromStart: 0)
+        
+        // Setup battery monitoring
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        
+        // Send start request asynchronously
+        let startLat = segments.first?.coords.first?.first ?? 0.0
+        let startLon = segments.first?.coords.first?.last ?? 0.0
+        
+        let lastSegment = segments.last
+        let lastCoord = lastSegment?.coords.last
+        let endLat = lastCoord?.first ?? 0.0
+        let endLon = lastCoord?.last ?? 0.0
+        
+        let totalLength = segments.reduce(0.0) { $0 + $1.length }
+        let estTime = totalLength / casualSpeedMps
+        
+        let features = segments.map { seg -> GeoJSONFeature in
+            let geometry = GeoJSONGeometry(type: "LineString", coordinates: [seg.coords])
+            let props = [
+                "name": seg.name,
+                "type": seg.type,
+                "length": String(seg.length)
+            ]
+            return GeoJSONFeature(type: "Feature", geometry: geometry, properties: props)
+        }
+        let geojson = GeoJSONFeatureCollection(type: "FeatureCollection", features: features)
+        
+        let weights = [String: Double]()
+        
+        let startReq = NavigationStartRequest(
+            startLat: startLat,
+            startLon: startLon,
+            endLat: endLat,
+            endLon: endLon,
+            startPointName: "Start Point",
+            endPointName: segments.last?.name ?? "Destination",
+            routeGeojson: geojson,
+            totalLengthMeters: totalLength,
+            totalEstimatedTimeSeconds: estTime,
+            deviceType: "ios",
+            weights: weights
+        )
+        
+        Task {
+            do {
+                let rId = try await apiService.startNavigation(request: startReq)
+                await MainActor.run {
+                    self.activeRouteId = rId
+                    self.lastLoggedTime = Date()
+                    print("[NavigationManager] Telemetry route started: \(rId)")
+                }
+            } catch {
+                print("[NavigationManager] Failed to start telemetry route: \(error.localizedDescription)")
+            }
+        }
     }
 
     func stop() {
@@ -73,6 +134,57 @@ class NavigationManager {
         UIApplication.shared.isIdleTimerDisabled = false
         
         speak("Navigation ended.")
+        
+        // End telemetry session
+        if let rId = activeRouteId {
+            let now = Date()
+            let isoFormatter = ISO8601DateFormatter()
+            let endedAtStr = isoFormatter.string(from: now)
+            
+            var status = "cancelled"
+            var finalLat: Double? = nil
+            var finalLon: Double? = nil
+            
+            if let currentLoc = lastLoggedLocation {
+                finalLat = currentLoc.coordinate.latitude
+                finalLon = currentLoc.coordinate.longitude
+                if let dest = routeCoords.last {
+                    let destLoc = CLLocation(latitude: dest.latitude, longitude: dest.longitude)
+                    let dist = currentLoc.distance(from: destLoc)
+                    if dist <= 50.0 {
+                        status = "completed"
+                    }
+                }
+            }
+            
+            let endReq = NavigationEndRequest(
+                status: status,
+                endedLat: finalLat,
+                endedLon: finalLon,
+                endedAt: endedAtStr
+            )
+            
+            Task {
+                do {
+                    try await apiService.endNavigation(routeId: rId, request: endReq)
+                    print("[NavigationManager] Telemetry route closed successfully.")
+                    
+                    await MainActor.run {
+                        let savedHist = UserDefaults.standard.stringArray(forKey: "guest_routes_history") ?? []
+                        var newHist = savedHist
+                        newHist.insert(rId, at: 0)
+                        UserDefaults.standard.set(newHist, forKey: "guest_routes_history")
+                        
+                        NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: nil)
+                    }
+                } catch {
+                    print("[NavigationManager] Failed to end telemetry route: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        lastLoggedLocation = nil
+        lastLoggedTime = nil
     }
 
     func toggleMute() {
@@ -109,6 +221,9 @@ class NavigationManager {
 
         // Check proximity to maneuvers
         checkManeuversProximity(userLocation: location, closestRouteIdx: closestIdx)
+        
+        // Log telemetry tick
+        logLocationTick(location)
     }
 
     private func checkManeuversProximity(userLocation: CLLocation, closestRouteIdx: Int) {
@@ -322,5 +437,58 @@ class NavigationManager {
         let y = sin(dLon) * cos(lat2)
         let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
         return (atan2(y, x) * 180.0 / .pi + 360.0).truncatingRemainder(dividingBy: 360.0)
+    }
+
+    private func logLocationTick(_ location: CLLocation) {
+        guard let routeId = activeRouteId else { return }
+        
+        let now = Date()
+        if let lastTime = lastLoggedTime {
+            let timeElapsed = now.timeIntervalSince(lastTime)
+            
+            var shouldLog = false
+            if let lastLoc = lastLoggedLocation {
+                let dist = location.distance(from: lastLoc)
+                if dist >= 2.0 || timeElapsed >= 3.0 {
+                    shouldLog = true
+                }
+            } else {
+                shouldLog = true
+            }
+            
+            if !shouldLog { return }
+        } else {
+            lastLoggedTime = now
+        }
+        
+        self.lastLoggedLocation = location
+        self.lastLoggedTime = now
+        
+        let speed = location.speed >= 0 ? location.speed : 0.0
+        let heading = location.course >= 0 ? location.course : 0.0
+        let accuracy = location.horizontalAccuracy
+        let altitude = location.altitude
+        
+        let isoFormatter = ISO8601DateFormatter()
+        let timestampStr = isoFormatter.string(from: location.timestamp)
+        
+        let tickReq = NavigationTickRequest(
+            lat: location.coordinate.latitude,
+            lon: location.coordinate.longitude,
+            speed: speed,
+            direction: heading,
+            accuracy: accuracy,
+            altitude: altitude,
+            timestamp: timestampStr,
+            batteryLevel: Double(UIDevice.current.batteryLevel)
+        )
+        
+        Task {
+            do {
+                try await apiService.sendLocationTick(routeId: routeId, request: tickReq)
+            } catch {
+                print("[NavigationManager] Failed to send telemetry tick: \(error.localizedDescription)")
+            }
+        }
     }
 }

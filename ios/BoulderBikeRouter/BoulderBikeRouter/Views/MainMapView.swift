@@ -1,8 +1,14 @@
 import SwiftUI
 import MapKit
 
+enum MapSelectionTarget {
+    case start
+    case end
+}
+
 struct MainMapView: View {
-    @State private var viewModel = MapViewModel()
+    var viewModel: MapViewModel
+    @Binding var isDrawerOpen: Bool
     @State private var locationManager = LocationManager()
     @State private var navigationManager = NavigationManager()
     
@@ -13,112 +19,62 @@ struct MainMapView: View {
             span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
         )
     )
-    @State private var isPanelCollapsed: Bool = false
     @State private var showSettingsModal: Bool = false
+    @State private var isSearchExpanded: Bool = false
+    @State private var mapSelectionMode: MapSelectionTarget? = nil
+    @State private var startLocationText: String = ""
+    @State private var endLocationText: String = ""
 
     var body: some View {
         ZStack(alignment: .bottom) {
             // 1. Native Map canvas
             MapReader { proxy in
-                Map(position: $cameraPosition, interactionModes: .all) {
-                    // Start Marker
-                    if let start = viewModel.startLocation {
-                        Annotation("Start", coordinate: start, anchor: .bottom) {
-                            markerView(color: .emeraldGreen)
-                        }
-                    }
-                    
-                    // Destination Marker
-                    if let end = viewModel.endLocation {
-                        Annotation("Destination", coordinate: end, anchor: .bottom) {
-                            markerView(color: .crimsonRed)
-                        }
-                    }
-
-                    // Render computed route path polylines
-                    if let route = viewModel.routeResponse {
-                        ForEach(route.segments) { segment in
-                            MapPolyline(coordinates: segment.clCoordinates)
-                                .stroke(infraColor(for: segment.type), lineWidth: 6)
-                        }
-                    }
-
-                    // Render waypoints as minor circles
-                    ForEach(0..<viewModel.waypoints.count, id: \.self) { idx in
-                        Annotation("", coordinate: viewModel.waypoints[idx]) {
-                            Circle()
-                                .fill(Color.white)
-                                .frame(width: 10, height: 10)
-                                .shadow(radius: 2)
-                        }
-                    }
-
-                    // User Location Dot
-                    if let userLoc = locationManager.currentLocation {
-                        Annotation("User Location", coordinate: userLoc.coordinate) {
-                            UserLocationMarker(heading: locationManager.currentHeading)
-                        }
-                    }
-                }
-                .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
-                .onTapGesture { screenPoint in
-                    // Tap to set markers
-                    if let coordinate = proxy.convert(screenPoint, from: .local) {
-                        handleMapTap(at: coordinate)
-                    }
-                }
+                mapCanvas(proxy: proxy)
             }
             .ignoresSafeArea()
 
-            // 2. Locate Me Button (floating on map)
+            // 2. Map HUD / UI Controls when navigation is NOT active
             if !navigationManager.isActive {
+                // Top Search / Route Planner Bar
+                VStack {
+                    if let historyRoute = viewModel.selectedHistoryRoute {
+                        historySelectionBanner(historyRoute)
+                    } else if mapSelectionMode != nil {
+                        mapSelectionBanner
+                    } else if isSearchExpanded {
+                        routePlanningPanel
+                    } else {
+                        collapsedSearchBar
+                    }
+                    Spacer()
+                }
+                
+                // Locate Me Button
                 VStack {
                     HStack {
                         Spacer()
                         Button(action: locateUser) {
                             ZStack {
                                 Circle()
-                                    .fill(Color(white: 0.15).opacity(0.85))
+                                    .fill(Color.surfaceElevated.opacity(0.95))
                                     .frame(width: 44, height: 44)
                                     .shadow(radius: 4)
+                                    .overlay(Circle().stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
                                 
                                 Image(systemName: "location.fill")
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.primaryMint)
                                     .font(.title3)
                             }
                         }
                         .padding(.trailing, 16)
-                        .padding(.top, 60) // Safe Area margin
+                        .padding(.bottom, viewModel.routeResponse != nil ? 140 : 40)
                     }
-                    Spacer()
                 }
-            }
-
-            // 3. Control Panel overlay (slide-over sheet)
-            if !navigationManager.isActive {
-                VStack {
-                    Spacer()
-                    ControlPanelView(
-                        isCollapsed: $isPanelCollapsed,
-                        selectedPresetId: $viewModel.selectedPresetName,
-                        selectedPlayground: $viewModel.selectedPlayground,
-                        presets: viewModel.presets,
-                        weightsMetadata: viewModel.weightsMetadata,
-                        playgrounds: viewModel.playgroundsList,
-                        weights: $viewModel.weights,
-                        isWeightsLocked: viewModel.isWeightsLocked,
-                        onResetWeights: { viewModel.resetWeights() },
-                        showOfficialRoutes: $viewModel.showOfficialRoutesLayer,
-                        routeDistance: viewModel.routeResponse.map { $0.totalLengthMeters / 1609.34 },
-                        routeCost: viewModel.routeResponse?.totalWeight,
-                        maneuvers: navigationManager.maneuvers,
-                        onStartNavigation: startNavigation,
-                        onSelectPreset: { viewModel.selectPreset($0) }
-                    )
-                    .frame(maxHeight: isPanelCollapsed ? 80 : 500)
-                }
+                
+                // Bottom Route Overview Card
+                routeOverviewCard
             } else {
-                // 4. Navigation HUD Overlay
+                // 3. Navigation HUD Overlay
                 NavigationOverlayView(
                     maneuver: navigationManager.currentBannerManeuver,
                     distanceToNext: navigationManager.distanceToNextManeuverString,
@@ -148,20 +104,70 @@ struct MainMapView: View {
             }
         }
         .onAppear {
-            Task {
-                await viewModel.loadConfiguration()
-                if locationManager.authorizationStatus == .notDetermined {
-                    showSettingsModal = true
-                } else {
-                    locationManager.startUpdating()
-                }
+            if locationManager.authorizationStatus == .notDetermined {
+                showSettingsModal = true
+            } else {
+                locationManager.startUpdating()
+            }
+            if let start = viewModel.startLocation {
+                startLocationText = String(format: "%.4f, %.4f", start.latitude, start.longitude)
+            }
+            if let end = viewModel.endLocation {
+                endLocationText = String(format: "%.4f, %.4f", end.latitude, end.longitude)
             }
         }
         .onChange(of: locationManager.currentLocation) { _, newLocation in
             if let loc = newLocation {
+                // Auto-initialize starting point to current location if not set yet
+                if viewModel.startLocation == nil {
+                    viewModel.startLocation = loc.coordinate
+                }
+                
                 if navigationManager.isActive {
                     navigationManager.updateLocation(loc)
                     updateCameraHeading(loc)
+                }
+            }
+        }
+        .onChange(of: viewModel.startLocation) { _, newLoc in
+            if let loc = newLoc {
+                startLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
+            } else {
+                startLocationText = ""
+            }
+        }
+        .onChange(of: viewModel.endLocation) { _, newLoc in
+            if let loc = newLoc {
+                endLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
+            } else {
+                endLocationText = ""
+            }
+        }
+        .onChange(of: viewModel.routeResponse) { _, newResponse in
+            if newResponse != nil {
+                withAnimation {
+                    isSearchExpanded = false
+                }
+            }
+        }
+        .onChange(of: viewModel.selectedHistoryRoute) { _, newRoute in
+            if let route = newRoute {
+                let startCoord = CLLocationCoordinate2D(latitude: route.startLat, longitude: route.startLon)
+                let endCoord = CLLocationCoordinate2D(latitude: route.endLat, longitude: route.endLon)
+                
+                let centerLat = (startCoord.latitude + endCoord.latitude) / 2
+                let centerLon = (startCoord.longitude + endCoord.longitude) / 2
+                
+                let latDelta = abs(startCoord.latitude - endCoord.latitude) * 1.5
+                let lonDelta = abs(startCoord.longitude - endCoord.longitude) * 1.5
+                
+                withAnimation {
+                    cameraPosition = .region(
+                        MKCoordinateRegion(
+                            center: CLLocationCoordinate2D(latitude: centerLat, longitude: centerLon),
+                            span: MKCoordinateSpan(latitudeDelta: max(0.01, latDelta), longitudeDelta: max(0.01, lonDelta))
+                        )
+                    )
                 }
             }
         }
@@ -170,15 +176,15 @@ struct MainMapView: View {
     // MARK: - Actions
 
     private func handleMapTap(at coordinate: CLLocationCoordinate2D) {
-        if viewModel.startLocation == nil {
-            viewModel.setStartLocation(coordinate)
-        } else if viewModel.endLocation == nil {
-            viewModel.setEndLocation(coordinate)
-        } else {
-            // Already have both, reset to new start
-            viewModel.startLocation = coordinate
-            viewModel.endLocation = nil
-            viewModel.routeResponse = nil
+        guard let mode = mapSelectionMode else { return }
+        withAnimation(.spring()) {
+            switch mode {
+            case .start:
+                viewModel.setStartLocation(coordinate)
+            case .end:
+                viewModel.setEndLocation(coordinate)
+            }
+            mapSelectionMode = nil
         }
     }
 
@@ -204,7 +210,6 @@ struct MainMapView: View {
         let routeCoords = route.segments.flatMap { $0.clCoordinates }
         locationManager.setSimulationRoute(routeCoords)
         
-        // Start simulated replay if in simulator, otherwise live GPS
         #if targetEnvironment(simulator)
         locationManager.isSimulating = true
         #else
@@ -216,11 +221,14 @@ struct MainMapView: View {
     }
 
     private func stopNavigation() {
+        // Record route in history list
+        viewModel.recordCompletedRoute()
+        
         navigationManager.stop()
         locationManager.stopUpdating()
         locationManager.isSimulating = false
         
-        // Restore normal camera overview
+        // Restore camera
         if let start = viewModel.startLocation {
             withAnimation {
                 cameraPosition = .region(
@@ -234,11 +242,8 @@ struct MainMapView: View {
     }
 
     private func startDemoReplay() {
-        // Load default North Boulder preset
         if let preset = viewModel.presets.first {
             viewModel.selectPreset(preset)
-            
-            // Wait shortly for route calculation then navigate
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 self.locationManager.isSimulating = true
                 self.startNavigation()
@@ -251,9 +256,9 @@ struct MainMapView: View {
             cameraPosition = .camera(
                 MapCamera(
                     centerCoordinate: location.coordinate,
-                    distance: 300, // Close up 3D view
+                    distance: 300,
                     heading: location.course >= 0 ? location.course : 0,
-                    pitch: 60.0 // 3D tilt view
+                    pitch: 60.0
                 )
             )
         }
@@ -271,14 +276,357 @@ struct MainMapView: View {
 
     private func infraColor(for type: String) -> Color {
         switch type {
-        case "separated_path": return .emeraldGreen
-        case "residential": return .emeraldGreen.opacity(0.8)
-        case "sharrow_minor": return .amberGold
-        case "sidewalk": return .cyanTeal
-        case "busy_with_lane": return .deepOrange
-        case "busy_with_sharrow": return .crimsonRed
-        default: return .purpleAccent
+        case "separated_path": return .primaryMint
+        case "residential": return .primaryMint.opacity(0.8)
+        case "sharrow_minor": return .secondary
+        case "sidewalk": return .secondary.opacity(0.8)
+        case "busy_with_lane": return .errorRose
+        case "busy_with_sharrow": return .errorRose.opacity(0.8)
+        default: return .onSurfaceVariant
         }
+    }
+    
+    // MARK: - Route Planner Helpers
+    
+    private var collapsedSearchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.primaryMint)
+            
+            Text(viewModel.endLocation == nil ? "Where to?" : "Route Planned")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(viewModel.endLocation == nil ? .onSurfaceVariant : .onSurface)
+            
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.surfaceElevated.opacity(0.95))
+        .cornerRadius(24)
+        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+        .onTapGesture {
+            withAnimation(.spring()) {
+                isSearchExpanded = true
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 50)
+    }
+    
+    private var routePlanningPanel: some View {
+        VStack(spacing: 14) {
+            HStack {
+                Text("Route Planner")
+                    .font(.headline)
+                    .foregroundColor(.mintGlow)
+                
+                Spacer()
+                
+                Button(action: {
+                    withAnimation(.spring()) {
+                        isSearchExpanded = false
+                    }
+                }) {
+                    Image(systemName: "xmark")
+                        .foregroundColor(.onSurfaceVariant)
+                        .padding(6)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(Circle())
+                }
+            }
+            
+            VStack(spacing: 12) {
+                // Start Location Input Row
+                HStack(spacing: 10) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(.primaryMint)
+                    
+                    TextField("Start Location (lat, lon)", text: $startLocationText, onCommit: {
+                        if let coord = parseCoordinate(from: startLocationText) {
+                            viewModel.setStartLocation(coord)
+                        }
+                    })
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.system(size: 14))
+                    .foregroundColor(.onSurface)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        if let userLoc = locationManager.currentLocation {
+                            viewModel.setStartLocation(userLoc.coordinate)
+                        }
+                    }) {
+                        Image(systemName: "location.fill")
+                            .foregroundColor(.primaryMint)
+                    }
+                    
+                    Button(action: {
+                        withAnimation {
+                            mapSelectionMode = .start
+                        }
+                    }) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .foregroundColor(mapSelectionMode == .start ? .mintGlow : .onSurfaceVariant)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.forestDeep.opacity(0.5))
+                .cornerRadius(8)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+                
+                // End Location Input Row
+                HStack(spacing: 10) {
+                    Image(systemName: "square.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(.errorRose)
+                    
+                    TextField("Destination (lat, lon)", text: $endLocationText, onCommit: {
+                        if let coord = parseCoordinate(from: endLocationText) {
+                            viewModel.setEndLocation(coord)
+                        }
+                    })
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.system(size: 14))
+                    .foregroundColor(.onSurface)
+                    
+                    Spacer()
+                    
+                    Menu {
+                        ForEach(viewModel.playgroundsList) { pg in
+                            Button(pg.name) {
+                                viewModel.selectPlayground(pg)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "figure.play")
+                            .foregroundColor(.primaryMint)
+                    }
+                    
+                    Button(action: {
+                        withAnimation {
+                            mapSelectionMode = .end
+                        }
+                    }) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .foregroundColor(mapSelectionMode == .end ? .mintGlow : .onSurfaceVariant)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.forestDeep.opacity(0.5))
+                .cornerRadius(8)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+            }
+        }
+        .padding(16)
+        .background(Color.surfaceElevated.opacity(0.95))
+        .cornerRadius(16)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.top, 50)
+    }
+    
+    private func historySelectionBanner(_ route: PastRoute) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundColor(.mintGlow)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(route.name)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.onSurface)
+                Text(String(format: "Actual: %.2f mi (Time: %d min)", route.distanceMiles, route.durationSeconds / 60))
+                    .font(.system(size: 11))
+                    .foregroundColor(.onSurfaceVariant)
+            }
+            
+            Spacer()
+            
+            Button("Close") {
+                withAnimation {
+                    viewModel.clearHistorySelection()
+                }
+            }
+            .font(.system(size: 14, weight: .bold))
+            .foregroundColor(.errorRose)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.surfaceElevated.opacity(0.95))
+        .cornerRadius(16)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.top, 50)
+    }
+
+    private var mapSelectionBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "mappin.and.ellipse")
+                .foregroundColor(.mintGlow)
+            
+            Text(mapSelectionMode == .start ? "Tap Map to Set Start Location" : "Tap Map to Set Destination")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.onSurface)
+            
+            Spacer()
+            
+            Button("Cancel") {
+                withAnimation {
+                    mapSelectionMode = nil
+                }
+            }
+            .font(.system(size: 14, weight: .bold))
+            .foregroundColor(.errorRose)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.surfaceElevated.opacity(0.95))
+        .cornerRadius(24)
+        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.top, 50)
+    }
+    
+    private var routeTitle: String {
+        viewModel.selectedPresetName ?? viewModel.selectedPlayground?.name ?? "Custom Route"
+    }
+
+    @ViewBuilder
+    private var routeOverviewCard: some View {
+        if let route = viewModel.routeResponse {
+            let miles = route.totalLengthMeters / 1609.34
+            let minutes = Int(miles * 5)
+            VStack(spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(routeTitle)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.onSurface)
+                        
+                        HStack(spacing: 12) {
+                            Text("\(minutes) min")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(.primaryMint)
+                            
+                            Text(String(format: "%.1f miles", miles))
+                                .font(.system(size: 14))
+                                .foregroundColor(.onSurfaceVariant)
+                        }
+                    }
+                    Spacer()
+                    
+                    Button(action: startNavigation) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.fill")
+                            Text("Start")
+                        }
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.surfaceDim)
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 20)
+                        .background(Color.primaryMint)
+                        .cornerRadius(24)
+                        .shadow(color: Color.primaryMint.opacity(0.3), radius: 6, x: 0, y: 3)
+                    }
+                }
+            }
+            .padding(20)
+            .background(Color.surfaceElevated.opacity(0.95))
+            .cornerRadius(16)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 24)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+    
+    @ViewBuilder
+    private func mapCanvas(proxy: MapProxy) -> some View {
+        Map(position: $cameraPosition, interactionModes: .all) {
+            // Start Marker
+            if let start = viewModel.startLocation {
+                Annotation("Start", coordinate: start, anchor: .bottom) {
+                    markerView(color: .primaryMint)
+                }
+            } else if let historyRoute = viewModel.selectedHistoryRoute {
+                Annotation("Start", coordinate: CLLocationCoordinate2D(latitude: historyRoute.startLat, longitude: historyRoute.startLon), anchor: .bottom) {
+                    markerView(color: .primaryMint)
+                }
+            }
+            
+            // Destination Marker
+            if let end = viewModel.endLocation {
+                Annotation("Destination", coordinate: end, anchor: .bottom) {
+                    markerView(color: .errorRose)
+                }
+            } else if let historyRoute = viewModel.selectedHistoryRoute {
+                Annotation("Destination", coordinate: CLLocationCoordinate2D(latitude: historyRoute.endLat, longitude: historyRoute.endLon), anchor: .bottom) {
+                    markerView(color: .errorRose)
+                }
+            }
+
+            // Render computed route path polylines
+            if let route = viewModel.routeResponse {
+                ForEach(route.segments) { segment in
+                    MapPolyline(coordinates: segment.clCoordinates)
+                        .stroke(infraColor(for: segment.type), lineWidth: 6)
+                }
+            } else if let details = viewModel.selectedHistoryRouteDetails {
+                ForEach(0..<details.plannedRouteCoordinates.count, id: \.self) { pathIdx in
+                    MapPolyline(coordinates: details.plannedRouteCoordinates[pathIdx])
+                        .stroke(Color.secondary, lineWidth: 4)
+                }
+                
+                ForEach(viewModel.selectedHistoryRouteTicks) { tick in
+                    Annotation("", coordinate: tick.clCoordinate) {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 8, height: 8)
+                            .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                            .shadow(radius: 2)
+                    }
+                }
+            }
+
+            // Render waypoints as minor circles
+            ForEach(0..<viewModel.waypoints.count, id: \.self) { idx in
+                Annotation("", coordinate: viewModel.waypoints[idx]) {
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 8, height: 8)
+                        .shadow(radius: 2)
+                }
+            }
+
+            // User Location Dot
+            if let userLoc = locationManager.currentLocation {
+                Annotation("User Location", coordinate: userLoc.coordinate) {
+                    UserLocationMarker(heading: locationManager.currentHeading)
+                }
+            }
+        }
+        .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
+        .onTapGesture { screenPoint in
+            // Tap to set markers ONLY in map selection mode
+            if mapSelectionMode != nil {
+                if let coordinate = proxy.convert(screenPoint, from: .local) {
+                    handleMapTap(at: coordinate)
+                }
+            }
+        }
+    }
+    
+    private func parseCoordinate(from text: String) -> CLLocationCoordinate2D? {
+        let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if parts.count == 2,
+           let lat = Double(parts[0]),
+           let lon = Double(parts[1]) {
+            return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+        return nil
     }
 }
 
@@ -289,25 +637,23 @@ struct UserLocationMarker: View {
 
     var body: some View {
         ZStack {
-            // Directional heading cone
             Image(systemName: "triangle.fill")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 16, height: 16)
-                .foregroundColor(.cyanTeal)
+                .frame(width: 14, height: 14)
+                .foregroundColor(.primaryMint)
                 .opacity(0.7)
-                .offset(y: -14)
+                .offset(y: -12)
                 .rotationEffect(.degrees(heading))
             
-            // Center location dot
             Circle()
                 .fill(Color.white)
-                .frame(width: 18, height: 18)
+                .frame(width: 16, height: 16)
                 .shadow(radius: 3)
             
             Circle()
-                .fill(Color.cyanTeal)
-                .frame(width: 12, height: 12)
+                .fill(Color.primaryMint)
+                .frame(width: 10, height: 10)
         }
     }
 }
