@@ -1563,7 +1563,7 @@ def get_bike_routes():
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "POST, GET, PATCH, DELETE, OPTIONS"
     return response
 
 @app.route("/api/pocketbase-status", methods=["GET"])
@@ -1604,6 +1604,105 @@ def get_auth_user_id(auth_header):
     except Exception as e:
         print(f"Error validating token with PocketBase: {e}")
     return None
+
+def clamp_number(value, minimum, maximum):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(minimum, min(maximum, numeric))
+
+def sanitize_route_tuning_payload(data, partial=False):
+    """Validate and normalize route tuning profile payloads."""
+    if not isinstance(data, dict):
+        return None, "Invalid JSON payload"
+
+    payload = {}
+
+    if not partial or "name" in data:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return None, "Profile name is required"
+        payload["name"] = name[:80]
+
+    weight_meta = {item["key"]: item for item in WEIGHTS_METADATA}
+    raw_weights = data.get("weights")
+    if raw_weights is None and not partial:
+        raw_weights = {}
+    if raw_weights is not None:
+        if not isinstance(raw_weights, dict):
+            return None, "weights must be an object"
+        weights = {}
+        for key, value in raw_weights.items():
+            meta = weight_meta.get(key)
+            if not meta:
+                continue
+            numeric = clamp_number(value, float(meta["min"]), float(meta["max"]))
+            if numeric is not None:
+                weights[key] = numeric
+        for key, meta in weight_meta.items():
+            if key not in weights and not partial:
+                weights[key] = float(meta["default"])
+        payload["weights"] = weights
+
+    raw_offsets = data.get("offsets")
+    if raw_offsets is None and not partial:
+        raw_offsets = {}
+    if raw_offsets is not None:
+        if not isinstance(raw_offsets, dict):
+            return None, "offsets must be an object"
+        offsets = {}
+        for key, value in raw_offsets.items():
+            if not isinstance(key, str):
+                continue
+            numeric = clamp_number(value, -1000.0, 1000.0)
+            if numeric is not None:
+                offsets[key[:64]] = numeric
+        payload["offsets"] = offsets
+
+    if "is_default" in data:
+        payload["is_default"] = bool(data.get("is_default"))
+    elif not partial:
+        payload["is_default"] = bool(data.get("isDefault", False))
+
+    return payload, None
+
+def route_tuning_record_to_api(record):
+    return {
+        "id": record.get("id"),
+        "name": record.get("name") or "Routing Profile",
+        "weights": record.get("weights") or {},
+        "offsets": record.get("offsets") or {},
+        "is_default": bool(record.get("is_default")),
+        "created": record.get("created"),
+        "updated": record.get("updated"),
+        "user": record.get("user")
+    }
+
+def clear_other_default_route_tuning_profiles(pb_url, user_id, auth_header, selected_id=None):
+    try:
+        resp = requests.get(
+            f"{pb_url}/api/collections/route_tuning_profiles/records",
+            headers={"Authorization": auth_header} if auth_header else {},
+            params={
+                "filter": f"user='{user_id}' && is_default=true",
+                "limit": 200
+            },
+            timeout=5
+        )
+        if resp.status_code != 200:
+            return
+        for item in resp.json().get("items", []):
+            if selected_id and item.get("id") == selected_id:
+                continue
+            requests.patch(
+                f"{pb_url}/api/collections/route_tuning_profiles/records/{item.get('id')}",
+                json={"is_default": False},
+                headers={"Authorization": auth_header} if auth_header else {},
+                timeout=5
+            )
+    except Exception as e:
+        print(f"[-] Failed to clear default route tuning profiles: {e}")
 
 @app.route("/api/navigation/start", methods=["POST", "OPTIONS"])
 def nav_start():
@@ -1819,6 +1918,205 @@ def nav_detail(route_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/route-tuning-profiles", methods=["GET", "POST", "OPTIONS"])
+def route_tuning_profiles():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    auth_header = request.headers.get("Authorization")
+    user_id = get_auth_user_id(auth_header)
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    headers = {"Authorization": auth_header} if auth_header else {}
+
+    if request.method == "GET":
+        try:
+            resp = requests.get(
+                f"{pb_url}/api/collections/route_tuning_profiles/records",
+                headers=headers,
+                params={
+                    "filter": f"user='{user_id}'",
+                    "limit": 200
+                },
+                timeout=5
+            )
+            if resp.status_code == 200:
+                items = [route_tuning_record_to_api(item) for item in resp.json().get("items", [])]
+                items.sort(key=lambda item: (item.get("is_default", False), item.get("updated") or item.get("created") or ""), reverse=True)
+                return jsonify(items)
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    data = request.json or {}
+    payload, error = sanitize_route_tuning_payload(data, partial=False)
+    if error:
+        return jsonify({"error": error}), 400
+    payload["user"] = user_id
+
+    try:
+        if payload.get("is_default"):
+            clear_other_default_route_tuning_profiles(pb_url, user_id, auth_header)
+        resp = requests.post(
+            f"{pb_url}/api/collections/route_tuning_profiles/records",
+            json=payload,
+            headers=headers,
+            timeout=5
+        )
+        if resp.status_code in [200, 201]:
+            return jsonify(route_tuning_record_to_api(resp.json())), 201
+        return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/route-tuning-profiles/<profile_id>", methods=["PATCH", "DELETE", "OPTIONS"])
+def route_tuning_profile_detail(profile_id):
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    auth_header = request.headers.get("Authorization")
+    user_id = get_auth_user_id(auth_header)
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    headers = {"Authorization": auth_header} if auth_header else {}
+
+    try:
+        existing = requests.get(
+            f"{pb_url}/api/collections/route_tuning_profiles/records/{profile_id}",
+            headers=headers,
+            timeout=5
+        )
+        if existing.status_code != 200:
+            return jsonify({"error": "Profile not found"}), 404
+        if existing.json().get("user") != user_id:
+            return jsonify({"error": "Forbidden"}), 403
+
+        if request.method == "DELETE":
+            resp = requests.delete(
+                f"{pb_url}/api/collections/route_tuning_profiles/records/{profile_id}",
+                headers=headers,
+                timeout=5
+            )
+            if resp.status_code in [200, 204]:
+                return jsonify({"status": "success"})
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+
+        payload, error = sanitize_route_tuning_payload(request.json or {}, partial=True)
+        if error:
+            return jsonify({"error": error}), 400
+        if payload.get("is_default"):
+            clear_other_default_route_tuning_profiles(pb_url, user_id, auth_header, selected_id=profile_id)
+
+        resp = requests.patch(
+            f"{pb_url}/api/collections/route_tuning_profiles/records/{profile_id}",
+            json=payload,
+            headers=headers,
+            timeout=5
+        )
+        if resp.status_code == 200:
+            return jsonify(route_tuning_record_to_api(resp.json()))
+        return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/route-tuning-profiles/sync", methods=["POST", "OPTIONS"])
+def route_tuning_profiles_sync():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    auth_header = request.headers.get("Authorization")
+    user_id = get_auth_user_id(auth_header)
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json or {}
+    profiles = data.get("profiles", [])
+    if not isinstance(profiles, list):
+        return jsonify({"error": "profiles must be a list"}), 400
+
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    headers = {"Authorization": auth_header} if auth_header else {}
+    synced_profiles = []
+    deleted_profiles = []
+
+    for profile in profiles:
+        local_id = profile.get("local_id") or profile.get("id")
+        server_id = profile.get("server_id")
+        operation = profile.get("operation") or ("delete" if profile.get("deleted") else "upsert")
+
+        try:
+            if operation == "delete":
+                if server_id:
+                    resp = requests.delete(
+                        f"{pb_url}/api/collections/route_tuning_profiles/records/{server_id}",
+                        headers=headers,
+                        timeout=5
+                    )
+                    if resp.status_code not in [200, 204, 404]:
+                        print(f"[-] Failed to delete route tuning profile {server_id}: {resp.status_code} {resp.text}")
+                        continue
+                deleted_profiles.append({"local_id": local_id, "server_id": server_id})
+                continue
+
+            payload, error = sanitize_route_tuning_payload(profile, partial=False)
+            if error:
+                print(f"[-] Invalid route tuning profile {local_id}: {error}")
+                continue
+            payload["user"] = user_id
+
+            if payload.get("is_default"):
+                clear_other_default_route_tuning_profiles(pb_url, user_id, auth_header, selected_id=server_id)
+
+            if server_id:
+                existing = requests.get(
+                    f"{pb_url}/api/collections/route_tuning_profiles/records/{server_id}",
+                    headers=headers,
+                    timeout=5
+                )
+                if existing.status_code == 200 and existing.json().get("user") == user_id:
+                    resp = requests.patch(
+                        f"{pb_url}/api/collections/route_tuning_profiles/records/{server_id}",
+                        json=payload,
+                        headers=headers,
+                        timeout=5
+                    )
+                else:
+                    resp = requests.post(
+                        f"{pb_url}/api/collections/route_tuning_profiles/records",
+                        json=payload,
+                        headers=headers,
+                        timeout=5
+                    )
+            else:
+                resp = requests.post(
+                    f"{pb_url}/api/collections/route_tuning_profiles/records",
+                    json=payload,
+                    headers=headers,
+                    timeout=5
+                )
+
+            if resp.status_code in [200, 201]:
+                record = route_tuning_record_to_api(resp.json())
+                synced_profiles.append({
+                    "local_id": local_id,
+                    "server_id": record.get("id"),
+                    "profile": record
+                })
+            else:
+                print(f"[-] Failed to sync route tuning profile {local_id}: {resp.status_code} {resp.text}")
+        except Exception as e:
+            print(f"[-] Error syncing route tuning profile {local_id}: {e}")
+
+    return jsonify({
+        "status": "success",
+        "synced_profiles": synced_profiles,
+        "deleted_profiles": deleted_profiles
+    }), 200
+
 @app.route("/api/navigation/sync", methods=["POST", "OPTIONS"])
 def nav_sync():
     if request.method == "OPTIONS":
@@ -1924,4 +2222,3 @@ if __name__ == "__main__":
         print(f"[-] PocketBase connection failed: {e}")
 
     app.run(host="0.0.0.0", port=3001, debug=True)
-

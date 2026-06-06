@@ -9,6 +9,9 @@ class MapViewModel {
     var presets: [PresetConfig] = []
     var weightsMetadata: [WeightConfig] = []
     var weights: [String: Double] = [:]
+    var routeOffsets: [String: Double] = [:]
+    var routeTuningProfiles: [RouteTuningProfile] = []
+    var activeRouteTuningProfileId: String? = UserDefaults.standard.string(forKey: "active_route_tuning_profile_id")
 
     // Map markers and route state
     var startLocation: CLLocationCoordinate2D?
@@ -43,6 +46,8 @@ class MapViewModel {
             if modelContext != nil {
                 Task {
                     await syncService?.syncPendingRoutes()
+                    await syncService?.syncPendingRouteTuningProfiles()
+                    await loadRouteTuningProfiles()
                     await loadHistory()
                 }
             }
@@ -63,6 +68,8 @@ class MapViewModel {
             if newValue {
                 Task {
                     await syncService?.syncPendingRoutes()
+                    await syncService?.syncPendingRouteTuningProfiles()
+                    await loadRouteTuningProfiles()
                     await loadHistory()
                 }
             }
@@ -108,6 +115,8 @@ class MapViewModel {
         ) { [weak self] _ in
             Task {
                 await self?.syncService?.syncPendingRoutes()
+                await self?.syncService?.syncPendingRouteTuningProfiles()
+                await self?.loadRouteTuningProfiles()
                 await self?.loadHistory()
             }
         }
@@ -137,6 +146,7 @@ class MapViewModel {
             await MainActor.run {
                 self.playgroundsList = playgrounds
             }
+            await loadRouteTuningProfiles()
         } catch {
             print("Failed to load configurations from API backend. Using local fallbacks. Error: \(error.localizedDescription)")
             await MainActor.run {
@@ -198,9 +208,196 @@ class MapViewModel {
             newWeights[w.key] = w.default
         }
         self.weights = newWeights
+        self.routeOffsets = [:]
         
         Task {
             await fetchRoute()
+        }
+    }
+
+    func loadRouteTuningProfiles() async {
+        let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
+        let isSyncActive = isUserLoggedIn && isCloudSyncEnabled
+
+        if isSyncActive {
+            await syncService?.syncPendingRouteTuningProfiles()
+        }
+
+        if isSyncActive, let context = modelContext {
+            do {
+                let serverProfiles = try await apiService.fetchRouteTuningProfiles()
+                let descriptor = FetchDescriptor<LocalRouteTuningProfile>()
+                let existingProfiles = try context.fetch(descriptor)
+
+                for serverProfile in serverProfiles {
+                    if let existing = existingProfiles.first(where: { $0.serverId == serverProfile.id || $0.id == serverProfile.id }) {
+                        existing.serverId = serverProfile.id
+                        existing.name = serverProfile.name
+                        existing.weights = serverProfile.weights
+                        existing.offsets = serverProfile.offsets
+                        existing.isDefault = serverProfile.isDefault
+                        existing.userId = currentUserId
+                        existing.synced = true
+                        existing.deleted = false
+                        existing.updatedAt = Date()
+                    } else {
+                        context.insert(LocalRouteTuningProfile(
+                            id: serverProfile.id,
+                            serverId: serverProfile.id,
+                            name: serverProfile.name,
+                            weights: serverProfile.weights,
+                            offsets: serverProfile.offsets,
+                            isDefault: serverProfile.isDefault,
+                            userId: currentUserId,
+                            synced: true
+                        ))
+                    }
+                }
+                try context.save()
+            } catch {
+                print("Failed to load route tuning profiles from server: \(error.localizedDescription)")
+            }
+        }
+
+        guard let context = modelContext else { return }
+        do {
+            let descriptor = FetchDescriptor<LocalRouteTuningProfile>(
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+            )
+            let profiles = try context.fetch(descriptor)
+                .filter { profile in
+                    if profile.deleted { return false }
+                    if let userId = currentUserId {
+                        return profile.userId == userId || profile.userId == nil
+                    }
+                    return profile.userId == nil
+                }
+                .map(\.toRouteTuningProfile)
+
+            await MainActor.run {
+                self.routeTuningProfiles = profiles
+                if let activeId = self.activeRouteTuningProfileId,
+                   let active = profiles.first(where: { $0.localId == activeId || $0.id == activeId }) {
+                    self.applyRouteTuningProfile(active)
+                } else if let defaultProfile = profiles.first(where: { $0.isDefault }) {
+                    self.applyRouteTuningProfile(defaultProfile)
+                }
+            }
+        } catch {
+            print("Failed to load local route tuning profiles: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    func applyRouteTuningProfile(_ profile: RouteTuningProfile?) {
+        guard let profile else {
+            activeRouteTuningProfileId = nil
+            UserDefaults.standard.removeObject(forKey: "active_route_tuning_profile_id")
+            resetWeights()
+            return
+        }
+        weights = profile.weights
+        routeOffsets = profile.offsets
+        activeRouteTuningProfileId = profile.localId ?? profile.id
+        UserDefaults.standard.set(activeRouteTuningProfileId, forKey: "active_route_tuning_profile_id")
+        Task {
+            await fetchRoute()
+        }
+    }
+
+    @MainActor
+    func createRouteTuningProfile(name: String) async {
+        guard let context = modelContext else { return }
+        let profile = LocalRouteTuningProfile(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Routing Profile" : name,
+            weights: weights,
+            offsets: routeOffsets,
+            isDefault: routeTuningProfiles.isEmpty,
+            userId: currentUserId,
+            synced: false
+        )
+        context.insert(profile)
+        try? context.save()
+        activeRouteTuningProfileId = profile.id
+        UserDefaults.standard.set(profile.id, forKey: "active_route_tuning_profile_id")
+        if isUserLoggedIn && isCloudSyncEnabled {
+            await syncService?.syncPendingRouteTuningProfiles()
+        }
+        await loadRouteTuningProfiles()
+    }
+
+    @MainActor
+    func saveActiveRouteTuningProfile() async {
+        guard let context = modelContext else { return }
+        guard let activeId = activeRouteTuningProfileId else {
+            await createRouteTuningProfile(name: "Custom Routing Profile")
+            return
+        }
+        do {
+            let descriptor = FetchDescriptor<LocalRouteTuningProfile>()
+            if let profile = try context.fetch(descriptor).first(where: { $0.id == activeId || $0.serverId == activeId }) {
+                profile.weights = weights
+                profile.offsets = routeOffsets
+                profile.synced = false
+                profile.updatedAt = Date()
+                try context.save()
+                if isUserLoggedIn && isCloudSyncEnabled {
+                    await syncService?.syncPendingRouteTuningProfiles()
+                }
+                await loadRouteTuningProfiles()
+            }
+        } catch {
+            print("Failed to save route tuning profile: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    func deleteActiveRouteTuningProfile() async {
+        guard let context = modelContext, let activeId = activeRouteTuningProfileId else { return }
+        do {
+            let descriptor = FetchDescriptor<LocalRouteTuningProfile>()
+            if let profile = try context.fetch(descriptor).first(where: { $0.id == activeId || $0.serverId == activeId }) {
+                if let serverId = profile.serverId, isUserLoggedIn && isCloudSyncEnabled {
+                    try? await apiService.deleteRouteTuningProfile(serverId: serverId)
+                    context.delete(profile)
+                } else if profile.serverId != nil {
+                    profile.deleted = true
+                    profile.synced = false
+                } else {
+                    context.delete(profile)
+                }
+                try context.save()
+            }
+            activeRouteTuningProfileId = nil
+            UserDefaults.standard.removeObject(forKey: "active_route_tuning_profile_id")
+            resetWeights()
+            await loadRouteTuningProfiles()
+        } catch {
+            print("Failed to delete route tuning profile: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    func setActiveRouteTuningProfileDefault() async {
+        guard let context = modelContext, let activeId = activeRouteTuningProfileId else { return }
+        do {
+            let descriptor = FetchDescriptor<LocalRouteTuningProfile>()
+            let profiles = try context.fetch(descriptor)
+            for profile in profiles {
+                let shouldBeDefault = profile.id == activeId || profile.serverId == activeId
+                if profile.isDefault != shouldBeDefault {
+                    profile.isDefault = shouldBeDefault
+                    profile.synced = false
+                    profile.updatedAt = Date()
+                }
+            }
+            try context.save()
+            if isUserLoggedIn && isCloudSyncEnabled {
+                await syncService?.syncPendingRouteTuningProfiles()
+            }
+            await loadRouteTuningProfiles()
+        } catch {
+            print("Failed to update default route tuning profile: \(error.localizedDescription)")
         }
     }
 
@@ -221,7 +418,8 @@ class MapViewModel {
             endLat: end.latitude,
             endLon: end.longitude,
             waypoints: wpsArray,
-            weights: weights
+            weights: weights,
+            offsets: routeOffsets
         )
         
         do {
@@ -417,9 +615,11 @@ class MapViewModel {
         // Trigger batch upload of any pending offline guest routes
         if let sync = syncService {
             await sync.syncPendingRoutes()
+            await sync.syncPendingRouteTuningProfiles()
         }
         
         // Reload telemetry history for the logged-in user
+        await loadRouteTuningProfiles()
         await loadHistory()
     }
     
@@ -443,13 +643,16 @@ class MapViewModel {
         UserDefaults.standard.removeObject(forKey: "logged_in_user_email")
         UserDefaults.standard.removeObject(forKey: "logged_in_user_id")
         UserDefaults.standard.removeObject(forKey: "cloud_sync_enabled") // Reset toggle
+        UserDefaults.standard.removeObject(forKey: "active_route_tuning_profile_id")
         
         self.pocketbaseToken = nil
         self.currentUserEmail = nil
         self.currentUserId = nil
+        self.activeRouteTuningProfileId = nil
         
         // Reload telemetry history for the guest
         Task {
+            await loadRouteTuningProfiles()
             await loadHistory()
         }
     }

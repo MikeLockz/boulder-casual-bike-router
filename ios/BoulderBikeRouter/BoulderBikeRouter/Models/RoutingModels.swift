@@ -35,6 +35,7 @@ struct RouteRequest: Codable {
     let endLon: Double
     let waypoints: [[Double]] // List of [lat, lon] pairs
     let weights: [String: Double]
+    let offsets: [String: Double]?
 
     enum CodingKeys: String, CodingKey {
         case startLat = "start_lat"
@@ -43,6 +44,7 @@ struct RouteRequest: Codable {
         case endLon = "end_lon"
         case waypoints
         case weights
+        case offsets
     }
 }
 
@@ -152,6 +154,31 @@ struct PresetConfig: Codable, Identifiable, Hashable {
 struct BackendConfig: Codable {
     let presets: [PresetConfig]
     let weights: [WeightConfig]
+}
+
+/// User-managed routing weights and offsets profile.
+struct RouteTuningProfile: Codable, Identifiable, Hashable {
+    let id: String
+    let localId: String?
+    let serverId: String?
+    let name: String
+    let weights: [String: Double]
+    let offsets: [String: Double]
+    let isDefault: Bool
+    let userId: String?
+    let synced: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case localId = "local_id"
+        case serverId = "server_id"
+        case name
+        case weights
+        case offsets
+        case isDefault = "is_default"
+        case userId = "user"
+        case synced
+    }
 }
 
 /// Represents a completed route in the navigation history log.
@@ -428,5 +455,3 @@ struct PocketBaseErrorDetail: Codable {
     let code: String
     let message: String
 }
-
-

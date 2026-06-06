@@ -310,6 +310,116 @@ class APIService {
         }
     }
 
+    /// Retrieve authenticated route tuning profiles from the backend.
+    func fetchRouteTuningProfiles() async throws -> [RouteTuningProfile] {
+        guard let baseURL = URL(string: baseURLLabel),
+              let profilesURL = URL(string: "/api/route-tuning-profiles", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: profilesURL)
+        urlRequest.httpMethod = "GET"
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode([RouteTuningProfile].self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    func createRouteTuningProfile(_ profile: RouteTuningProfile) async throws -> RouteTuningProfile {
+        try await sendRouteTuningProfile(profile, method: "POST", profileId: nil)
+    }
+
+    func updateRouteTuningProfile(_ profile: RouteTuningProfile, serverId: String) async throws -> RouteTuningProfile {
+        try await sendRouteTuningProfile(profile, method: "PATCH", profileId: serverId)
+    }
+
+    func deleteRouteTuningProfile(serverId: String) async throws {
+        guard let baseURL = URL(string: baseURLLabel),
+              let profileURL = URL(string: "/api/route-tuning-profiles/\(serverId)", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: profileURL)
+        urlRequest.httpMethod = "DELETE"
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (_, response): (Data, URLResponse)
+        do {
+            (_, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+    }
+
+    private func sendRouteTuningProfile(_ profile: RouteTuningProfile, method: String, profileId: String?) async throws -> RouteTuningProfile {
+        let path = profileId.map { "/api/route-tuning-profiles/\($0)" } ?? "/api/route-tuning-profiles"
+        guard let baseURL = URL(string: baseURLLabel),
+              let profileURL = URL(string: path, relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: profileURL)
+        urlRequest.httpMethod = method
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(profile)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode(RouteTuningProfile.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
     /// Retrieve full details of a specific route, including all GPS ticks.
     func fetchRouteDetails(routeId: String) async throws -> DetailedRouteResponse {
         guard let baseURL = URL(string: baseURLLabel),

@@ -9,6 +9,74 @@ class SyncService {
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
     }
+
+    /// Sync locally edited route tuning profiles when authenticated and cloud sync is enabled.
+    func syncPendingRouteTuningProfiles() async {
+        guard UserDefaults.standard.object(forKey: "cloud_sync_enabled") as? Bool ?? true else {
+            print("[SyncService] Cloud sync disabled, skipping profile sync.")
+            return
+        }
+        guard UserDefaults.standard.string(forKey: "pocketbase_token") != nil,
+              let userId = UserDefaults.standard.string(forKey: "logged_in_user_id") else {
+            print("[SyncService] User is not authenticated, skipping profile sync.")
+            return
+        }
+
+        let descriptor = FetchDescriptor<LocalRouteTuningProfile>(
+            predicate: #Predicate<LocalRouteTuningProfile> { $0.synced == false || $0.deleted == true }
+        )
+
+        do {
+            let pendingProfiles = try modelContext.fetch(descriptor)
+            guard !pendingProfiles.isEmpty else { return }
+
+            for localProfile in pendingProfiles {
+                if localProfile.deleted {
+                    if let serverId = localProfile.serverId {
+                        do {
+                            try await apiService.deleteRouteTuningProfile(serverId: serverId)
+                        } catch {
+                            print("[SyncService] Failed to delete profile \(serverId): \(error.localizedDescription)")
+                            continue
+                        }
+                    }
+                    modelContext.delete(localProfile)
+                    continue
+                }
+
+                let payload = RouteTuningProfile(
+                    id: localProfile.serverId ?? localProfile.id,
+                    localId: localProfile.id,
+                    serverId: localProfile.serverId,
+                    name: localProfile.name,
+                    weights: localProfile.weights,
+                    offsets: localProfile.offsets,
+                    isDefault: localProfile.isDefault,
+                    userId: userId,
+                    synced: false
+                )
+
+                do {
+                    let syncedProfile: RouteTuningProfile
+                    if let serverId = localProfile.serverId {
+                        syncedProfile = try await apiService.updateRouteTuningProfile(payload, serverId: serverId)
+                    } else {
+                        syncedProfile = try await apiService.createRouteTuningProfile(payload)
+                    }
+                    localProfile.serverId = syncedProfile.id
+                    localProfile.userId = userId
+                    localProfile.synced = true
+                    localProfile.deleted = false
+                } catch {
+                    print("[SyncService] Failed to sync route tuning profile \(localProfile.id): \(error.localizedDescription)")
+                }
+            }
+
+            try modelContext.save()
+        } catch {
+            print("[SyncService] Profile sync error: \(error.localizedDescription)")
+        }
+    }
     
     /// Sync any local routes that haven't been synchronized with the remote backend database yet.
     func syncPendingRoutes() async {
@@ -143,9 +211,17 @@ class SyncService {
             for route in userRoutes {
                 modelContext.delete(route)
             }
+
+            let profileDescriptor = FetchDescriptor<LocalRouteTuningProfile>(
+                predicate: #Predicate<LocalRouteTuningProfile> { $0.userId != nil }
+            )
+            let userProfiles = try modelContext.fetch(profileDescriptor)
+            for profile in userProfiles {
+                modelContext.delete(profile)
+            }
             
             try modelContext.save()
-            print("[SyncService] Successfully deleted \(userRoutes.count) authenticated user routes.")
+            print("[SyncService] Successfully deleted \(userRoutes.count) authenticated user routes and \(userProfiles.count) route tuning profiles.")
         } catch {
             print("[SyncService] Failed to clear user data: \(error.localizedDescription)")
         }

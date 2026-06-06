@@ -108,6 +108,10 @@ let DEFAULT_WEIGHTS = {
 };
 
 let SYSTEM_DEFAULT_WEIGHTS = {};
+const ROUTE_TUNING_PROFILES_KEY = "boulder_route_tuning_profiles";
+const ACTIVE_ROUTE_TUNING_PROFILE_KEY = "boulder_active_route_tuning_profile_id";
+let routeTuningProfiles = [];
+let activeRouteTuningProfileId = localStorage.getItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY) || "";
 
 
 // Initialize app when DOM loads
@@ -184,6 +188,7 @@ async function loadBackendConfig() {
         // Initialize sliders and listeners
         initSliders();
         initEventListeners();
+        await loadRouteTuningProfiles();
         console.log("Successfully loaded backend dynamic configurations.");
         
     } catch (err) {
@@ -261,6 +266,7 @@ function fallbackLocalRendering() {
     }
     initSliders();
     initEventListeners();
+    loadRouteTuningProfiles();
 }
 
 // Initialize Leaflet Map
@@ -364,6 +370,15 @@ function initSliders() {
             });
         }
     });
+
+    const offsetsEditor = document.getElementById("route-offsets-json");
+    if (offsetsEditor) {
+        offsetsEditor.addEventListener("change", () => {
+            if (startMarker && endMarker) {
+                debouncedCalculateRoute();
+            }
+        });
+    }
 }
 
 // Event Listeners for action buttons, presets, and toggle panels
@@ -374,7 +389,35 @@ function initEventListeners() {
     // Save to Profile
     const saveProfileBtn = document.getElementById("btn-save-profile");
     if (saveProfileBtn) {
-        saveProfileBtn.addEventListener("click", saveUserProfileConfig);
+        saveProfileBtn.addEventListener("click", saveActiveRouteTuningProfile);
+    }
+
+    const profileSelect = document.getElementById("route-profile-select");
+    if (profileSelect) {
+        profileSelect.addEventListener("change", () => {
+            activeRouteTuningProfileId = profileSelect.value;
+            localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
+            const profile = routeTuningProfiles.find(item => item.local_id === activeRouteTuningProfileId && !item.deleted);
+            applyRouteTuningProfile(profile);
+            if (startMarker && endMarker) {
+                calculateRoute();
+            }
+        });
+    }
+
+    const newProfileBtn = document.getElementById("btn-new-route-profile");
+    if (newProfileBtn) {
+        newProfileBtn.addEventListener("click", createRouteTuningProfile);
+    }
+
+    const deleteProfileBtn = document.getElementById("btn-delete-route-profile");
+    if (deleteProfileBtn) {
+        deleteProfileBtn.addEventListener("click", deleteActiveRouteTuningProfile);
+    }
+
+    const defaultProfileBtn = document.getElementById("btn-set-default-route-profile");
+    if (defaultProfileBtn) {
+        defaultProfileBtn.addEventListener("click", setActiveRouteTuningProfileDefault);
     }
 
     // Panel toggle button floating
@@ -555,6 +598,330 @@ function getWeightsFromSliders() {
     return weights;
 }
 
+function getRouteOffsetsFromEditor() {
+    const editor = document.getElementById("route-offsets-json");
+    if (!editor) return {};
+    try {
+        const parsed = JSON.parse(editor.value || "{}");
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("Offsets must be a JSON object.");
+        }
+        const offsets = {};
+        Object.entries(parsed).forEach(([key, value]) => {
+            const numeric = Number(value);
+            if (Number.isFinite(numeric)) offsets[key] = numeric;
+        });
+        return offsets;
+    } catch (err) {
+        showToast("Invalid offsets JSON: " + err.message);
+        return {};
+    }
+}
+
+function setRouteOffsetsEditor(offsets = {}) {
+    const editor = document.getElementById("route-offsets-json");
+    if (editor) {
+        editor.value = JSON.stringify(offsets || {}, null, 2);
+    }
+}
+
+function getAuthSession() {
+    const storedAuth = localStorage.getItem("pocketbase_auth");
+    if (!storedAuth) return null;
+    try {
+        const authData = JSON.parse(storedAuth);
+        if (authData && authData.token && authData.record) return authData;
+    } catch (e) {}
+    return null;
+}
+
+function getCurrentUserId() {
+    const authData = getAuthSession();
+    return authData?.record?.id || null;
+}
+
+function isCloudSyncActiveForProfiles() {
+    const authData = getAuthSession();
+    const syncSetting = localStorage.getItem("cloud_sync_enabled");
+    return Boolean(authData && (syncSetting === null || syncSetting === "true"));
+}
+
+function getLocalRouteTuningProfiles(includeDeleted = false) {
+    try {
+        const profiles = JSON.parse(localStorage.getItem(ROUTE_TUNING_PROFILES_KEY) || "[]");
+        return Array.isArray(profiles)
+            ? profiles.filter(profile => includeDeleted || !profile.deleted)
+            : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveLocalRouteTuningProfiles(profiles) {
+    localStorage.setItem(ROUTE_TUNING_PROFILES_KEY, JSON.stringify(profiles));
+}
+
+function normalizeRouteTuningProfile(profile, userId = getCurrentUserId()) {
+    const id = profile.local_id || profile.localId || profile.id || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return {
+        local_id: id,
+        id,
+        server_id: profile.server_id || (profile.id && !String(profile.id).startsWith("local-") ? profile.id : null),
+        name: profile.name || "Routing Profile",
+        weights: profile.weights || {},
+        offsets: profile.offsets || {},
+        is_default: Boolean(profile.is_default ?? profile.isDefault),
+        userId: profile.userId ?? profile.user ?? userId ?? null,
+        synced: Boolean(profile.synced),
+        deleted: Boolean(profile.deleted),
+        updated_at: profile.updated_at || profile.updated || new Date().toISOString()
+    };
+}
+
+function getVisibleRouteTuningProfiles() {
+    const userId = getCurrentUserId();
+    return routeTuningProfiles.filter(profile => {
+        if (profile.deleted) return false;
+        if (userId) return profile.userId === userId || profile.userId === null;
+        return profile.userId === null;
+    });
+}
+
+function applyWeightsToSliders(weights = {}) {
+    Object.keys(DEFAULT_WEIGHTS).forEach(key => {
+        const value = weights[key] ?? SYSTEM_DEFAULT_WEIGHTS[key] ?? DEFAULT_WEIGHTS[key];
+        const slider = document.getElementById(`weight-${key}`);
+        const valueSpan = document.getElementById(`val-${key}`);
+        if (slider) slider.value = value;
+        if (valueSpan) valueSpan.textContent = `${Number(value).toFixed(1)}x`;
+    });
+}
+
+function applyRouteTuningProfile(profile) {
+    if (!profile) {
+        applyWeightsToSliders(SYSTEM_DEFAULT_WEIGHTS);
+        setRouteOffsetsEditor({});
+        return;
+    }
+    applyWeightsToSliders(profile.weights || {});
+    setRouteOffsetsEditor(profile.offsets || {});
+}
+
+function renderRouteTuningProfiles() {
+    const select = document.getElementById("route-profile-select");
+    if (!select) return;
+    const visibleProfiles = getVisibleRouteTuningProfiles();
+    select.innerHTML = '<option value="">System Defaults</option>';
+    visibleProfiles.forEach(profile => {
+        const option = document.createElement("option");
+        option.value = profile.local_id;
+        option.textContent = `${profile.is_default ? "★ " : ""}${profile.name}${profile.synced ? "" : " • local"}`;
+        select.appendChild(option);
+    });
+    const hasActive = visibleProfiles.some(profile => profile.local_id === activeRouteTuningProfileId);
+    if (!hasActive) {
+        const defaultProfile = visibleProfiles.find(profile => profile.is_default);
+        activeRouteTuningProfileId = defaultProfile?.local_id || "";
+        localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
+    }
+    select.value = activeRouteTuningProfileId;
+}
+
+async function loadRouteTuningProfiles() {
+    const userId = getCurrentUserId();
+    const localProfiles = getLocalRouteTuningProfiles(true).map(profile => normalizeRouteTuningProfile(profile, profile.userId ?? userId));
+    let merged = localProfiles;
+
+    if (isCloudSyncActiveForProfiles()) {
+        await syncPendingRouteTuningProfiles();
+        const authData = getAuthSession();
+        try {
+            const resp = await fetch(`${API_BASE}/api/route-tuning-profiles`, {
+                headers: { "Authorization": `Bearer ${authData.token}` }
+            });
+            if (resp.ok) {
+                const serverProfiles = await resp.json();
+                const byKey = new Map(localProfiles.map(profile => [profile.server_id || profile.local_id, profile]));
+                serverProfiles.forEach(serverProfile => {
+                    const localMatch = byKey.get(serverProfile.id);
+                    const normalized = normalizeRouteTuningProfile({
+                        ...serverProfile,
+                        local_id: localMatch?.local_id || serverProfile.id,
+                        server_id: serverProfile.id,
+                        userId,
+                        synced: true
+                    }, userId);
+                    byKey.set(serverProfile.id, normalized);
+                });
+                merged = Array.from(byKey.values());
+                saveLocalRouteTuningProfiles(merged);
+            }
+        } catch (err) {
+            console.error("[RouteProfiles] Failed to load profiles from server:", err);
+        }
+    }
+
+    routeTuningProfiles = merged;
+    renderRouteTuningProfiles();
+    const active = routeTuningProfiles.find(profile => profile.local_id === activeRouteTuningProfileId && !profile.deleted);
+    applyRouteTuningProfile(active);
+}
+
+async function persistRouteTuningProfile(profile) {
+    const profiles = getLocalRouteTuningProfiles(true);
+    const idx = profiles.findIndex(item => (item.local_id || item.id) === profile.local_id);
+    if (idx >= 0) profiles[idx] = profile;
+    else profiles.unshift(profile);
+    saveLocalRouteTuningProfiles(profiles);
+    routeTuningProfiles = profiles;
+
+    if (isCloudSyncActiveForProfiles()) {
+        await syncPendingRouteTuningProfiles();
+    }
+    renderRouteTuningProfiles();
+}
+
+async function createRouteTuningProfile() {
+    const name = prompt("Profile name", "Custom Routing Profile");
+    if (!name || !name.trim()) return;
+    const userId = getCurrentUserId();
+    const profile = normalizeRouteTuningProfile({
+        local_id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name: name.trim(),
+        weights: getWeightsFromSliders(),
+        offsets: getRouteOffsetsFromEditor(),
+        is_default: getVisibleRouteTuningProfiles().length === 0,
+        userId,
+        synced: false
+    }, userId);
+    activeRouteTuningProfileId = profile.local_id;
+    localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
+    await persistRouteTuningProfile(profile);
+    showToast("Routing profile created.");
+}
+
+async function saveActiveRouteTuningProfile() {
+    let profile = routeTuningProfiles.find(item => item.local_id === activeRouteTuningProfileId && !item.deleted);
+    if (!profile) {
+        await createRouteTuningProfile();
+        return;
+    }
+    profile = {
+        ...profile,
+        weights: getWeightsFromSliders(),
+        offsets: getRouteOffsetsFromEditor(),
+        synced: false,
+        updated_at: new Date().toISOString()
+    };
+    await persistRouteTuningProfile(profile);
+    showToast(isCloudSyncActiveForProfiles() ? "Routing profile saved and synced." : "Routing profile saved locally.");
+}
+
+async function deleteActiveRouteTuningProfile() {
+    const profile = routeTuningProfiles.find(item => item.local_id === activeRouteTuningProfileId && !item.deleted);
+    if (!profile) return;
+    if (!confirm(`Delete routing profile "${profile.name}"?`)) return;
+
+    const profiles = getLocalRouteTuningProfiles(true);
+    const idx = profiles.findIndex(item => (item.local_id || item.id) === profile.local_id);
+    if (idx >= 0) {
+        if (profile.server_id && !isCloudSyncActiveForProfiles()) {
+            profiles[idx] = { ...profile, deleted: true, synced: false, operation: "delete" };
+        } else {
+            profiles.splice(idx, 1);
+        }
+    }
+    saveLocalRouteTuningProfiles(profiles);
+    routeTuningProfiles = profiles;
+
+    if (isCloudSyncActiveForProfiles() && profile.server_id) {
+        await fetch(`${API_BASE}/api/route-tuning-profiles/${profile.server_id}`, {
+            method: "DELETE",
+            headers: { "Authorization": `Bearer ${getAuthSession().token}` }
+        });
+    }
+
+    activeRouteTuningProfileId = "";
+    localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, "");
+    renderRouteTuningProfiles();
+    applyRouteTuningProfile(null);
+    showToast("Routing profile deleted.");
+}
+
+async function setActiveRouteTuningProfileDefault() {
+    const active = routeTuningProfiles.find(item => item.local_id === activeRouteTuningProfileId && !item.deleted);
+    if (!active) return;
+    routeTuningProfiles = routeTuningProfiles.map(profile => ({
+        ...profile,
+        is_default: profile.local_id === active.local_id,
+        synced: profile.local_id === active.local_id ? false : profile.synced
+    }));
+    saveLocalRouteTuningProfiles(routeTuningProfiles);
+    if (isCloudSyncActiveForProfiles()) await syncPendingRouteTuningProfiles();
+    renderRouteTuningProfiles();
+    showToast("Default routing profile updated.");
+}
+
+async function syncPendingRouteTuningProfiles() {
+    if (!isCloudSyncActiveForProfiles()) return;
+    const authData = getAuthSession();
+    const userId = authData.record.id;
+    const profiles = getLocalRouteTuningProfiles(true).map(profile => normalizeRouteTuningProfile(profile, profile.userId ?? userId));
+    const pending = profiles.filter(profile => profile.userId === userId || profile.userId === null).filter(profile => !profile.synced || profile.deleted);
+    if (pending.length === 0) return;
+
+    const payload = {
+        profiles: pending.map(profile => ({
+            local_id: profile.local_id,
+            server_id: profile.server_id,
+            name: profile.name,
+            weights: profile.weights || {},
+            offsets: profile.offsets || {},
+            is_default: profile.is_default,
+            operation: profile.deleted ? "delete" : "upsert"
+        }))
+    };
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/route-tuning-profiles/sync`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${authData.token}`
+            },
+            body: JSON.stringify(payload)
+        });
+        if (!resp.ok) {
+            console.error("[RouteProfiles] Sync failed with status:", resp.status);
+            return;
+        }
+        const data = await resp.json();
+        const syncedMap = {};
+        (data.synced_profiles || []).forEach(item => {
+            syncedMap[item.local_id] = item.server_id;
+        });
+        const deletedIds = new Set((data.deleted_profiles || []).map(item => item.local_id));
+        const updatedProfiles = profiles
+            .filter(profile => !deletedIds.has(profile.local_id))
+            .map(profile => {
+                if (syncedMap[profile.local_id]) {
+                    return {
+                        ...profile,
+                        server_id: syncedMap[profile.local_id],
+                        userId,
+                        synced: true,
+                        deleted: false
+                    };
+                }
+                return profile;
+            });
+        saveLocalRouteTuningProfiles(updatedProfiles);
+        routeTuningProfiles = updatedProfiles;
+    } catch (err) {
+        console.error("[RouteProfiles] Sync error:", err);
+    }
+}
+
 // Clear drawn routes and markers
 function clearRoute() {
     if (startMarker) {
@@ -626,7 +993,8 @@ async function calculateRoute() {
         end_lat: endLatLng.lat,
         end_lon: endLatLng.lng,
         waypoints: currentWaypoints,
-        weights: weights
+        weights: weights,
+        offsets: getRouteOffsetsFromEditor()
     };
 
     try {
@@ -1963,7 +2331,6 @@ async function initAuth() {
             const authData = JSON.parse(storedAuth);
             if (authData && authData.token && authData.record) {
                 currentUser = authData.record;
-                await loadUserProfileConfig();
                 
                 // Set default Cloud Sync settings on load if not defined
                 if (localStorage.getItem("cloud_sync_enabled") === null) {
@@ -1971,6 +2338,7 @@ async function initAuth() {
                 }
                 // Auto sync pending local/guest routes on load
                 setTimeout(() => syncPendingRoutes(), 500);
+                setTimeout(() => loadRouteTuningProfiles(), 500);
             }
         } catch (e) {
             console.error("Failed to parse stored auth session:", e);
@@ -2004,16 +2372,12 @@ function updateAuthUI() {
     const loggedOutDiv = document.getElementById("auth-logged-out");
     const loggedInDiv = document.getElementById("auth-logged-in");
     const userEmailSpan = document.getElementById("user-display-email");
-    const saveProfileBtn = document.getElementById("btn-save-profile");
     
     if (!loggedOutDiv || !loggedInDiv) return;
     
     if (currentUser) {
         loggedOutDiv.classList.add("hidden");
         loggedInDiv.classList.remove("hidden");
-        if (saveProfileBtn) {
-            saveProfileBtn.classList.remove("hidden");
-        }
         if (userEmailSpan) {
             userEmailSpan.textContent = currentUser.email;
         }
@@ -2028,17 +2392,16 @@ function updateAuthUI() {
                 localStorage.setItem("cloud_sync_enabled", this.checked ? "true" : "false");
                 if (this.checked) {
                     syncPendingRoutes();
+                    syncPendingRouteTuningProfiles().then(loadRouteTuningProfiles);
                 } else {
                     loadHistory();
+                    loadRouteTuningProfiles();
                 }
             };
         }
     } else {
         loggedInDiv.classList.add("hidden");
         loggedOutDiv.classList.remove("hidden");
-        if (saveProfileBtn) {
-            saveProfileBtn.classList.add("hidden");
-        }
         if (userEmailSpan) {
             userEmailSpan.textContent = "-";
         }
@@ -2192,6 +2555,11 @@ function initAuthEventListeners() {
             // Keep only unauthenticated (guest) routes (where userId is null) and unsynced ones
             localRoutes = localRoutes.filter(r => r.userId === null && !r.synced);
             localStorage.setItem("boulder_local_routes", JSON.stringify(localRoutes));
+            const localProfiles = getLocalRouteTuningProfiles(true).filter(profile => profile.userId === null && !profile.synced);
+            saveLocalRouteTuningProfiles(localProfiles);
+            routeTuningProfiles = localProfiles;
+            activeRouteTuningProfileId = "";
+            localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, "");
             localStorage.removeItem("cloud_sync_enabled"); // Reset toggle settings
             
             // Reset weights to system defaults on logout
@@ -2209,6 +2577,7 @@ function initAuthEventListeners() {
             }
             
             updateAuthUI();
+            loadRouteTuningProfiles();
             showToast("Logged out successfully.");
         });
     }
@@ -2239,11 +2608,12 @@ async function performLogin(email, password) {
     localStorage.setItem("cloud_sync_enabled", "true");
     
     currentUser = data.record;
-    await loadUserProfileConfig();
     updateAuthUI();
     
     // Sync any pending routes immediately after login
     await syncPendingRoutes();
+    await syncPendingRouteTuningProfiles();
+    await loadRouteTuningProfiles();
 }
 
 function parsePocketBaseError(data) {

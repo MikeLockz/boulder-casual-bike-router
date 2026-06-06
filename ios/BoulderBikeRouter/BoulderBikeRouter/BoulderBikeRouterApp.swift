@@ -7,6 +7,6 @@ struct BoulderBikeRouterApp: App {
         WindowGroup {
             MainTabView()
         }
-        .modelContainer(for: [LocalRoute.self, LocalNavigationTick.self])
+        .modelContainer(for: [LocalRoute.self, LocalNavigationTick.self, LocalRouteTuningProfile.self])
     }
 }

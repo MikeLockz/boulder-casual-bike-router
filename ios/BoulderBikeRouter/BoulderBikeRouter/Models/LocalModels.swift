@@ -158,3 +158,55 @@ class LocalNavigationTick {
         )
     }
 }
+
+@Model
+class LocalRouteTuningProfile {
+    @Attribute(.unique) var id: String
+    var serverId: String?
+    var name: String
+    var weights: [String: Double]
+    var offsets: [String: Double]
+    var isDefault: Bool
+    var userId: String?
+    var synced: Bool
+    var deleted: Bool
+    var updatedAt: Date
+    
+    init(
+        id: String = UUID().uuidString,
+        serverId: String? = nil,
+        name: String,
+        weights: [String: Double],
+        offsets: [String: Double] = [:],
+        isDefault: Bool = false,
+        userId: String? = nil,
+        synced: Bool = false,
+        deleted: Bool = false,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.serverId = serverId
+        self.name = name
+        self.weights = weights
+        self.offsets = offsets
+        self.isDefault = isDefault
+        self.userId = userId
+        self.synced = synced
+        self.deleted = deleted
+        self.updatedAt = updatedAt
+    }
+    
+    var toRouteTuningProfile: RouteTuningProfile {
+        RouteTuningProfile(
+            id: serverId ?? id,
+            localId: id,
+            serverId: serverId,
+            name: name,
+            weights: weights,
+            offsets: offsets,
+            isDefault: isDefault,
+            userId: userId,
+            synced: synced
+        )
+    }
+}

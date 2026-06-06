@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsTabView: View {
     @Bindable var viewModel: MapViewModel
     @State private var isAuthSheetPresented = false
+    @State private var newProfileName = "Custom Routing Profile"
+    @State private var offsetsJSON = "{}"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -133,6 +135,8 @@ struct SettingsTabView: View {
                             .foregroundColor(.onSurfaceVariant)
                             .tracking(1)
                             .padding(.horizontal, 4)
+
+                        routeTuningProfileControls
                         
                         WeightSlidersView(
                             weights: $viewModel.weights,
@@ -158,5 +162,108 @@ struct SettingsTabView: View {
         .sheet(isPresented: $isAuthSheetPresented) {
             AuthView(viewModel: viewModel)
         }
+        .onAppear {
+            offsetsJSON = encodeOffsets(viewModel.routeOffsets)
+        }
+        .onChange(of: viewModel.routeOffsets) { _, newOffsets in
+            offsetsJSON = encodeOffsets(newOffsets)
+        }
+    }
+
+    private var routeTuningProfileControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("Routing Profile", selection: Binding(
+                get: { viewModel.activeRouteTuningProfileId ?? "" },
+                set: { selectedId in
+                    if selectedId.isEmpty {
+                        viewModel.applyRouteTuningProfile(nil)
+                    } else if let profile = viewModel.routeTuningProfiles.first(where: { ($0.localId ?? $0.id) == selectedId || $0.id == selectedId }) {
+                        viewModel.applyRouteTuningProfile(profile)
+                    }
+                }
+            )) {
+                Text("System Defaults").tag("")
+                ForEach(viewModel.routeTuningProfiles) { profile in
+                    Text("\(profile.isDefault ? "★ " : "")\(profile.name)")
+                        .tag(profile.localId ?? profile.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(.primaryMint)
+
+            HStack(spacing: 8) {
+                TextField("Profile name", text: $newProfileName)
+                    .textFieldStyle(.roundedBorder)
+                Button("New") {
+                    Task { await viewModel.createRouteTuningProfile(name: newProfileName) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.primaryMint)
+            }
+
+            Text("Offsets JSON")
+                .font(.caption)
+                .foregroundColor(.onSurfaceVariant)
+
+            TextEditor(text: $offsetsJSON)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 72)
+                .padding(6)
+                .background(Color.black.opacity(0.18))
+                .cornerRadius(8)
+
+            HStack(spacing: 8) {
+                Button("Save") {
+                    if let offsets = decodeOffsets(offsetsJSON) {
+                        viewModel.routeOffsets = offsets
+                        Task { await viewModel.saveActiveRouteTuningProfile() }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.primaryMint)
+
+                Button("Default") {
+                    Task { await viewModel.setActiveRouteTuningProfileDefault() }
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.activeRouteTuningProfileId == nil)
+
+                Button("Delete") {
+                    Task { await viewModel.deleteActiveRouteTuningProfile() }
+                }
+                .buttonStyle(.bordered)
+                .tint(.errorRose)
+                .disabled(viewModel.activeRouteTuningProfileId == nil)
+            }
+        }
+        .padding(16)
+        .background(Color.surfaceDim)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.onSurfaceVariant.opacity(0.05), lineWidth: 1)
+        )
+    }
+
+    private func encodeOffsets(_ offsets: [String: Double]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: offsets, options: [.prettyPrinted]),
+              let string = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return string
+    }
+
+    private func decodeOffsets(_ string: String) -> [String: Double]? {
+        guard let data = string.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        var offsets: [String: Double] = [:]
+        for (key, value) in object {
+            if let number = value as? NSNumber {
+                offsets[key] = number.doubleValue
+            }
+        }
+        return offsets
     }
 }
