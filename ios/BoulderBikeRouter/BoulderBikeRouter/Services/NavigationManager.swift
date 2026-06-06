@@ -348,7 +348,6 @@ class NavigationManager {
             guard coords.count >= 2 else { continue }
             
             let startCoord = coords.first
-            let endCoord = coords.last
             
             let instruction: String
             let shortInstruction: String

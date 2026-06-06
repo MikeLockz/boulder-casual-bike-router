@@ -253,10 +253,8 @@ class MapViewModel {
 
     func recordCompletedRoute() {
         guard let route = routeResponse else { return }
-        let name = selectedPresetName ?? selectedPlayground?.name ?? "Custom Route"
         let startName = selectedPresetName != nil ? "Start Point" : "Dropped Pin"
         let endName = selectedPlayground?.name ?? "Destination"
-        let distanceMiles = route.totalLengthMeters / 1609.34
         let durationSeconds = Int(route.totalLengthMeters / 5.3)
         
         let startLat = startLocation?.latitude ?? 0.0

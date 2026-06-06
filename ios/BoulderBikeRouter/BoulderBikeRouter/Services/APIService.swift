@@ -22,7 +22,7 @@ enum APIError: Error, LocalizedError {
 }
 
 /// Service that manages connection to the Biking Boulder backend service.
-actor APIService {
+class APIService {
     private var baseURLLabel: String = {
         #if targetEnvironment(simulator)
         // Simulator runs on the developer machine, so localhost works
