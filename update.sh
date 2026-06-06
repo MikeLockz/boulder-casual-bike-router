@@ -7,6 +7,7 @@ DOCKER_DIR="/root/lockdev-home"
 
 echo "📥 Fetching latest changes from GitHub..."
 cd "$PROJECT_DIR"
+git reset --hard
 git pull
 
 echo "🏗️ Rebuilding and restarting containers..."
