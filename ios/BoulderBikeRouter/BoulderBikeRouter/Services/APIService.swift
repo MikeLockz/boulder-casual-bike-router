@@ -28,8 +28,8 @@ actor APIService {
         // Simulator runs on the developer machine, so localhost works
         return "http://localhost:8081"
         #else
-        // Physical device (use the host runner IP on the local network) or production build
-        return "http://192.168.1.44:8081"
+        // Physical device (use the production host domain) or production build
+        return "https://boulder.lockdev.com"
         #endif
     }()
 
