@@ -1283,7 +1283,7 @@ WEIGHTS_METADATA = [
         "name": "Busy Roads (Undesignated)",
         "description": "Arterials without bike infrastructure (feeder-only)",
         "web_icon": "fa-skull-crossbones",
-        "ios_icon": "skull.fill",
+        "ios_icon": "skull",
         "min": 5.0, "max": 50.0, "step": 1.0,
         "default": 15.0
     },
@@ -1301,7 +1301,7 @@ WEIGHTS_METADATA = [
         "name": "Safe Crossings",
         "description": "Signalized, beacon-flashing, or bike crossings",
         "web_icon": "fa-traffic-light",
-        "ios_icon": "trafficlight.fill",
+        "ios_icon": "traffic.light.fill",
         "min": 0.5, "max": 3.0, "step": 0.1,
         "default": 1.0
     },
