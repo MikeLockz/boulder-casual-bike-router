@@ -67,6 +67,18 @@ jobs:
 
             echo "Preparing Python environment..."
             cd "$PROJECT_DIR"
+            if ! python3 - <<'PY' >/dev/null 2>&1
+            import ensurepip
+            PY
+            then
+              apt-get update
+              PYTHON_VENV_PACKAGE="python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')-venv"
+              DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv || \
+                DEBIAN_FRONTEND=noninteractive apt-get install -y "$PYTHON_VENV_PACKAGE"
+            fi
+            if [ -x .places-sync-venv/bin/python ] && ! .places-sync-venv/bin/python -m pip --version >/dev/null 2>&1; then
+              rm -rf .places-sync-venv
+            fi
             if [ ! -x .places-sync-venv/bin/python ]; then
               python3 -m venv .places-sync-venv
             fi
