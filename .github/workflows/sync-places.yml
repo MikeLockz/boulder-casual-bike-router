@@ -41,7 +41,6 @@ jobs:
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           envs: PB_URL,RESTART_POCKETBASE,REFRESH_PLACE_CACHE
-          script_stop: true
           script: |
             set -euo pipefail
 
