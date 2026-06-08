@@ -45,6 +45,17 @@
                     </summary>
                     <div class="section-content">
                         <p id="preset-instruction" class="section-desc">Select a route preset or click points on the map to start planning.</p>
+                        <div class="route-planner-actions" aria-label="Route planner start options">
+                            <button type="button" id="btn-focus-playgrounds" class="route-planner-action" title="Choose a playground">
+                                <i class="fa-solid fa-child-reaching"></i>
+                            </button>
+                            <button type="button" id="btn-route-from-home" class="route-planner-action" title="Route to home">
+                                <i class="fa-solid fa-house-chimney"></i>
+                            </button>
+                            <button type="button" id="btn-route-set-pin" class="route-planner-action" title="Set a route pin on the map">
+                                <i class="fa-solid fa-map-pin"></i>
+                            </button>
+                        </div>
                         <div class="preset-list" id="preset-list"></div>
                         
                         <!-- New Playground Wayfinding Sub-section -->
@@ -61,7 +72,31 @@
                     </div>
                 </details>
 
-                <!-- Section 2: Routing Weights (Collapsed by default) -->
+                <!-- Section 2: Home Location (Open by default) -->
+                <details open class="collapsible-section" id="sec-home">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-house-chimney"></i> Home</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content">
+                        <p class="section-desc">Set a home coordinate to start routes quickly.</p>
+                        <div class="home-location-card">
+                            <div class="home-location-icon">
+                                <i class="fa-solid fa-house-chimney"></i>
+                            </div>
+                            <div class="home-location-details">
+                                <span class="home-location-label">Home Location</span>
+                                <span id="home-location-status" class="home-location-status">Home has not been set yet.</span>
+                            </div>
+                        </div>
+                        <div class="action-buttons">
+                            <button type="button" id="btn-set-home" class="btn btn-primary"><i class="fa-solid fa-map-pin"></i> Set Home Location</button>
+                            <button type="button" id="btn-delete-home" class="btn btn-secondary"><i class="fa-solid fa-trash"></i> Clear Home</button>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Section 3: Routing Weights (Collapsed by default) -->
                 <details class="collapsible-section" id="sec-weights">
                     <summary>
                         <span class="summary-title"><i class="fa-solid fa-sliders"></i> Routing Weights</span>
@@ -152,7 +187,7 @@
                     </div>
                 </details>
 
-                <!-- Section 3: Map Layers (Collapsed by default) -->
+                <!-- Section 4: Map Layers (Collapsed by default) -->
                 <details class="collapsible-section" id="sec-layers">
                     <summary>
                         <span class="summary-title"><i class="fa-solid fa-layer-group"></i> Map Layers</span>
@@ -317,10 +352,6 @@
                             <textarea id="history-detail-notes" class="history-detail-notes" rows="3" placeholder="Add notes about this route..." readonly></textarea>
                             <button type="button" id="btn-history-view-map" class="btn btn-primary history-detail-primary">
                                 <i class="fa-solid fa-map"></i> View on Map
-                            </button>
-                            <button type="button" id="btn-history-export" class="history-detail-action">
-                                <span><i class="fa-solid fa-file-export"></i> Export Data</span>
-                                <i class="fa-solid fa-chevron-right"></i>
                             </button>
                             <button type="button" id="btn-history-delete" class="history-detail-delete">
                                 <i class="fa-solid fa-trash-can"></i> Remove from History
@@ -569,6 +600,17 @@
         <button id="btn-locate-map" class="map-floating-btn" title="Find my location">
             <i class="fa-solid fa-location-crosshairs"></i>
         </button>
+
+        <div id="home-map-editor" class="home-map-editor hidden">
+            <div>
+                <strong>Set Home</strong>
+                <span id="home-map-editor-coords">Drop a pin on the map.</span>
+            </div>
+            <div class="home-map-editor-actions">
+                <button type="button" id="btn-cancel-home-pin" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="btn-save-home-pin" class="btn btn-primary" disabled>Save</button>
+            </div>
+        </div>
 
         <main id="map" class="map-view"></main>
     </div>

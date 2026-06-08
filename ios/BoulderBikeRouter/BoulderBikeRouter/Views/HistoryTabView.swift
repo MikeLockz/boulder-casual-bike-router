@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 struct HistoryTabView: View {
     let pastRoutes: [PastRoute]
@@ -148,6 +147,9 @@ struct HistoryTabView: View {
     }
     
     private func formatDuration(_ seconds: Int) -> String {
+        if seconds > 0 && seconds < 60 {
+            return "<1 min"
+        }
         let minutes = seconds / 60
         if minutes < 60 {
             return "\(minutes) min"
@@ -218,7 +220,9 @@ struct RouteHistoryDetailView: View {
                     mapPreview
                     header
                     statsGrid
-                    notesEditor
+                    if isEditing || !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        notesEditor
+                    }
                     actions
                 }
                 .padding(20)
@@ -324,21 +328,6 @@ struct RouteHistoryDetailView: View {
             .buttonStyle(.borderedProminent)
             .tint(.primaryMint)
 
-            Button {
-                exportRoute()
-            } label: {
-                HStack {
-                    Label("Export Data", systemImage: "square.and.arrow.up")
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                }
-                .padding(.horizontal, 16)
-                .frame(height: 48)
-                .foregroundColor(.onSurface)
-                .background(Color.surfaceContainer)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-
             Button(role: .destructive) {
                 isDeleteConfirmationPresented = true
             } label: {
@@ -352,7 +341,7 @@ struct RouteHistoryDetailView: View {
     }
 
     private var averageSpeed: String {
-        guard let metersPerSecond = route.averageSpeed else { return "0.0 mph" }
+        guard let metersPerSecond = route.displayedAverageSpeedMetersPerSecond else { return "—" }
         return String(format: "%.1f mph", metersPerSecond * 2.23694)
     }
 
@@ -388,6 +377,9 @@ struct RouteHistoryDetailView: View {
     }
 
     private func formatDuration(_ seconds: Int) -> String {
+        if seconds > 0 && seconds < 60 {
+            return "<1 min"
+        }
         let minutes = seconds / 60
         if minutes < 60 {
             return "\(minutes) min"
@@ -395,10 +387,4 @@ struct RouteHistoryDetailView: View {
         return "\(minutes / 60)h \(minutes % 60)m"
     }
 
-    private func exportRoute() {
-        if let data = try? JSONEncoder().encode(route),
-           let payload = String(data: data, encoding: .utf8) {
-            UIPasteboard.general.string = payload
-        }
-    }
 }

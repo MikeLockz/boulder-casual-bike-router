@@ -2,6 +2,7 @@ import os
 import json
 import math
 import sys
+import datetime
 
 try:
     import requests
@@ -70,6 +71,144 @@ def haversine_distance(coord1, coord2):
     a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R * c
+
+def parse_navigation_date(value):
+    """Parse PocketBase/client ISO timestamps as UTC datetimes."""
+    if not value:
+        return None
+    if isinstance(value, datetime.datetime):
+        date_value = value
+    else:
+        date_str = str(value).strip()
+        if not date_str:
+            return None
+        date_str = date_str.replace("Z", "+00:00")
+        if " " in date_str and "T" not in date_str:
+            date_str = date_str.replace(" ", "T", 1)
+        try:
+            date_value = datetime.datetime.fromisoformat(date_str)
+        except ValueError:
+            if "." in date_str:
+                try:
+                    date_value = datetime.datetime.fromisoformat(date_str.split(".")[0] + "+00:00")
+                except ValueError:
+                    return None
+            else:
+                return None
+    if date_value.tzinfo is None:
+        date_value = date_value.replace(tzinfo=datetime.timezone.utc)
+    return date_value.astimezone(datetime.timezone.utc)
+
+def route_date_sort_key(item):
+    parsed = parse_navigation_date(item.get("started_at"))
+    return parsed or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+
+def sorted_navigation_ticks(ticks):
+    return sorted(
+        [tick for tick in ticks if isinstance(tick, dict)],
+        key=lambda tick: parse_navigation_date(tick.get("timestamp")) or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+    )
+
+def calculate_tick_distance_meters(ticks):
+    actual_distance = 0.0
+    sorted_ticks = sorted_navigation_ticks(ticks)
+    if len(sorted_ticks) < 2:
+        return actual_distance
+    for i in range(len(sorted_ticks) - 1):
+        pt1 = (sorted_ticks[i].get("lat"), sorted_ticks[i].get("lon"))
+        pt2 = (sorted_ticks[i + 1].get("lat"), sorted_ticks[i + 1].get("lon"))
+        if pt1[0] is not None and pt1[1] is not None and pt2[0] is not None and pt2[1] is not None:
+            actual_distance += haversine_distance(pt1, pt2)
+    return actual_distance
+
+def calculate_route_duration_seconds(route, ended_at=None, ticks=None):
+    start_time = parse_navigation_date(route.get("started_at"))
+    end_time = parse_navigation_date(ended_at or route.get("ended_at"))
+    if start_time and end_time:
+        duration = (end_time - start_time).total_seconds()
+        if duration > 0:
+            return duration
+
+    sorted_ticks = sorted_navigation_ticks(ticks or [])
+    if len(sorted_ticks) >= 2:
+        first_tick = parse_navigation_date(sorted_ticks[0].get("timestamp"))
+        last_tick = parse_navigation_date(sorted_ticks[-1].get("timestamp"))
+        if first_tick and last_tick:
+            duration = (last_tick - first_tick).total_seconds()
+            if duration > 0:
+                return duration
+    return 0.0
+
+def calculate_navigation_metrics(route, ticks=None, ended_at=None, status=None):
+    """Return canonical actual and presentation metrics for a navigation route."""
+    ticks = ticks or []
+    actual_distance = calculate_tick_distance_meters(ticks)
+    actual_duration = calculate_route_duration_seconds(route, ended_at=ended_at, ticks=ticks)
+
+    total_length = float(route.get("total_length_meters") or 0.0)
+    total_duration = float(route.get("total_estimated_time_seconds") or 0.0)
+    route_status = status or route.get("status")
+
+    if route_status == "completed" and total_length > 0 and actual_distance < total_length * 0.25:
+        actual_distance = total_length
+
+    average_speed = actual_distance / actual_duration if actual_duration > 0 else 0.0
+
+    stored_actual_distance = float(route.get("actual_distance_meters") or 0.0)
+    stored_actual_duration = float(route.get("actual_duration_seconds") or 0.0)
+    display_distance = actual_distance if actual_distance > 0 else (stored_actual_distance if stored_actual_distance > 0 else total_length)
+    display_duration = actual_duration if actual_duration > 0 else (stored_actual_duration if stored_actual_duration > 0 else total_duration)
+    if (
+        display_distance > 500
+        and total_duration > 0
+        and (
+            display_duration <= 0
+            or display_duration < 60
+            or (display_distance / display_duration) > 15.0
+        )
+    ):
+        display_duration = total_duration
+    display_average_speed = display_distance / display_duration if display_duration > 0 else 0.0
+
+    return {
+        "actual_distance_meters": actual_distance,
+        "actual_duration_seconds": actual_duration,
+        "average_speed": average_speed,
+        "display_distance_meters": display_distance,
+        "display_duration_seconds": display_duration,
+        "display_average_speed": display_average_speed
+    }
+
+def route_with_display_metrics(route):
+    route_copy = dict(route)
+    display_distance = route_copy.get("display_distance_meters")
+    if not display_distance or float(display_distance or 0) <= 0:
+        display_distance = route_copy.get("actual_distance_meters") or route_copy.get("total_length_meters") or 0.0
+
+    display_duration = route_copy.get("display_duration_seconds")
+    if not display_duration or float(display_duration or 0) <= 0:
+        display_duration = route_copy.get("actual_duration_seconds") or route_copy.get("total_estimated_time_seconds") or 0.0
+
+    display_average_speed = route_copy.get("display_average_speed")
+    total_duration = float(route_copy.get("total_estimated_time_seconds") or 0.0)
+    if (
+        float(display_distance or 0.0) > 500
+        and total_duration > 0
+        and (
+            float(display_duration or 0.0) <= 0
+            or float(display_duration or 0.0) < 60
+            or (float(display_distance or 0.0) / float(display_duration or 1.0)) > 15.0
+        )
+    ):
+        display_duration = total_duration
+        display_average_speed = float(display_distance or 0.0) / total_duration
+    if display_average_speed is None:
+        display_average_speed = float(display_distance or 0.0) / float(display_duration or 0.0) if float(display_duration or 0.0) > 0 else 0.0
+
+    route_copy["display_distance_meters"] = display_distance
+    route_copy["display_duration_seconds"] = display_duration
+    route_copy["display_average_speed"] = display_average_speed
+    return route_copy
 
 def fetch_osm_data():
     """Fetch OpenStreetMap data for Boulder from Overpass API or load from cache."""
@@ -1562,8 +1701,8 @@ def get_bike_routes():
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "POST, GET, PATCH, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "POST, GET, PATCH, PUT, DELETE, OPTIONS"
     return response
 
 @app.route("/api/pocketbase-status", methods=["GET"])
@@ -1714,6 +1853,44 @@ def sanitize_navigation_route_update_payload(data):
 
     return payload, None
 
+def sanitize_home_location_payload(data):
+    """Validate and normalize home location coordinates."""
+    if not isinstance(data, dict):
+        return None, "Invalid JSON payload"
+
+    lat = clamp_number(data.get("lat"), -90.0, 90.0)
+    lng = clamp_number(data.get("lng"), -180.0, 180.0)
+    if lat is None or lng is None:
+        return None, "Home location requires valid lat and lng coordinates"
+
+    return {"lat": lat, "lng": lng}, None
+
+def home_location_record_to_api(record):
+    value = record.get("value") or {}
+    return {
+        "id": record.get("id"),
+        "lat": value.get("lat"),
+        "lng": value.get("lng"),
+        "created": record.get("created"),
+        "updated": record.get("updated")
+    }
+
+def get_home_location_record(pb_url, user_id, auth_header):
+    headers = {"Authorization": auth_header} if auth_header else {}
+    resp = requests.get(
+        f"{pb_url}/api/collections/user_configs/records",
+        headers=headers,
+        params={
+            "filter": f"user='{user_id}' && key='home_location'",
+            "limit": 1
+        },
+        timeout=5
+    )
+    if resp.status_code != 200:
+        return None, resp
+    items = resp.json().get("items", [])
+    return (items[0] if items else None), resp
+
 def get_navigation_route_for_user(pb_url, route_id, auth_header):
     """Fetch a navigation route and verify the current user can mutate it."""
     user_id = get_auth_user_id(auth_header)
@@ -1764,6 +1941,70 @@ def clear_other_default_route_tuning_profiles(pb_url, user_id, auth_header, sele
     except Exception as e:
         print(f"[-] Failed to clear default route tuning profiles: {e}")
 
+@app.route("/api/settings/home", methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"])
+def home_location_settings():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    auth_header = request.headers.get("Authorization")
+    user_id = get_auth_user_id(auth_header)
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    headers = {"Authorization": auth_header} if auth_header else {}
+
+    try:
+        existing, existing_resp = get_home_location_record(pb_url, user_id, auth_header)
+        if existing_resp.status_code != 200:
+            return jsonify({"error": f"PocketBase returned {existing_resp.status_code}: {existing_resp.text}"}), existing_resp.status_code
+
+        if request.method == "GET":
+            if not existing:
+                return jsonify({"home": None}), 200
+            return jsonify({"home": home_location_record_to_api(existing)}), 200
+
+        if request.method == "DELETE":
+            if not existing:
+                return jsonify({"home": None}), 200
+            resp = requests.delete(
+                f"{pb_url}/api/collections/user_configs/records/{existing.get('id')}",
+                headers=headers,
+                timeout=5
+            )
+            if resp.status_code not in [200, 204]:
+                return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+            return jsonify({"home": None}), 200
+
+        payload, error = sanitize_home_location_payload(request.json or {})
+        if error:
+            return jsonify({"error": error}), 400
+
+        if request.method == "POST" and existing:
+            return jsonify({"error": "Home location already exists"}), 409
+
+        if existing:
+            resp = requests.patch(
+                f"{pb_url}/api/collections/user_configs/records/{existing.get('id')}",
+                json={"value": payload},
+                headers=headers,
+                timeout=5
+            )
+        else:
+            resp = requests.post(
+                f"{pb_url}/api/collections/user_configs/records",
+                json={"user": user_id, "key": "home_location", "value": payload},
+                headers=headers,
+                timeout=5
+            )
+
+        if resp.status_code not in [200, 201]:
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+
+        return jsonify({"home": home_location_record_to_api(resp.json())}), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/navigation/start", methods=["POST", "OPTIONS"])
 def nav_start():
     if request.method == "OPTIONS":
@@ -1793,7 +2034,14 @@ def nav_start():
         "status": "active",
         "started_at": now_str,
         "device_type": data.get("device_type") or "web",
-        "weights": data.get("weights") or {}
+        "weights": data.get("weights") or {},
+        "display_distance_meters": data.get("total_length_meters", 0),
+        "display_duration_seconds": data.get("total_estimated_time_seconds", 0),
+        "display_average_speed": (
+            float(data.get("total_length_meters") or 0.0) / float(data.get("total_estimated_time_seconds") or 0.0)
+            if float(data.get("total_estimated_time_seconds") or 0.0) > 0
+            else 0.0
+        )
     }
     
     try:
@@ -1848,17 +2096,44 @@ def nav_end(route_id):
     data = request.json or {}
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
     
-    import datetime
     now_str = data.get("ended_at") or datetime.datetime.utcnow().isoformat() + "Z"
     status = data.get("status") or "completed"
     
     ticks = []
-    started_at_str = None
+    route_record = {}
+    batched_ticks = data.get("ticks") or []
     try:
         route_resp = requests.get(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", timeout=5)
         if route_resp.status_code == 200:
             route_record = route_resp.json()
-            started_at_str = route_record.get("started_at")
+
+        if isinstance(batched_ticks, list):
+            for tick in batched_ticks[:5000]:
+                if not isinstance(tick, dict):
+                    continue
+                lat = tick.get("lat")
+                lon = tick.get("lon")
+                timestamp = tick.get("timestamp")
+                if lat is None or lon is None or not timestamp:
+                    continue
+                pb_tick_payload = {
+                    "route": route_id,
+                    "lat": lat,
+                    "lon": lon,
+                    "speed": tick.get("speed"),
+                    "direction": tick.get("direction"),
+                    "accuracy": tick.get("accuracy"),
+                    "altitude": tick.get("altitude"),
+                    "timestamp": timestamp,
+                    "battery_level": tick.get("battery_level")
+                }
+                tick_create_resp = requests.post(
+                    f"{pb_url}/api/collections/navigation_ticks/records",
+                    json=pb_tick_payload,
+                    timeout=3
+                )
+                if tick_create_resp.status_code in [200, 201]:
+                    ticks.append(tick_create_resp.json())
         
         ticks_resp = requests.get(f"{pb_url}/api/collections/navigation_ticks/records?filter=route='{route_id}'&sort=timestamp&limit=5000", timeout=5)
         if ticks_resp.status_code == 200:
@@ -1866,54 +2141,14 @@ def nav_end(route_id):
     except Exception as e:
         print(f"Error fetching ticks for calculations: {e}")
     
-    actual_distance = 0.0
-    if len(ticks) >= 2:
-        for i in range(len(ticks) - 1):
-            pt1 = (ticks[i].get("lat"), ticks[i].get("lon"))
-            pt2 = (ticks[i+1].get("lat"), ticks[i+1].get("lon"))
-            if pt1[0] is not None and pt1[1] is not None and pt2[0] is not None and pt2[1] is not None:
-                actual_distance += haversine_distance(pt1, pt2)
-    
-    actual_duration = 0.0
-    
-    def parse_pb_date(d_str):
-        if not d_str: return None
-        d_str = d_str.replace("Z", "")
-        if "." in d_str:
-            d_str = d_str.split(".")[0]
-        return datetime.datetime.fromisoformat(d_str)
-
-    if started_at_str:
-        try:
-            t_start = parse_pb_date(started_at_str)
-            t_end = parse_pb_date(now_str)
-            if t_start and t_end:
-                actual_duration = (t_end - t_start).total_seconds()
-        except Exception as e:
-            print(f"Error parsing dates: {e}")
-            
-    if actual_duration <= 0 and len(ticks) >= 2:
-        try:
-            t_start = parse_pb_date(ticks[0].get("timestamp"))
-            t_end = parse_pb_date(ticks[-1].get("timestamp"))
-            if t_start and t_end:
-                actual_duration = (t_end - t_start).total_seconds()
-        except:
-            pass
-    
-    if actual_duration <= 0:
-        actual_duration = 0.0
-        
-    average_speed = actual_distance / actual_duration if actual_duration > 0 else 0.0
+    metrics = calculate_navigation_metrics(route_record, ticks=ticks, ended_at=now_str, status=status)
     
     pb_update = {
         "status": status,
         "ended_at": now_str,
         "ended_lat": data.get("ended_lat"),
         "ended_lon": data.get("ended_lon"),
-        "actual_distance_meters": actual_distance,
-        "actual_duration_seconds": actual_duration,
-        "average_speed": average_speed
+        **metrics
     }
     
     try:
@@ -1921,9 +2156,7 @@ def nav_end(route_id):
         if resp.status_code == 200:
             return jsonify({
                 "status": "success",
-                "actual_distance_meters": actual_distance,
-                "actual_duration_seconds": actual_duration,
-                "average_speed": average_speed
+                **metrics
             })
         else:
             return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
@@ -1954,7 +2187,9 @@ def nav_history():
         resp = requests.get(url, timeout=5)
         if resp.status_code == 200:
             items = resp.json().get("items", [])
-            return jsonify(items)
+            normalized_items = [route_with_display_metrics(item) for item in items]
+            normalized_items.sort(key=route_date_sort_key, reverse=True)
+            return jsonify(normalized_items)
         else:
             return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
     except Exception as e:
@@ -2032,10 +2267,10 @@ def nav_detail(route_id):
         ticks_resp = requests.get(f"{pb_url}/api/collections/navigation_ticks/records?filter=route='{route_id}'&sort=timestamp&limit=5000", timeout=5)
         ticks = []
         if ticks_resp.status_code == 200:
-            ticks = ticks_resp.json().get("items", [])
+            ticks = sorted_navigation_ticks(ticks_resp.json().get("items", []))
             
         route["ticks"] = ticks
-        return jsonify(route)
+        return jsonify(route_with_display_metrics(route))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2311,9 +2546,6 @@ def nav_sync():
             "ended_at": r.get("ended_at"),
             "ended_lat": r.get("ended_lat"),
             "ended_lon": r.get("ended_lon"),
-            "actual_distance_meters": r.get("actual_distance_meters"),
-            "actual_duration_seconds": r.get("actual_duration_seconds"),
-            "average_speed": r.get("average_speed"),
             "device_type": r.get("device_type") or "web",
             "weights": r.get("weights") or {}
         }
@@ -2361,6 +2593,29 @@ def nav_sync():
                         headers=headers,
                         timeout=3
                     )
+
+                try:
+                    ticks_resp = requests.get(
+                        f"{pb_url}/api/collections/navigation_ticks/records?filter=route='{server_id}'&sort=timestamp&limit=5000",
+                        headers=headers,
+                        timeout=5
+                    )
+                    stored_ticks = ticks_resp.json().get("items", []) if ticks_resp.status_code == 200 else []
+                    route_for_metrics = {**pb_payload, **record, "status": pb_payload.get("status")}
+                    metrics = calculate_navigation_metrics(
+                        route_for_metrics,
+                        ticks=stored_ticks,
+                        ended_at=pb_payload.get("ended_at"),
+                        status=pb_payload.get("status")
+                    )
+                    requests.patch(
+                        f"{pb_url}/api/collections/navigation_routes/records/{server_id}",
+                        json=metrics,
+                        headers=headers,
+                        timeout=5
+                    )
+                except Exception as e:
+                    print(f"[-] Error recalculating synced route metrics {server_id}: {e}")
                 
                 synced_routes.append({
                     "local_id": local_id,
@@ -2392,4 +2647,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[-] PocketBase connection failed: {e}")
 
-    app.run(host="0.0.0.0", port=3001, debug=True)
+    app.run(host="0.0.0.0", port=3001, debug=True, use_reloader=False)

@@ -12,10 +12,16 @@ class MapViewModel {
     var routeOffsets: [String: Double] = [:]
     var routeTuningProfiles: [RouteTuningProfile] = []
     var activeRouteTuningProfileId: String? = UserDefaults.standard.string(forKey: "active_route_tuning_profile_id")
+    var homeLocation: HomeLocation?
+    var homeLocationError: String?
+    var isSavingHomeLocation: Bool = false
+    var isSelectingHomeLocation: Bool = false
+    var pendingHomeCoordinate: CLLocationCoordinate2D?
 
     // Map markers and route state
     var startLocation: CLLocationCoordinate2D?
     var endLocation: CLLocationCoordinate2D?
+    var currentLocation: CLLocationCoordinate2D?
     var waypoints: [CLLocationCoordinate2D] = []
     var routeResponse: RouteResponse?
     var isLoadingRoute: Bool = false
@@ -48,6 +54,7 @@ class MapViewModel {
                     await syncService?.syncPendingRoutes()
                     await syncService?.syncPendingRouteTuningProfiles()
                     await loadRouteTuningProfiles()
+                    await loadHomeLocation()
                     await loadHistory()
                 }
             }
@@ -70,6 +77,7 @@ class MapViewModel {
                     await syncService?.syncPendingRoutes()
                     await syncService?.syncPendingRouteTuningProfiles()
                     await loadRouteTuningProfiles()
+                    await loadHomeLocation()
                     await loadHistory()
                 }
             }
@@ -117,6 +125,7 @@ class MapViewModel {
                 await self?.syncService?.syncPendingRoutes()
                 await self?.syncService?.syncPendingRouteTuningProfiles()
                 await self?.loadRouteTuningProfiles()
+                await self?.loadHomeLocation()
                 await self?.loadHistory()
             }
         }
@@ -175,7 +184,12 @@ class MapViewModel {
     }
 
     func selectPlayground(_ playground: Playground) {
+        guard let currentLocation else {
+            routingError = "Current location is unavailable. Allow location access to route to a playground."
+            return
+        }
         selectedPlayground = playground
+        startLocation = currentLocation
         endLocation = playground.coordinate
         selectedPresetName = nil // clear preset selection
         
@@ -200,6 +214,101 @@ class MapViewModel {
         Task {
             await fetchRoute()
         }
+    }
+
+    func routeToHome(from currentCoordinate: CLLocationCoordinate2D?) {
+        guard let homeLocation else {
+            homeLocationError = isUserLoggedIn ? "Set your home location first." : "Sign in to use home routing."
+            return
+        }
+        guard let routeStart = currentCoordinate ?? currentLocation else {
+            homeLocationError = "Current location is unavailable. Allow location access to route home."
+            return
+        }
+        startLocation = routeStart
+        setEndLocation(homeLocation.coordinate)
+    }
+
+    @MainActor
+    func beginHomeLocationSelection() {
+        guard isUserLoggedIn else {
+            homeLocationError = "Sign in to set a home location."
+            return
+        }
+        pendingHomeCoordinate = homeLocation?.coordinate
+        isSelectingHomeLocation = true
+        homeLocationError = nil
+    }
+
+    @MainActor
+    func updatePendingHomeLocation(_ coordinate: CLLocationCoordinate2D) {
+        pendingHomeCoordinate = coordinate
+    }
+
+    @MainActor
+    func cancelHomeLocationSelection() {
+        isSelectingHomeLocation = false
+        pendingHomeCoordinate = nil
+    }
+
+    func loadHomeLocation() async {
+        guard isUserLoggedIn else {
+            await MainActor.run {
+                self.homeLocation = nil
+                self.homeLocationError = nil
+            }
+            return
+        }
+
+        do {
+            let home = try await apiService.fetchHomeLocation()
+            await MainActor.run {
+                self.homeLocation = home
+                self.homeLocationError = nil
+            }
+        } catch {
+            await MainActor.run {
+                self.homeLocationError = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    func saveHomeLocation(_ coordinate: CLLocationCoordinate2D) async {
+        guard isUserLoggedIn else {
+            homeLocationError = "Sign in to save a home location."
+            return
+        }
+
+        isSavingHomeLocation = true
+        homeLocationError = nil
+        do {
+            let saved = try await apiService.saveHomeLocation(coordinate)
+            homeLocation = saved
+            pendingHomeCoordinate = nil
+            isSelectingHomeLocation = false
+        } catch {
+            homeLocationError = error.localizedDescription
+        }
+        isSavingHomeLocation = false
+    }
+
+    @MainActor
+    func deleteHomeLocation() async {
+        guard isUserLoggedIn else {
+            homeLocationError = "Sign in to clear a home location."
+            return
+        }
+
+        isSavingHomeLocation = true
+        homeLocationError = nil
+        do {
+            try await apiService.deleteHomeLocation()
+            homeLocation = nil
+        } catch {
+            homeLocationError = error.localizedDescription
+        }
+        isSavingHomeLocation = false
     }
 
     func resetWeights() {
@@ -507,14 +616,14 @@ class MapViewModel {
         // 3. Combine and sort
         await MainActor.run {
             var combinedMap: [String: PastRoute] = [:]
-            for r in localRoutes {
-                combinedMap[r.id] = r
-            }
             for r in serverRoutes {
                 combinedMap[r.id] = r
             }
+            for r in localRoutes {
+                combinedMap[r.id] = r
+            }
             
-            self.pastRoutes = combinedMap.values.sorted(by: { $0.startedAt > $1.startedAt })
+            self.pastRoutes = combinedMap.values.sorted(by: { $0.date > $1.date })
             print("Loaded \(self.pastRoutes.count) past routes (Local: \(localRoutes.count), Server: \(serverRoutes.count)).")
         }
     }
@@ -527,7 +636,8 @@ class MapViewModel {
             if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
                 await MainActor.run {
                     self.selectedHistoryRoute = route
-                    self.selectedHistoryRouteTicks = localRoute.ticks.map { $0.toNavigationTick }
+                    let sortedTicks = localRoute.ticks.sorted { $0.timestamp < $1.timestamp }.map { $0.toNavigationTick }
+                    self.selectedHistoryRouteTicks = sortedTicks
                     
                     var routeGeojsonObj: GeoJSONFeatureCollection? = nil
                     if let geojsonStr = localRoute.routeGeojson,
@@ -558,7 +668,7 @@ class MapViewModel {
                         deviceType: localRoute.deviceType,
                         weights: localRoute.weights,
                         routeGeojson: routeGeojsonObj,
-                        ticks: localRoute.ticks.map { $0.toNavigationTick }
+                        ticks: sortedTicks
                     )
                     
                     self.startLocation = nil
@@ -574,7 +684,7 @@ class MapViewModel {
             let details = try await apiService.fetchRouteDetails(routeId: route.id)
             await MainActor.run {
                 self.selectedHistoryRoute = route
-                self.selectedHistoryRouteTicks = details.ticks
+                self.selectedHistoryRouteTicks = details.ticks.sorted { $0.timestamp < $1.timestamp }
                 self.selectedHistoryRouteDetails = details
                 
                 self.startLocation = nil
@@ -593,9 +703,11 @@ class MapViewModel {
     }
 
     @MainActor
-    func updateHistoryRoute(_ route: PastRoute, displayName: String, notes: String) async {
+    @discardableResult
+    func updateHistoryRoute(_ route: PastRoute, displayName: String, notes: String) async -> PastRoute? {
         let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        var updatedRoute: PastRoute?
 
         if let context = modelContext {
             do {
@@ -606,6 +718,7 @@ class MapViewModel {
                     localRoute.notes = trimmedNotes
                     localRoute.synced = false
                     try context.save()
+                    updatedRoute = localRoute.toPastRoute
                 }
             } catch {
                 print("Failed to update local history route: \(error.localizedDescription)")
@@ -614,7 +727,7 @@ class MapViewModel {
 
         if isUserLoggedIn && isCloudSyncEnabled {
             do {
-                _ = try await apiService.updateHistoryRoute(
+                let remoteRoute = try await apiService.updateHistoryRoute(
                     routeId: route.id,
                     request: RouteHistoryUpdateRequest(
                         displayName: trimmedDisplayName,
@@ -630,6 +743,9 @@ class MapViewModel {
                         localRoute.synced = true
                         localRoute.serverId = route.id
                         try? context.save()
+                        updatedRoute = localRoute.toPastRoute
+                    } else {
+                        updatedRoute = remoteRoute
                     }
                 }
             } catch {
@@ -639,6 +755,7 @@ class MapViewModel {
         }
 
         await loadHistory()
+        return updatedRoute ?? pastRoutes.first(where: { $0.id == route.id })
     }
 
     @MainActor
@@ -714,6 +831,7 @@ class MapViewModel {
         
         // Reload telemetry history for the logged-in user
         await loadRouteTuningProfiles()
+        await loadHomeLocation()
         await loadHistory()
     }
     
@@ -743,6 +861,8 @@ class MapViewModel {
         self.currentUserEmail = nil
         self.currentUserId = nil
         self.activeRouteTuningProfileId = nil
+        self.homeLocation = nil
+        self.homeLocationError = nil
         
         // Reload telemetry history for the guest
         Task {

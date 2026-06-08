@@ -22,6 +22,11 @@ let bikeRoutesLayer = null;
 let cachedBikeRoutesGeoJSON = null;
 let inspectModeActive = false;
 let inspectHighlightLayer = null;
+let homeLocation = null;
+let homeSelectionActive = false;
+let pendingHomeLatLng = null;
+let pendingHomeMarker = null;
+let homeRouteMarker = null;
 
 const OFFICIAL_ROUTE_COLORS = {
     "Multi-Use Path": "#00e676",
@@ -295,6 +300,11 @@ function onMapClick(e) {
         return;
     }
 
+    if (homeSelectionActive) {
+        setPendingHomePin(latlng);
+        return;
+    }
+
     if (!startMarker) {
         // Set Start marker
         startMarker = L.marker(latlng, {
@@ -333,7 +343,13 @@ function onMapClick(e) {
 
 // Create customized SVG markers for premium UI
 function createCustomIcon(color) {
-    const hexColor = color === "green" ? "#00e676" : "#ff1744";
+    const colorMap = {
+        green: "#00e676",
+        red: "#ff1744",
+        blue: "#2979ff",
+        home: "#64ffda"
+    };
+    const hexColor = colorMap[color] || colorMap.red;
     const svgHtml = `
         <svg width="30" height="42" viewBox="0 0 30 42" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M15 0C6.71573 0 0 6.71573 0 15C0 26.25 15 42 15 42C15 42 30 26.25 30 15C30 6.71573 23.2843 0 15 0ZM15 22C11.134 22 8 18.866 8 15C8 11.134 11.134 8 15 8C18.866 8 22 11.134 22 15C22 18.866 18.866 22 15 22Z" 
@@ -464,6 +480,49 @@ function initEventListeners() {
     // Preset route selections
     const presets = document.querySelectorAll(".preset-item");
     const playgroundSelect = document.getElementById("playground-select");
+    const focusPlaygroundsBtn = document.getElementById("btn-focus-playgrounds");
+    const routeFromHomeBtn = document.getElementById("btn-route-from-home");
+    const routeSetPinBtn = document.getElementById("btn-route-set-pin");
+    const setHomeBtn = document.getElementById("btn-set-home");
+    const deleteHomeBtn = document.getElementById("btn-delete-home");
+    const cancelHomePinBtn = document.getElementById("btn-cancel-home-pin");
+    const saveHomePinBtn = document.getElementById("btn-save-home-pin");
+
+    if (focusPlaygroundsBtn && playgroundSelect) {
+        focusPlaygroundsBtn.addEventListener("click", () => {
+            const section = document.getElementById("sec-presets");
+            if (section) section.open = true;
+            playgroundSelect.focus();
+            playgroundSelect.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+    }
+
+    if (routeFromHomeBtn) {
+        routeFromHomeBtn.addEventListener("click", routeFromHome);
+    }
+
+    if (routeSetPinBtn) {
+        routeSetPinBtn.addEventListener("click", () => {
+            stopHomeSelectionMode(false);
+            showToast("Click the map to set a route start pin.");
+        });
+    }
+
+    if (setHomeBtn) {
+        setHomeBtn.addEventListener("click", startHomeSelectionMode);
+    }
+
+    if (deleteHomeBtn) {
+        deleteHomeBtn.addEventListener("click", deleteHomeLocation);
+    }
+
+    if (cancelHomePinBtn) {
+        cancelHomePinBtn.addEventListener("click", () => stopHomeSelectionMode(true));
+    }
+
+    if (saveHomePinBtn) {
+        saveHomePinBtn.addEventListener("click", savePendingHomeLocation);
+    }
 
     presets.forEach(preset => {
         preset.addEventListener("click", () => {
@@ -504,19 +563,14 @@ function initEventListeners() {
 
     // Playground dropdown selection
     if (playgroundSelect) {
-        playgroundSelect.addEventListener("change", (e) => {
+        playgroundSelect.addEventListener("change", async (e) => {
             // Remove active highlight from presets when a playground is selected
             presets.forEach(p => p.classList.remove("active"));
 
-            // Route from startMarker if set, otherwise default to Cedar Ave
-            let startCoords = [40.028446, -105.281088]; // Default Cedar Ave location
-            if (startMarker) {
-                const latlng = startMarker.getLatLng();
-                startCoords = [latlng.lat, latlng.lng];
-            }
             const endStr = e.target.value;
             const endCoords = endStr.split(",").map(Number);
-
+            const startCoords = await getCurrentStartCoords();
+            if (!startCoords) return;
             loadPresetRoute(startCoords, endCoords);
         });
     }
@@ -2323,6 +2377,7 @@ async function initAuth() {
     
     updateAuthUI();
     initAuthEventListeners();
+    await loadHomeLocation();
 }
 
 async function detectPocketBaseUrl() {
@@ -2536,6 +2591,9 @@ function initAuthEventListeners() {
             activeRouteTuningProfileId = "";
             localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, "");
             localStorage.removeItem("cloud_sync_enabled"); // Reset toggle settings
+            homeLocation = null;
+            removeHomeRouteMarker();
+            renderHomeLocation();
             
             // Reset weights to system defaults on logout
             Object.keys(SYSTEM_DEFAULT_WEIGHTS).forEach(key => {
@@ -2589,6 +2647,7 @@ async function performLogin(email, password) {
     await syncPendingRoutes();
     await syncPendingRouteTuningProfiles();
     await loadRouteTuningProfiles();
+    await loadHomeLocation();
 }
 
 function parsePocketBaseError(data) {
@@ -2631,6 +2690,289 @@ function updateLocateButtonVisuals() {
         locateBtn.innerHTML = '<i class="fa-solid fa-location-crosshairs"></i>';
         locateBtn.title = "Find my location";
     }
+}
+
+function getAuthToken() {
+    const storedAuth = localStorage.getItem("pocketbase_auth");
+    if (!storedAuth) return null;
+    try {
+        const authData = JSON.parse(storedAuth);
+        return authData.token || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function formatHomeCoords(location) {
+    if (!location || typeof location.lat !== "number" || typeof location.lng !== "number") {
+        return "Home has not been set yet.";
+    }
+    return `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`;
+}
+
+function renderHomeLocation() {
+    const status = document.getElementById("home-location-status");
+    const deleteBtn = document.getElementById("btn-delete-home");
+    const routeFromHomeBtn = document.getElementById("btn-route-from-home");
+
+    if (status) {
+        status.textContent = currentUser ? formatHomeCoords(homeLocation) : "Log in to set a home location.";
+    }
+    if (deleteBtn) {
+        deleteBtn.disabled = !currentUser || !homeLocation;
+    }
+    if (routeFromHomeBtn) {
+        routeFromHomeBtn.classList.toggle("active", Boolean(homeLocation));
+    }
+}
+
+async function loadHomeLocation() {
+    if (!currentUser) {
+        homeLocation = null;
+        renderHomeLocation();
+        return;
+    }
+
+    const token = getAuthToken();
+    if (!token) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/home`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        if (!resp.ok) {
+            throw new Error("Failed to load home location.");
+        }
+        const data = await resp.json();
+        homeLocation = data.home ? { lat: Number(data.home.lat), lng: Number(data.home.lng) } : null;
+        renderHomeLocation();
+    } catch (err) {
+        console.error("[Home] Load error:", err);
+        renderHomeLocation();
+    }
+}
+
+function setPendingHomePin(latlng) {
+    pendingHomeLatLng = latlng;
+    if (pendingHomeMarker) {
+        pendingHomeMarker.setLatLng(latlng);
+    } else {
+        pendingHomeMarker = L.marker(latlng, {
+            draggable: true,
+            icon: createCustomIcon("home")
+        }).addTo(map);
+        pendingHomeMarker.bindPopup("<strong>Home Location</strong><br>Drag to adjust").openPopup();
+        pendingHomeMarker.on("dragend", () => {
+            pendingHomeLatLng = pendingHomeMarker.getLatLng();
+            updateHomeEditorCoords();
+        });
+    }
+    updateHomeEditorCoords();
+}
+
+function updateHomeEditorCoords() {
+    const coords = document.getElementById("home-map-editor-coords");
+    const saveBtn = document.getElementById("btn-save-home-pin");
+    if (coords) {
+        coords.textContent = pendingHomeLatLng
+            ? `${pendingHomeLatLng.lat.toFixed(6)}, ${pendingHomeLatLng.lng.toFixed(6)}`
+            : "Drop a pin on the map.";
+    }
+    if (saveBtn) {
+        saveBtn.disabled = !pendingHomeLatLng;
+    }
+}
+
+function setControlPanelCollapsed(collapsed) {
+    const controlPanel = document.getElementById("control-panel");
+    const panelToggle = document.getElementById("panel-toggle");
+    if (!controlPanel || !panelToggle) return;
+    controlPanel.classList.toggle("collapsed", collapsed);
+    panelToggle.classList.toggle("hidden", !collapsed);
+    setTimeout(() => map.invalidateSize(), 300);
+}
+
+function openHomeSettingsView() {
+    setControlPanelCollapsed(false);
+    document.querySelectorAll(".collapsible-section").forEach(section => {
+        section.open = section.id === "sec-home";
+    });
+}
+
+function startHomeSelectionMode() {
+    if (!currentUser) {
+        showToast("Log in to set a home location.");
+        return;
+    }
+
+    homeSelectionActive = true;
+    pendingHomeLatLng = homeLocation ? L.latLng(homeLocation.lat, homeLocation.lng) : null;
+
+    const editor = document.getElementById("home-map-editor");
+    if (editor) editor.classList.remove("hidden");
+    if (pendingHomeLatLng) {
+        setPendingHomePin(pendingHomeLatLng);
+        map.setView(pendingHomeLatLng, Math.max(map.getZoom(), 15));
+    } else {
+        updateHomeEditorCoords();
+        showToast("Click the map to drop your home pin.");
+    }
+    setControlPanelCollapsed(true);
+}
+
+function stopHomeSelectionMode(removePendingMarker = true) {
+    homeSelectionActive = false;
+    pendingHomeLatLng = null;
+    const editor = document.getElementById("home-map-editor");
+    if (editor) editor.classList.add("hidden");
+    if (removePendingMarker && pendingHomeMarker) {
+        map.removeLayer(pendingHomeMarker);
+        pendingHomeMarker = null;
+    }
+    updateHomeEditorCoords();
+}
+
+async function savePendingHomeLocation() {
+    if (!pendingHomeLatLng) return;
+
+    const token = getAuthToken();
+    if (!currentUser || !token) {
+        showToast("Log in to save a home location.");
+        return;
+    }
+
+    const saveBtn = document.getElementById("btn-save-home-pin");
+    if (saveBtn) saveBtn.disabled = true;
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/home`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                lat: pendingHomeLatLng.lat,
+                lng: pendingHomeLatLng.lng
+            })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || "Failed to save home location.");
+        }
+        homeLocation = { lat: Number(data.home.lat), lng: Number(data.home.lng) };
+        stopHomeSelectionMode(true);
+        renderHomeLocation();
+        openHomeSettingsView();
+        showToast("Home location saved.");
+    } catch (err) {
+        console.error("[Home] Save error:", err);
+        showToast(err.message);
+        if (saveBtn) saveBtn.disabled = false;
+    }
+}
+
+async function deleteHomeLocation() {
+    if (!homeLocation) return;
+
+    const token = getAuthToken();
+    if (!currentUser || !token) {
+        showToast("Log in to clear a home location.");
+        return;
+    }
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/home`, {
+            method: "DELETE",
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        if (!resp.ok) {
+            const data = await resp.json();
+            throw new Error(data.error || "Failed to clear home location.");
+        }
+        homeLocation = null;
+        removeHomeRouteMarker();
+        renderHomeLocation();
+        showToast("Home location cleared.");
+    } catch (err) {
+        console.error("[Home] Delete error:", err);
+        showToast(err.message);
+    }
+}
+
+function removeHomeRouteMarker() {
+    if (homeRouteMarker) {
+        map.removeLayer(homeRouteMarker);
+        homeRouteMarker = null;
+    }
+}
+
+function getCurrentPositionCoords() {
+    return new Promise((resolve, reject) => {
+        const mockState = localStorage.getItem("mock_geolocation_state") || "default";
+        if (mockState === "default" && !window.isSecureContext) {
+            reject(new Error("Current location is unavailable on insecure HTTP."));
+            return;
+        }
+        if (!("geolocation" in navigator)) {
+            reject(new Error("Geolocation is not supported by this browser."));
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                localStorage.setItem("geolocation_granted", "true");
+                localStorage.removeItem("geolocation_denied");
+                updateLocateButtonVisuals();
+                showUserGPSDot(lat, lng);
+                resolve([lat, lng]);
+            },
+            (error) => {
+                if (error.code === error.PERMISSION_DENIED) {
+                    localStorage.removeItem("geolocation_granted");
+                    localStorage.setItem("geolocation_denied", "true");
+                    updateLocateButtonVisuals();
+                }
+                reject(error);
+            },
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
+        );
+    });
+}
+
+async function getCurrentStartCoords() {
+    try {
+        const coords = await getCurrentPositionCoords();
+        if (isWithinBoulder(coords[0], coords[1])) {
+            return coords;
+        }
+        showToast("Current location is outside Boulder. Cannot route from current location.");
+    } catch (error) {
+        console.warn("[Location] Failed to use current location:", error);
+        showToast("Could not get current location. Please allow location access.");
+        showLocationSettingsModal();
+    }
+    return null;
+}
+
+async function routeFromHome() {
+    if (!homeLocation) {
+        showToast(currentUser ? "Set your home location first." : "Log in and set your home location first.");
+        openHomeSettingsView();
+        return;
+    }
+
+    stopHomeSelectionMode(true);
+    const startCoords = await getCurrentStartCoords();
+    if (!startCoords) return;
+    await loadPresetRoute(startCoords, [homeLocation.lat, homeLocation.lng]);
+    if (endMarker) {
+        endMarker.setIcon(createCustomIcon("home"));
+        endMarker.bindPopup("<strong>Home</strong><br>Drag to adjust destination").openPopup();
+    }
+    updatePlaygroundStartText("Current Location");
+    showToast("Routing to home from your current location.");
 }
 
 // ====================================
@@ -2881,6 +3223,37 @@ function formatHistoryDate(value) {
     });
 }
 
+function getPositiveNumber(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function getHistoryDisplayDistanceMeters(route) {
+    return getPositiveNumber(route.display_distance_meters)
+        ?? getPositiveNumber(route.actual_distance_meters)
+        ?? getPositiveNumber(route.total_length_meters)
+        ?? 0;
+}
+
+function getHistoryDisplayDurationSeconds(route) {
+    return getPositiveNumber(route.display_duration_seconds)
+        ?? getPositiveNumber(route.actual_duration_seconds)
+        ?? getPositiveNumber(route.total_estimated_time_seconds)
+        ?? 0;
+}
+
+function getHistoryDisplayAverageSpeedMps(route) {
+    return getPositiveNumber(route.display_average_speed)
+        ?? (getHistoryDisplayDurationSeconds(route) > 0
+            ? getHistoryDisplayDistanceMeters(route) / getHistoryDisplayDurationSeconds(route)
+            : 0);
+}
+
+function formatHistoryDuration(seconds) {
+    if (seconds > 0 && seconds < 60) return "<1 min";
+    return `${Math.ceil(seconds / 60)} min`;
+}
+
 function getRouteServerId(route) {
     return route.server_id || (route.synced ? route.id : null);
 }
@@ -2927,9 +3300,6 @@ async function syncPendingRoutes() {
                 ended_at: r.ended_at,
                 ended_lat: r.ended_lat,
                 ended_lon: r.ended_lon,
-                actual_distance_meters: r.actual_distance_meters,
-                actual_duration_seconds: r.actual_duration_seconds,
-                average_speed: r.average_speed,
                 device_type: "web",
                 weights: r.weights || {},
                 ticks: r.ticks || []
@@ -3063,13 +3433,9 @@ async function loadHistory() {
             minute: "2-digit"
         });
         
-        const miles = (item.total_length_meters / 1609.34).toFixed(2);
-        const actualMiles = item.actual_distance_meters ? (item.actual_distance_meters / 1609.34).toFixed(2) : "0.00";
-        
-        const durMin = Math.ceil(item.total_estimated_time_seconds / 60);
-        const actualDurMin = item.actual_duration_seconds ? Math.ceil(item.actual_duration_seconds / 60) : 0;
-        
-        const speedMph = item.average_speed ? (item.average_speed * 2.23694).toFixed(1) : "0.0";
+        const displayMiles = (getHistoryDisplayDistanceMeters(item) / 1609.34).toFixed(2);
+        const displayDuration = formatHistoryDuration(getHistoryDisplayDurationSeconds(item));
+        const speedMph = (getHistoryDisplayAverageSpeedMps(item) * 2.23694).toFixed(1);
         
         el.innerHTML = `
             <div class="history-header">
@@ -3079,11 +3445,11 @@ async function loadHistory() {
             <div class="history-stats">
                 <div class="history-stat-box">
                     <span class="label">Distance</span>
-                    <span class="value">${actualMiles} / ${miles} mi</span>
+                    <span class="value">${displayMiles} mi</span>
                 </div>
                 <div class="history-stat-box">
                     <span class="label">Duration</span>
-                    <span class="value">${actualDurMin} / ${durMin} min</span>
+                    <span class="value">${displayDuration}</span>
                 </div>
                 <div class="history-stat-box">
                     <span class="label">Speed</span>
@@ -3148,14 +3514,14 @@ function renderHistoryDetail(route) {
         editIcon.className = isHistoryDetailEditing ? "fa-solid fa-check" : "fa-solid fa-pen";
     }
 
-    const miles = ((route.actual_distance_meters || route.total_length_meters || 0) / 1609.34).toFixed(2);
-    const durationMin = Math.ceil((route.actual_duration_seconds || route.total_estimated_time_seconds || 0) / 60);
-    const speedMph = route.average_speed ? (route.average_speed * 2.23694).toFixed(1) : "0.0";
+    const miles = (getHistoryDisplayDistanceMeters(route) / 1609.34).toFixed(2);
+    const duration = formatHistoryDuration(getHistoryDisplayDurationSeconds(route));
+    const speedMph = (getHistoryDisplayAverageSpeedMps(route) * 2.23694).toFixed(1);
 
     const dateEl = document.getElementById("history-detail-date");
     if (dateEl) dateEl.textContent = formatHistoryDate(route.started_at);
     document.getElementById("history-detail-distance").textContent = `${miles} mi`;
-    document.getElementById("history-detail-duration").textContent = `${durationMin} min`;
+    document.getElementById("history-detail-duration").textContent = duration;
     document.getElementById("history-detail-speed").textContent = `${speedMph} mph`;
 }
 
@@ -3269,19 +3635,6 @@ async function deleteHistoryRoute(route) {
     showToast("Route removed from history.");
 }
 
-function exportHistoryRoute(route) {
-    if (!route) return;
-    const blob = new Blob([JSON.stringify(route, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${getHistoryRouteTitle(route).replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "route-history"}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-}
-
 function initializeHistoryDetailControls() {
     document.getElementById("btn-history-detail-back")?.addEventListener("click", hideHistoryDetail);
     document.getElementById("btn-history-detail-edit")?.addEventListener("click", toggleHistoryDetailEdit);
@@ -3291,7 +3644,6 @@ function initializeHistoryDetailControls() {
     document.getElementById("history-map-preview")?.addEventListener("click", () => {
         if (currentHistoryRoute) loadHistoryRouteOnMap(currentHistoryRoute.id);
     });
-    document.getElementById("btn-history-export")?.addEventListener("click", () => exportHistoryRoute(currentHistoryRoute));
     document.getElementById("btn-history-delete")?.addEventListener("click", () => deleteHistoryRoute(currentHistoryRoute));
 }
 
@@ -3347,52 +3699,47 @@ async function loadHistoryRouteOnMap(routeId) {
         historyMarkers.push(endMarkerLoc);
         
         if (route.ticks && route.ticks.length > 0) {
-            const dotCoords = [];
-            route.ticks.forEach((tick, index) => {
-                const tickLatLng = [tick.lat, tick.lon];
-                dotCoords.push(tickLatLng);
-                
-                const time = new Date(tick.timestamp).toLocaleTimeString();
-                const speed = (tick.speed * 2.23694).toFixed(1);
-                const direction = Math.round(tick.direction);
-                
-                const dotMarker = L.marker(tickLatLng, {
-                    icon: L.divIcon({
-                        html: '<div class="history-dot-inner"></div>',
-                        iconSize: [8, 8],
-                        iconAnchor: [4, 4],
-                        className: 'history-dot-marker'
-                    }),
-                    interactive: true
-                }).bindTooltip(`
-                    <strong>GPS Telemetry Point #${index + 1}</strong><br>
-                    Time: ${time}<br>
-                    Speed: ${speed} mph<br>
-                    Heading: ${direction}°<br>
-                    Accuracy: ${tick.accuracy ? tick.accuracy.toFixed(1) + 'm' : 'N/A'}
-                `, { sticky: true, opacity: 0.9 }).addTo(map);
-                
+            const tickCoords = route.ticks
+                .slice()
+                .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                .map(tick => [tick.lat, tick.lon]);
+
+            if (tickCoords.length >= 2) {
+                const tickLine = L.polyline(tickCoords, {
+                    color: "#f97316",
+                    weight: 5,
+                    opacity: 0.9
+                }).addTo(map);
+                historyPolylines.push(tickLine);
+            } else if (tickCoords.length === 1) {
+                const dotMarker = L.circleMarker(tickCoords[0], {
+                    radius: 5,
+                    color: "#fff",
+                    weight: 1,
+                    fillColor: "#f97316",
+                    fillOpacity: 1
+                }).addTo(map);
                 historyMarkers.push(dotMarker);
-            });
-            
-            const bounds = L.latLngBounds(dotCoords.concat([[route.start_lat, route.start_lon], [route.end_lat, route.end_lon]]));
+            }
+
+            const bounds = L.latLngBounds(tickCoords.concat([[route.start_lat, route.start_lon], [route.end_lat, route.end_lon]]));
             map.fitBounds(bounds, { padding: [40, 40] });
         } else {
             const bounds = L.latLngBounds([[route.start_lat, route.start_lon], [route.end_lat, route.end_lon]]);
             map.fitBounds(bounds, { padding: [40, 40] });
         }
         
-        const distanceMiles = route.actual_distance_meters ? (route.actual_distance_meters / 1609.34).toFixed(2) : "0.00";
+        const distanceMiles = (getHistoryDisplayDistanceMeters(route) / 1609.34).toFixed(2);
         const estimatedMiles = (route.total_length_meters / 1609.34).toFixed(2);
         
-        const durationMin = route.actual_duration_seconds ? Math.ceil(route.actual_duration_seconds / 60) : 0;
+        const duration = formatHistoryDuration(getHistoryDisplayDurationSeconds(route));
         const estimatedMin = Math.ceil(route.total_estimated_time_seconds / 60);
         
-        const avgSpeedMph = route.average_speed ? (route.average_speed * 2.23694).toFixed(1) : "0.0";
+        const avgSpeedMph = (getHistoryDisplayAverageSpeedMps(route) * 2.23694).toFixed(1);
         
         document.getElementById("info-distance").innerHTML = `
             <strong>Actual:</strong> ${distanceMiles} mi <span style="font-size:11px; color:var(--text-secondary);">(Est: ${estimatedMiles} mi)</span><br>
-            <strong>Duration:</strong> ${durationMin} min <span style="font-size:11px; color:var(--text-secondary);">(Est: ${estimatedMin} min)</span><br>
+            <strong>Duration:</strong> ${duration} <span style="font-size:11px; color:var(--text-secondary);">(Est: ${estimatedMin} min)</span><br>
             <strong>Avg Speed:</strong> ${avgSpeedMph} mph
         `;
         

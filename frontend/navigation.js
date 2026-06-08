@@ -959,18 +959,8 @@ const Navigation = (() => {
         
         state.localTicksCache.push(tick);
         
-        if (isSyncActive()) {
-            try {
-                const base = typeof API_BASE !== "undefined" ? API_BASE : "";
-                await fetch(`${base}/api/navigation/${state.routeId}/tick`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(tick)
-                });
-            } catch (err) {
-                console.error("[Navigation] Failed to log telemetry tick remotely:", err);
-            }
-        }
+        // Keep ticks local during active navigation. They are uploaded in one
+        // batch when the route ends to avoid frequent radio wakeups.
     }
 
     async function endRouteLogging() {
@@ -1071,7 +1061,8 @@ const Navigation = (() => {
                 status: status,
                 ended_lat: finalLat,
                 ended_lon: finalLon,
-                ended_at: new Date().toISOString()
+                ended_at: new Date().toISOString(),
+                ticks: state.localTicksCache
             };
             
             try {

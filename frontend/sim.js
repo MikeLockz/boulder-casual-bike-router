@@ -27,6 +27,8 @@
         watchErrorCallback: null,
         compassHeading: 0,      // Current simulated compass heading
         compassTarget: 0,       // True bearing (target)
+        compassInitialized: false,
+        compassDrift: 0,        // Slow sensor bias in degrees
         panel: null,            // DOM element for control panel
         progressBar: null,
     };
@@ -38,8 +40,11 @@
         lateralOffsetMax: 8,    // meters
         gpsSpikeChance: 0.03,   // 3% per tick
         gpsSpikeDistance: 40,    // meters (20-60 randomized)
-        compassJitter: 8,       // ±degrees per reading
-        compassBigSwingChance: 0.03, // 3% chance of ±25° swing
+        compassJitter: 1.5,     // Small per-reading noise in degrees
+        compassDriftStep: 0.15, // Slow sensor bias change per tick
+        compassDriftMax: 3,     // Max persistent compass bias in degrees
+        compassFollowFactor: 0.35,
+        compassMaxStep: 6,      // Max heading change per tick
         tickMs: 1000,           // Base tick interval (1 second at 1x)
         riderSpeedMps: 4.47,    // 10 mph in m/s
     };
@@ -140,6 +145,8 @@
                 sim.routeCoords = flattenSegments(window.lastRouteSegments);
                 sim.interpCoords = interpolateRoute(sim.routeCoords, 2); // 2m spacing
                 sim.currentIdx = 0;
+                sim.compassInitialized = false;
+                sim.compassDrift = 0;
 
                 // Pick random lateral offset
                 sim.lateralSide = Math.random() > 0.5 ? 1 : -1;
@@ -222,15 +229,9 @@
 
         const baseCoord = sim.interpCoords[sim.currentIdx];
 
-        // Calculate true bearing from route
-        let trueBearing = 0;
-        if (sim.currentIdx < sim.interpCoords.length - 1) {
-            const next = sim.interpCoords[Math.min(sim.currentIdx + 5, sim.interpCoords.length - 1)];
-            trueBearing = getBearing(baseCoord, next);
-        } else if (sim.currentIdx > 0) {
-            const prev = sim.interpCoords[sim.currentIdx - 5] || sim.interpCoords[0];
-            trueBearing = getBearing(prev, baseCoord);
-        }
+        // Calculate route course over a short window so the simulated compass
+        // follows direction of travel without overreacting to tiny geometry kinks.
+        const trueBearing = getRouteBearingAt(sim.currentIdx);
 
         // --- Apply lateral offset (perpendicular to bearing) ---
         // Drift the offset slowly
@@ -259,17 +260,31 @@
             console.log('[SIM] 💥 GPS spike!');
         }
 
-        // --- Compass heading with jitter ---
+        // --- Compass heading ---
+        // Keep the simulator mostly aligned to route course. Real devices have a
+        // little bias and noise, but they should not randomly swing away from the
+        // rider's travel direction in debug navigation.
         sim.compassTarget = trueBearing;
-        let compassJitter = gaussianRandom() * config.compassJitter;
-        // Occasional big swing
-        if (Math.random() < config.compassBigSwingChance) {
-            compassJitter += (Math.random() > 0.5 ? 1 : -1) * 25;
-            console.log('[SIM] 🧭 Compass big swing');
+        sim.compassDrift = clamp(
+            sim.compassDrift + gaussianRandom() * config.compassDriftStep,
+            -config.compassDriftMax,
+            config.compassDriftMax
+        );
+        const compassNoise = clamp(gaussianRandom() * config.compassJitter, -3, 3);
+        const compassTarget = normalizeHeading(sim.compassTarget + sim.compassDrift + compassNoise);
+
+        if (!sim.compassInitialized) {
+            sim.compassHeading = compassTarget;
+            sim.compassInitialized = true;
+        } else {
+            const headingDiff = shortestAngleDiff(sim.compassHeading, compassTarget);
+            const step = clamp(
+                headingDiff * config.compassFollowFactor,
+                -config.compassMaxStep,
+                config.compassMaxStep
+            );
+            sim.compassHeading = normalizeHeading(sim.compassHeading + step);
         }
-        // Smooth towards target with lag
-        const headingDiff = shortestAngleDiff(sim.compassHeading, sim.compassTarget + compassJitter);
-        sim.compassHeading = (sim.compassHeading + headingDiff * 0.6 + 360) % 360;
 
         // --- Build Position object and fire callback ---
         const position = buildPosition(finalLat, finalLng, accuracy);
@@ -512,6 +527,23 @@
         return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
     }
 
+    function getRouteBearingAt(index) {
+        if (sim.interpCoords.length < 2) return sim.compassHeading || 0;
+
+        const behindIdx = Math.max(0, index - 3);
+        const aheadIdx = Math.min(sim.interpCoords.length - 1, index + 10);
+
+        if (aheadIdx !== behindIdx) {
+            return getBearing(sim.interpCoords[behindIdx], sim.interpCoords[aheadIdx]);
+        }
+
+        if (index > 0) {
+            return getBearing(sim.interpCoords[index - 1], sim.interpCoords[index]);
+        }
+
+        return getBearing(sim.interpCoords[index], sim.interpCoords[index + 1]);
+    }
+
     function gaussianRandom() {
         // Box-Muller transform for gaussian distribution (mean=0, σ=1)
         let u = 0, v = 0;
@@ -525,6 +557,10 @@
         while (diff > 180) diff -= 360;
         while (diff < -180) diff += 360;
         return diff;
+    }
+
+    function normalizeHeading(heading) {
+        return (heading + 360) % 360;
     }
 
     function clamp(val, min, max) {

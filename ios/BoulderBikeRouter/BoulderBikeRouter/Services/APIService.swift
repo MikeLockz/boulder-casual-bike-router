@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 
 /// Errors that can occur when calling the Biking Boulder routing API.
 enum APIError: Error, LocalizedError {
@@ -417,6 +418,106 @@ class APIService {
             return try JSONDecoder().decode(RouteTuningProfile.self, from: data)
         } catch {
             throw APIError.decodingError(error)
+        }
+    }
+
+    func fetchHomeLocation() async throws -> HomeLocation? {
+        guard let baseURL = URL(string: baseURLLabel),
+              let homeURL = URL(string: "/api/settings/home", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: homeURL)
+        urlRequest.httpMethod = "GET"
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode(HomeLocationResponse.self, from: data).home
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    func saveHomeLocation(_ coordinate: CLLocationCoordinate2D) async throws -> HomeLocation? {
+        guard let baseURL = URL(string: baseURLLabel),
+              let homeURL = URL(string: "/api/settings/home", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: homeURL)
+        urlRequest.httpMethod = "PUT"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(HomeLocationRequest(lat: coordinate.latitude, lng: coordinate.longitude))
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode(HomeLocationResponse.self, from: data).home
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    func deleteHomeLocation() async throws {
+        guard let baseURL = URL(string: baseURLLabel),
+              let homeURL = URL(string: "/api/settings/home", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: homeURL)
+        urlRequest.httpMethod = "DELETE"
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (_, response): (Data, URLResponse)
+        do {
+            (_, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
     }
 

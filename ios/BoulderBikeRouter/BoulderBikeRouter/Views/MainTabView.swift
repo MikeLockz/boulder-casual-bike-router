@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct MainTabView: View {
     @State private var viewModel = MapViewModel()
@@ -60,6 +61,18 @@ struct MainTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HistoryRouteSelected"))) { _ in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 selectedTab = 0
+            }
+        }
+        .onChange(of: viewModel.isSelectingHomeLocation) { _, isSelecting in
+            if isSelecting {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    selectedTab = 0
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HomeLocationSaved"))) { _ in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                selectedTab = 3
             }
         }
     }

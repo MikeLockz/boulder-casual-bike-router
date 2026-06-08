@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 
 struct SettingsTabView: View {
     @Bindable var viewModel: MapViewModel
@@ -125,6 +126,74 @@ struct SettingsTabView: View {
                                     .stroke(Color.onSurfaceVariant.opacity(0.05), lineWidth: 1)
                             )
                         }
+
+                        // Section 3: Home Location
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("HOME")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.onSurfaceVariant)
+                                .tracking(1)
+                                .padding(.horizontal, 4)
+
+                            VStack(alignment: .leading, spacing: 14) {
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Color.primaryMint.opacity(0.12))
+                                            .frame(width: 40, height: 40)
+                                        Image(systemName: "house.fill")
+                                            .foregroundColor(.primaryMint)
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Home Location")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundColor(.onSurface)
+                                        Text(homeLocationStatusText)
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.onSurfaceVariant)
+                                    }
+
+                                    Spacer()
+                                }
+
+                                if let error = viewModel.homeLocationError {
+                                    Text(error)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.errorRose)
+                                }
+
+                                HStack(spacing: 8) {
+                                    Button(action: {
+                                        viewModel.beginHomeLocationSelection()
+                                    }) {
+                                        Label("Set Home Location", systemImage: "mappin.and.ellipse")
+                                            .font(.system(size: 13, weight: .bold))
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.primaryMint)
+                                    .disabled(viewModel.isSavingHomeLocation)
+
+                                    Button(action: {
+                                        Task { await viewModel.deleteHomeLocation() }
+                                    }) {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 13, weight: .bold))
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(.errorRose)
+                                    .disabled(viewModel.homeLocation == nil || viewModel.isSavingHomeLocation)
+                                }
+                            }
+                            .padding(16)
+                            .background(Color.surfaceDim)
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.onSurfaceVariant.opacity(0.05), lineWidth: 1)
+                            )
+                        }
                     }
                     
                     // Section 3: Routing Weights and Offsets
@@ -222,5 +291,12 @@ struct SettingsTabView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.onSurfaceVariant.opacity(0.05), lineWidth: 1)
         )
+    }
+
+    private var homeLocationStatusText: String {
+        guard let home = viewModel.homeLocation else {
+            return "Home has not been set yet."
+        }
+        return String(format: "%.6f, %.6f", home.lat, home.lng)
     }
 }

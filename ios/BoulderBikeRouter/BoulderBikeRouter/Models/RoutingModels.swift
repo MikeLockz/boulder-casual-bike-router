@@ -181,6 +181,28 @@ struct RouteTuningProfile: Codable, Identifiable, Hashable {
     }
 }
 
+/// Authenticated home location setting stored as lat/lng coordinates.
+struct HomeLocation: Codable, Identifiable, Hashable {
+    let id: String?
+    let lat: Double
+    let lng: Double
+    let created: String?
+    let updated: String?
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lng)
+    }
+}
+
+struct HomeLocationResponse: Codable {
+    let home: HomeLocation?
+}
+
+struct HomeLocationRequest: Codable {
+    let lat: Double
+    let lng: Double
+}
+
 /// Represents a completed route in the navigation history log.
 struct PastRoute: Codable, Identifiable, Hashable {
     let id: String
@@ -202,6 +224,9 @@ struct PastRoute: Codable, Identifiable, Hashable {
     let actualDistanceMeters: Double?
     let actualDurationSeconds: Double?
     let averageSpeed: Double?
+    var displayDistanceMeters: Double? = nil
+    var displayDurationSeconds: Double? = nil
+    var displayAverageSpeed: Double? = nil
     let deviceType: String?
     let weights: [String: Double]?
 
@@ -225,6 +250,9 @@ struct PastRoute: Codable, Identifiable, Hashable {
         case actualDistanceMeters = "actual_distance_meters"
         case actualDurationSeconds = "actual_duration_seconds"
         case averageSpeed = "average_speed"
+        case displayDistanceMeters = "display_distance_meters"
+        case displayDurationSeconds = "display_duration_seconds"
+        case displayAverageSpeed = "display_average_speed"
         case deviceType = "device_type"
         case weights
     }
@@ -234,37 +262,95 @@ struct PastRoute: Codable, Identifiable, Hashable {
         if let displayName, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return displayName
         }
-        return endPointName.isEmpty ? "Custom Route" : "\(endPointName) Route"
+        let destination = endPointName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMMM d"
+        return "Ride to \(destination.isEmpty ? "Destination" : destination) on \(formatter.string(from: date))"
     }
     
     var date: Date {
-        let formatter = ISO8601DateFormatter()
-        let fallbackFormatter = DateFormatter()
-        fallbackFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
-        
-        if let d = formatter.date(from: startedAt) {
-            return d
-        } else if let d = fallbackFormatter.date(from: startedAt) {
-            return d
-        } else {
-            let cleaned = startedAt.prefix(19) + "Z"
-            if let d = formatter.date(from: String(cleaned)) {
-                return d
-            }
-            return Date()
+        Self.parseRouteDate(startedAt) ?? Date.distantPast
+    }
+
+    var endDate: Date? {
+        guard let endedAt else { return nil }
+        return Self.parseRouteDate(endedAt)
+    }
+
+    var displayedDistanceMeters: Double {
+        if let displayDistanceMeters, displayDistanceMeters > 0 {
+            return displayDistanceMeters
         }
+        let actual = actualDistanceMeters ?? 0
+        if actual > 0 {
+            return actual
+        }
+        return totalLengthMeters
+    }
+
+    var displayedDurationSeconds: Double {
+        if let displayDurationSeconds, displayDurationSeconds > 0 {
+            return displayDurationSeconds
+        }
+        if let actualDurationSeconds, actualDurationSeconds > 0 {
+            return actualDurationSeconds
+        }
+        if let endDate {
+            let elapsed = endDate.timeIntervalSince(date)
+            if elapsed > 0 {
+                return elapsed
+            }
+        }
+        return totalEstimatedTimeSeconds
+    }
+
+    var displayedAverageSpeedMetersPerSecond: Double? {
+        if let displayAverageSpeed, displayAverageSpeed > 0 {
+            return displayAverageSpeed
+        }
+        let duration = displayedDurationSeconds
+        guard duration > 0 else { return nil }
+        return displayedDistanceMeters / duration
+    }
+
+    private static func parseRouteDate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = formatter.date(from: value) {
+            return d
+        }
+
+        let internetFormatter = ISO8601DateFormatter()
+        if let d = internetFormatter.date(from: value) {
+            return d
+        }
+
+        let fallbackFormatter = DateFormatter()
+        fallbackFormatter.locale = Locale(identifier: "en_US_POSIX")
+        fallbackFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+        if let d = fallbackFormatter.date(from: value) {
+            return d
+        }
+
+        fallbackFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSZ"
+        if let d = fallbackFormatter.date(from: value) {
+            return d
+        }
+
+        let cleaned = value.replacingOccurrences(of: " ", with: "T")
+        if cleaned.count >= 19 {
+            return internetFormatter.date(from: String(cleaned.prefix(19)) + "Z")
+        }
+        return nil
     }
     
     var distanceMiles: Double {
-        let meters = actualDistanceMeters ?? totalLengthMeters
-        return meters / 1609.34
+        displayedDistanceMeters / 1609.34
     }
     
     var durationSeconds: Int {
-        if let actualSecs = actualDurationSeconds {
-            return Int(actualSecs)
-        }
-        return Int(totalEstimatedTimeSeconds)
+        Int(displayedDurationSeconds.rounded())
     }
 }
 
@@ -351,17 +437,19 @@ struct NavigationEndRequest: Codable {
     let endedLat: Double?
     let endedLon: Double?
     let endedAt: String
+    let ticks: [NavigationTickRequest]
 
     enum CodingKeys: String, CodingKey {
         case status
         case endedLat = "ended_lat"
         case endedLon = "ended_lon"
         case endedAt = "ended_at"
+        case ticks
     }
 }
 
 struct NavigationTick: Codable, Identifiable, Hashable {
-    var id: String { timestamp }
+    var id: String { "\(timestamp)-\(lat)-\(lon)" }
     
     let lat: Double
     let lon: Double
@@ -402,6 +490,9 @@ struct DetailedRouteResponse: Codable {
     let actualDistanceMeters: Double?
     let actualDurationSeconds: Double?
     let averageSpeed: Double?
+    var displayDistanceMeters: Double? = nil
+    var displayDurationSeconds: Double? = nil
+    var displayAverageSpeed: Double? = nil
     let deviceType: String?
     let weights: [String: Double]?
     let routeGeojson: GeoJSONFeatureCollection?
@@ -427,6 +518,9 @@ struct DetailedRouteResponse: Codable {
         case actualDistanceMeters = "actual_distance_meters"
         case actualDurationSeconds = "actual_duration_seconds"
         case averageSpeed = "average_speed"
+        case displayDistanceMeters = "display_distance_meters"
+        case displayDurationSeconds = "display_duration_seconds"
+        case displayAverageSpeed = "display_average_speed"
         case deviceType = "device_type"
         case weights
         case routeGeojson = "route_geojson"
@@ -439,7 +533,10 @@ struct DetailedRouteResponse: Codable {
             guard !feature.geometry.coordinates.isEmpty else { return nil }
             let coords = feature.geometry.coordinates[0]
             return coords.map { pair in
-                CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
+                if abs(pair[0]) <= 90, abs(pair[1]) > 90 {
+                    return CLLocationCoordinate2D(latitude: pair[0], longitude: pair[1])
+                }
+                return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
             }
         }
     }

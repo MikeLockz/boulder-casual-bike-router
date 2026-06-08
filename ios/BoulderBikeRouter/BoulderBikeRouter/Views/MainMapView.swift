@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import SwiftData
 
 enum MapSelectionTarget {
     case start
@@ -40,6 +41,8 @@ struct MainMapView: View {
                 VStack {
                     if let historyRoute = viewModel.selectedHistoryRoute {
                         historySelectionBanner(historyRoute)
+                    } else if viewModel.isSelectingHomeLocation {
+                        homeSelectionBanner
                     } else if mapSelectionMode != nil {
                         mapSelectionBanner
                     } else if isSearchExpanded {
@@ -73,7 +76,11 @@ struct MainMapView: View {
                 }
                 
                 // Bottom Route Overview Card
-                routeOverviewCard
+                if viewModel.isSelectingHomeLocation {
+                    homeSaveCard
+                } else {
+                    routeOverviewCard
+                }
             } else {
                 // 3. Navigation HUD Overlay
                 NavigationOverlayView(
@@ -120,6 +127,7 @@ struct MainMapView: View {
         .onChange(of: locationManager.currentLocation) { _, newLocation in
             if let loc = newLocation {
                 DispatchQueue.main.async {
+                    viewModel.currentLocation = loc.coordinate
                     // Auto-initialize starting point to current location if not set yet
                     if viewModel.startLocation == nil {
                         viewModel.startLocation = loc.coordinate
@@ -197,6 +205,23 @@ struct MainMapView: View {
             }
             mapSelectionMode = nil
         }
+    }
+
+    private func handleHomeMapTap(at coordinate: CLLocationCoordinate2D) {
+        withAnimation(.spring()) {
+            viewModel.updatePendingHomeLocation(coordinate)
+        }
+    }
+
+    private func currentStartCoordinate() -> CLLocationCoordinate2D? {
+        locationManager.currentLocation?.coordinate
+    }
+
+    private func selectPlaygroundFromCurrent(_ playground: Playground) {
+        if let current = currentStartCoordinate() {
+            viewModel.setStartLocation(current)
+        }
+        viewModel.selectPlayground(playground)
     }
 
     private func locateUser() {
@@ -372,7 +397,7 @@ struct MainMapView: View {
                         Image(systemName: "location.fill")
                             .foregroundColor(.primaryMint)
                     }
-                    
+
                     Button(action: {
                         withAnimation {
                             mapSelectionMode = .start
@@ -408,13 +433,21 @@ struct MainMapView: View {
                     Menu {
                         ForEach(viewModel.playgroundsList) { pg in
                             Button(pg.name) {
-                                viewModel.selectPlayground(pg)
+                                selectPlaygroundFromCurrent(pg)
                             }
                         }
                     } label: {
                         Image(systemName: "figure.play")
                             .foregroundColor(.primaryMint)
                     }
+
+                    Button(action: {
+                        viewModel.routeToHome(from: currentStartCoordinate())
+                    }) {
+                        Image(systemName: "house.fill")
+                            .foregroundColor(viewModel.homeLocation == nil ? .onSurfaceVariant : .primaryMint)
+                    }
+                    .disabled(viewModel.homeLocation == nil)
                     
                     Button(action: {
                         withAnimation {
@@ -499,6 +532,96 @@ struct MainMapView: View {
         .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
         .padding(.horizontal, 16)
         .padding(.top, 50)
+    }
+
+    private var homeSelectionBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "house.fill")
+                .foregroundColor(.mintGlow)
+
+            Text("Tap Map to Set Home Location")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.onSurface)
+
+            Spacer()
+
+            Button("Cancel") {
+                withAnimation {
+                    viewModel.cancelHomeLocationSelection()
+                }
+            }
+            .font(.system(size: 14, weight: .bold))
+            .foregroundColor(.errorRose)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.surfaceElevated.opacity(0.95))
+        .cornerRadius(24)
+        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.top, 50)
+    }
+
+    @ViewBuilder
+    private var homeSaveCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Set Home")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.onSurface)
+                    Text(homePendingText)
+                        .font(.system(size: 12))
+                        .foregroundColor(.onSurfaceVariant)
+                }
+
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                Button("Cancel") {
+                    viewModel.cancelHomeLocationSelection()
+                }
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.onSurface)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(12)
+
+                Button(action: {
+                    guard let coordinate = viewModel.pendingHomeCoordinate else { return }
+                    Task {
+                        await viewModel.saveHomeLocation(coordinate)
+                        if viewModel.homeLocationError == nil {
+                            NotificationCenter.default.post(name: NSNotification.Name("HomeLocationSaved"), object: nil)
+                        }
+                    }
+                }) {
+                    Text(viewModel.isSavingHomeLocation ? "Saving..." : "Save")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.surfaceDim)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(viewModel.pendingHomeCoordinate == nil ? Color.onSurfaceVariant : Color.primaryMint)
+                        .cornerRadius(12)
+                }
+                .disabled(viewModel.pendingHomeCoordinate == nil || viewModel.isSavingHomeLocation)
+            }
+        }
+        .padding(16)
+        .background(Color.surfaceElevated.opacity(0.95))
+        .cornerRadius(16)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 24)
+    }
+
+    private var homePendingText: String {
+        guard let coordinate = viewModel.pendingHomeCoordinate else {
+            return "Drop a pin on the map."
+        }
+        return String(format: "%.6f, %.6f", coordinate.latitude, coordinate.longitude)
     }
     
     private var routeTitle: String {
@@ -591,8 +714,12 @@ struct MainMapView: View {
                         .stroke(Color.secondary, lineWidth: 4)
                 }
                 
-                ForEach(viewModel.selectedHistoryRouteTicks) { tick in
-                    Annotation("", coordinate: tick.clCoordinate) {
+                let tickCoordinates = viewModel.selectedHistoryRouteTicks.map { $0.clCoordinate }
+                if tickCoordinates.count >= 2 {
+                    MapPolyline(coordinates: tickCoordinates)
+                        .stroke(Color.orange, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                } else if let tickCoordinate = tickCoordinates.first {
+                    Annotation("", coordinate: tickCoordinate) {
                         Circle()
                             .fill(Color.orange)
                             .frame(width: 8, height: 8)
@@ -618,11 +745,20 @@ struct MainMapView: View {
                     UserLocationMarker(heading: locationManager.currentHeading)
                 }
             }
+
+            if let pendingHome = viewModel.pendingHomeCoordinate {
+                Annotation("Home", coordinate: pendingHome, anchor: .bottom) {
+                    markerView(color: .mintGlow)
+                }
+            }
         }
         .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
         .onTapGesture { screenPoint in
-            // Tap to set markers ONLY in map selection mode
-            if mapSelectionMode != nil {
+            if viewModel.isSelectingHomeLocation {
+                if let coordinate = proxy.convert(screenPoint, from: .local) {
+                    handleHomeMapTap(at: coordinate)
+                }
+            } else if mapSelectionMode != nil {
                 if let coordinate = proxy.convert(screenPoint, from: .local) {
                     handleMapTap(at: coordinate)
                 }

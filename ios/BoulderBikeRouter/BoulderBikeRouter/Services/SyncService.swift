@@ -144,9 +144,6 @@ class SyncService {
                     ended_at: localRoute.endedAt,
                     ended_lat: localRoute.endedLat,
                     ended_lon: localRoute.endedLon,
-                    actual_distance_meters: localRoute.actualDistanceMeters,
-                    actual_duration_seconds: localRoute.actualDurationSeconds,
-                    average_speed: localRoute.averageSpeed,
                     device_type: localRoute.deviceType ?? "ios",
                     weights: localRoute.weights ?? [:],
                     ticks: tickItems
@@ -265,9 +262,6 @@ struct SyncRouteItem: Codable {
     let ended_at: String?
     let ended_lat: Double?
     let ended_lon: Double?
-    let actual_distance_meters: Double?
-    let actual_duration_seconds: Double?
-    let average_speed: Double?
     let device_type: String
     let weights: [String: Double]
     let ticks: [SyncTickItem]

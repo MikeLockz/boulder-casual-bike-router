@@ -79,6 +79,7 @@ class NavigationManager {
         let now = Date()
         let isoFormatter = ISO8601DateFormatter()
         self.startedAtString = isoFormatter.string(from: now)
+        self.activeRouteId = UUID().uuidString
         
         // Prevent screen sleep during navigation
         UIApplication.shared.isIdleTimerDisabled = true
@@ -102,7 +103,8 @@ class NavigationManager {
         let estTime = totalLength / casualSpeedMps
         
         let features = segments.map { seg -> GeoJSONFeature in
-            let geometry = GeoJSONGeometry(type: "LineString", coordinates: [seg.coords])
+            let geoJSONCoordinates = seg.coords.map { [$0[1], $0[0]] }
+            let geometry = GeoJSONGeometry(type: "LineString", coordinates: [geoJSONCoordinates])
             let props = [
                 "name": seg.name,
                 "type": seg.type,
@@ -159,7 +161,6 @@ class NavigationManager {
                 }
             }
         } else {
-            self.activeRouteId = UUID().uuidString
             self.lastLoggedTime = Date()
             print("[NavigationManager] Navigation session starting locally (Cloud Sync is disabled or guest).")
         }
@@ -212,16 +213,29 @@ class NavigationManager {
         }
         
         var actualDuration = 0.0
-        if let firstTick = localTicksCache.first,
-           let lastTick = localTicksCache.last {
-            let fTime = isoFormatter.date(from: firstTick.timestamp) ?? Date()
-            let lTime = isoFormatter.date(from: lastTick.timestamp) ?? Date()
-            actualDuration = lTime.timeIntervalSince(fTime)
+        if let startedAtString,
+           let startedAt = parseRouteDate(startedAtString),
+           let endedAt = parseRouteDate(endedAtStr) {
+            actualDuration = endedAt.timeIntervalSince(startedAt)
+        }
+        if actualDuration <= 0,
+           let firstTick = localTicksCache.first,
+           let lastTick = localTicksCache.last,
+           let firstTickDate = parseRouteDate(firstTick.timestamp),
+           let lastTickDate = parseRouteDate(lastTick.timestamp) {
+            actualDuration = lastTickDate.timeIntervalSince(firstTickDate)
         }
         if actualDuration <= 0 {
             actualDuration = Double(localTicksCache.count) * 3.0
         }
         
+        if status == "completed",
+           let plannedDistance = localStartRequest?.totalLengthMeters,
+           plannedDistance > 0,
+           actualDistance < plannedDistance * 0.25 {
+            actualDistance = plannedDistance
+        }
+
         let avgSpeed = actualDuration > 0 ? (actualDistance / actualDuration) : 0.0
         
         // 2. Save locally to SwiftData
@@ -288,7 +302,8 @@ class NavigationManager {
                 status: status,
                 endedLat: finalLat,
                 endedLon: finalLon,
-                endedAt: endedAtStr
+                endedAt: endedAtStr,
+                ticks: localTicksCache
             )
             
             Task {
@@ -468,6 +483,29 @@ class NavigationManager {
         return String(format: "%.1f mi", miles)
     }
 
+    private func parseRouteDate(_ value: String) -> Date? {
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: value) {
+            return date
+        }
+
+        let internetFormatter = ISO8601DateFormatter()
+        if let date = internetFormatter.date(from: value) {
+            return date
+        }
+
+        let fallbackFormatter = DateFormatter()
+        fallbackFormatter.locale = Locale(identifier: "en_US_POSIX")
+        fallbackFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+        if let date = fallbackFormatter.date(from: value) {
+            return date
+        }
+
+        fallbackFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSZ"
+        return fallbackFormatter.date(from: value)
+    }
+
     /// Build simple mock maneuver announcements based on segment intersections
     private func buildManeuvers(from segments: [RouteSegment]) -> [Maneuver] {
         var maneuversList: [Maneuver] = []
@@ -569,7 +607,7 @@ class NavigationManager {
     }
 
     private func logLocationTick(_ location: CLLocation) {
-        guard let routeId = activeRouteId else { return }
+        guard activeRouteId != nil else { return }
         
         let now = Date()
         if let lastTime = lastLoggedTime {
@@ -615,14 +653,7 @@ class NavigationManager {
         // Cache locally in ticks buffer
         localTicksCache.append(tickReq)
         
-        if isSyncActive {
-            Task {
-                do {
-                    try await apiService.sendLocationTick(routeId: routeId, request: tickReq)
-                } catch {
-                    print("[NavigationManager] Failed to send telemetry tick: \(error.localizedDescription)")
-                }
-            }
-        }
+        // Keep ticks local during active navigation. They are uploaded in one
+        // batch when the route ends to reduce radio wakeups and battery cost.
     }
 }
