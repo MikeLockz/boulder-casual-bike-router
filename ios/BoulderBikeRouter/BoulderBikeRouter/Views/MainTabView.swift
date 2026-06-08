@@ -64,10 +64,8 @@ struct MainTabView: View {
             }
         }
         .onChange(of: viewModel.isSelectingHomeLocation) { _, isSelecting in
-            if isSelecting {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    selectedTab = 0
-                }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                selectedTab = isSelecting ? 0 : 3
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HistoryRouteMapBack"))) { notification in

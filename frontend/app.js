@@ -20,6 +20,7 @@ let allCrossings = [];
 let activeCrossingMarkers = [];
 let bikeRoutesLayer = null;
 let cachedBikeRoutesGeoJSON = null;
+let debugModeEnabled = false;
 let inspectModeActive = false;
 let inspectHighlightLayer = null;
 let homeLocation = null;
@@ -123,6 +124,7 @@ let activeRouteTuningProfileId = localStorage.getItem(ACTIVE_ROUTE_TUNING_PROFIL
 // Initialize app when DOM loads
 document.addEventListener("DOMContentLoaded", async () => {
     initMap();
+    initAppNavigation();
     await loadBackendConfig();
     initDebugMode();
     initWelcomeModal();
@@ -295,8 +297,8 @@ function initMap() {
 function onMapClick(e) {
     const latlng = e.latlng;
 
-    // Inspector intercepts: toggle mode OR shift+click (always available)
-    if (inspectModeActive || (e.originalEvent && e.originalEvent.shiftKey)) {
+    // Inspector is only available in the isolated debug surface.
+    if (debugModeEnabled && (inspectModeActive || (e.originalEvent && e.originalEvent.shiftKey))) {
         inspectEdge(latlng);
         return;
     }
@@ -325,6 +327,37 @@ function onMapClick(e) {
         setRoutePoint("start", latlng, { popup: "Start Point" });
         updatePlaygroundStartText("Custom Start");
     }
+}
+
+function initAppNavigation() {
+    const tabButtons = document.querySelectorAll(".app-tab-btn[data-app-tab]");
+    tabButtons.forEach(button => {
+        button.addEventListener("click", () => {
+            switchAppSection(button.dataset.appTab);
+        });
+    });
+    switchAppSection("plan");
+}
+
+function switchAppSection(sectionName) {
+    const target = sectionName || "plan";
+    document.querySelectorAll(".app-tab-btn[data-app-tab]").forEach(button => {
+        button.classList.toggle("active", button.dataset.appTab === target);
+    });
+
+    document.querySelectorAll(".app-section[data-app-section]").forEach(section => {
+        const shouldShow = section.dataset.appSection === target;
+        section.classList.toggle("app-section-hidden", !shouldShow);
+    });
+
+    if (target !== "debug" && inspectModeActive) {
+        inspectModeActive = false;
+        const toggleStreetInspector = document.getElementById("toggle-street-inspector");
+        if (toggleStreetInspector) toggleStreetInspector.checked = false;
+        clearInspectHighlight();
+    }
+
+    setTimeout(() => map?.invalidateSize(), 50);
 }
 
 function formatCoordinateInput(latlng) {
@@ -563,6 +596,7 @@ function initEventListeners() {
 
     if (endPlaygroundBtn && playgroundSelect) {
         endPlaygroundBtn.addEventListener("click", () => {
+            switchAppSection("routes");
             playgroundSelect.focus();
             playgroundSelect.scrollIntoView({ behavior: "smooth", block: "center" });
         });
@@ -589,7 +623,7 @@ function initEventListeners() {
     }
 
     if (cancelHomePinBtn) {
-        cancelHomePinBtn.addEventListener("click", () => stopHomeSelectionMode(true));
+        cancelHomePinBtn.addEventListener("click", () => stopHomeSelectionMode(true, true));
     }
 
     if (saveHomePinBtn) {
@@ -2190,32 +2224,20 @@ function hideOfficialRoutes() {
 // Initialize debug mode based on URL parameter
 function initDebugMode() {
     const urlParams = new URLSearchParams(window.location.search);
-    const isDebug = urlParams.has("debug");
+    const isDebug = urlParams.has("debug") || urlParams.has("sim");
+    debugModeEnabled = isDebug;
 
-    const presetInstruction = document.getElementById("preset-instruction");
-    const presetList = document.querySelector(".preset-list");
-    const weightsSection = document.getElementById("sec-weights");
-    const costContainer = document.getElementById("info-cost-container");
-    const infoGrid = document.querySelector(".info-grid");
-    const wayfindingSubSection = document.querySelector(".wayfinding-sub-section");
+    const debugTab = document.getElementById("debug-tab-btn");
+    const debugSection = document.getElementById("sec-debug-tools");
     const debugInspectorTool = document.getElementById("debug-inspector-tool");
     const debugPermissionsTool = document.getElementById("debug-permissions-tool");
     const toggleStreetInspector = document.getElementById("toggle-street-inspector");
 
     if (isDebug) {
-        // Show everything for debug mode
-        if (presetInstruction) presetInstruction.classList.remove("hidden");
-        if (presetList) presetList.classList.remove("hidden");
-        if (weightsSection) weightsSection.classList.remove("hidden");
-        if (costContainer) costContainer.classList.remove("hidden");
-        if (infoGrid) infoGrid.classList.remove("single-column");
+        if (debugTab) debugTab.classList.remove("hidden");
+        if (debugSection) debugSection.classList.remove("hidden");
         if (debugInspectorTool) debugInspectorTool.classList.remove("hidden");
         if (debugPermissionsTool) debugPermissionsTool.classList.remove("hidden");
-        if (wayfindingSubSection) {
-            wayfindingSubSection.style.marginTop = "";
-            wayfindingSubSection.style.paddingTop = "";
-            wayfindingSubSection.style.borderTop = "";
-        }
         
         // Listen to inspector switch
         if (toggleStreetInspector) {
@@ -2229,19 +2251,10 @@ function initDebugMode() {
             };
         }
     } else {
-        // Hide debug elements for normal mode
-        if (presetInstruction) presetInstruction.classList.add("hidden");
-        if (presetList) presetList.classList.add("hidden");
-        if (weightsSection) weightsSection.classList.add("hidden");
-        if (costContainer) costContainer.classList.add("hidden");
-        if (infoGrid) infoGrid.classList.add("single-column");
+        if (debugTab) debugTab.classList.add("hidden");
+        if (debugSection) debugSection.classList.add("hidden");
         if (debugInspectorTool) debugInspectorTool.classList.add("hidden");
         if (debugPermissionsTool) debugPermissionsTool.classList.add("hidden");
-        if (wayfindingSubSection) {
-            wayfindingSubSection.style.marginTop = "0";
-            wayfindingSubSection.style.paddingTop = "0";
-            wayfindingSubSection.style.borderTop = "none";
-        }
         inspectModeActive = false;
         if (toggleStreetInspector) toggleStreetInspector.checked = false;
         clearInspectHighlight();
@@ -2895,28 +2908,40 @@ function openHomeSettingsView() {
     });
 }
 
-function startHomeSelectionMode() {
+async function startHomeSelectionMode() {
     if (!currentUser) {
         showToast("Log in to set a home location.");
         return;
     }
 
     homeSelectionActive = true;
-    pendingHomeLatLng = homeLocation ? L.latLng(homeLocation.lat, homeLocation.lng) : null;
+    clearRoute();
+    removeHomeRouteMarker();
+    if (pendingHomeMarker) {
+        map.removeLayer(pendingHomeMarker);
+        pendingHomeMarker = null;
+    }
+    pendingHomeLatLng = null;
 
     const editor = document.getElementById("home-map-editor");
     if (editor) editor.classList.remove("hidden");
-    if (pendingHomeLatLng) {
+
+    try {
+        const coords = await getCurrentPositionCoords();
+        pendingHomeLatLng = L.latLng(coords[0], coords[1]);
         setPendingHomePin(pendingHomeLatLng);
-        map.setView(pendingHomeLatLng, Math.max(map.getZoom(), 15));
-    } else {
+        map.setView(pendingHomeLatLng, Math.max(map.getZoom(), 16));
+    } catch (error) {
+        console.warn("[Home] Failed to seed home pin from current location:", error);
         updateHomeEditorCoords();
-        showToast("Click the map to drop your home pin.");
+        showToast("Could not get current location. Click the map to drop your home pin.");
+        showLocationSettingsModal();
     }
+
     setControlPanelCollapsed(true);
 }
 
-function stopHomeSelectionMode(removePendingMarker = true) {
+function stopHomeSelectionMode(removePendingMarker = true, returnToSettings = false) {
     homeSelectionActive = false;
     pendingHomeLatLng = null;
     const editor = document.getElementById("home-map-editor");
@@ -2926,6 +2951,9 @@ function stopHomeSelectionMode(removePendingMarker = true) {
         pendingHomeMarker = null;
     }
     updateHomeEditorCoords();
+    if (returnToSettings) {
+        openHomeSettingsView();
+    }
 }
 
 async function savePendingHomeLocation() {
@@ -2957,9 +2985,8 @@ async function savePendingHomeLocation() {
             throw new Error(data.error || "Failed to save home location.");
         }
         homeLocation = { lat: Number(data.home.lat), lng: Number(data.home.lng) };
-        stopHomeSelectionMode(true);
+        stopHomeSelectionMode(true, true);
         renderHomeLocation();
-        openHomeSettingsView();
         showToast("Home location saved.");
     } catch (err) {
         console.error("[Home] Save error:", err);
@@ -3643,8 +3670,8 @@ async function toggleHistoryDetailEdit() {
 
     const title = document.getElementById("history-detail-title")?.value.trim() || getHistoryRouteTitle(currentHistoryRoute);
     const notes = document.getElementById("history-detail-notes")?.value.trim() || "";
-    await updateHistoryRoute(currentHistoryRoute, { display_name: title, notes });
     isHistoryDetailEditing = false;
+    await updateHistoryRoute(currentHistoryRoute, { display_name: title, notes });
 }
 
 async function updateHistoryRoute(route, changes) {
@@ -3696,7 +3723,13 @@ async function updateHistoryRoute(route, changes) {
     showToast("Route details saved.");
     await loadHistory();
     if (currentHistoryRoute) {
-        const refreshed = currentHistoryItems.find(item => item.id === currentHistoryRoute.id) || currentHistoryRoute;
+        const refreshed = currentHistoryItems.find(item =>
+            item.id === currentHistoryRoute.id ||
+            item.local_id === currentHistoryRoute.local_id ||
+            item.server_id === currentHistoryRoute.server_id ||
+            item.id === currentHistoryRoute.server_id ||
+            item.server_id === currentHistoryRoute.id
+        ) || currentHistoryRoute;
         currentHistoryRoute = refreshed;
         renderHistoryDetail(refreshed);
     }
@@ -3757,6 +3790,7 @@ function initializeHistoryDetailControls() {
 async function loadHistoryRouteOnMap(routeId) {
     clearRoute();
     clearHistoryMapLayers();
+    switchAppSection("plan");
     
     let localRoute = null;
     try {

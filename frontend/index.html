@@ -36,15 +36,38 @@
                 <button id="btn-close-panel" class="close-panel-btn"><i class="fa-solid fa-xmark"></i></button>
             </header>
 
+            <nav class="app-tab-bar" aria-label="Primary navigation">
+                <button type="button" class="app-tab-btn active" data-app-tab="plan">
+                    <i class="fa-solid fa-compass"></i>
+                    <span>Plan</span>
+                </button>
+                <button type="button" class="app-tab-btn" data-app-tab="routes">
+                    <i class="fa-solid fa-map"></i>
+                    <span>Routes</span>
+                </button>
+                <button type="button" class="app-tab-btn" data-app-tab="history">
+                    <i class="fa-solid fa-clock"></i>
+                    <span>History</span>
+                </button>
+                <button type="button" class="app-tab-btn" data-app-tab="settings">
+                    <i class="fa-solid fa-gear"></i>
+                    <span>Settings</span>
+                </button>
+                <button type="button" id="debug-tab-btn" class="app-tab-btn debug-tab hidden" data-app-tab="debug">
+                    <i class="fa-solid fa-bug"></i>
+                    <span>Debug</span>
+                </button>
+            </nav>
+
             <div class="panel-body">
-                <!-- Section 1: Presets & Wayfinding (Open by default) -->
-                <details open class="collapsible-section" id="sec-presets">
+                <!-- Plan: immediate map interaction and route point selection -->
+                <details open class="collapsible-section app-section" id="sec-plan" data-app-section="plan">
                     <summary>
-                        <span class="summary-title"><i class="fa-solid fa-location-dot"></i> Presets & Wayfinding</span>
+                        <span class="summary-title"><i class="fa-solid fa-compass"></i> Route Planner</span>
                         <i class="fa-solid fa-chevron-down chevron"></i>
                     </summary>
                     <div class="section-content">
-                        <p id="preset-instruction" class="section-desc">Select a route preset or click points on the map to start planning.</p>
+                        <p id="preset-instruction" class="section-desc">Set a start and destination, or click points directly on the map.</p>
                         <div class="route-planner-inputs" aria-label="Route planner coordinates">
                             <div class="route-planner-row">
                                 <i class="fa-solid fa-circle route-point-dot start"></i>
@@ -77,6 +100,17 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </details>
+
+                <!-- Routes: reusable route choices and destinations -->
+                <details open class="collapsible-section app-section" id="sec-presets" data-app-section="routes">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-map"></i> Routes & Presets</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content">
+                        <p class="section-desc">Select a saved preset, loop configuration, or playground destination.</p>
                         <div class="preset-list" id="preset-list"></div>
                         
                         <!-- New Playground Wayfinding Sub-section -->
@@ -94,7 +128,7 @@
                 </details>
 
                 <!-- Section 2: Home Location (Open by default) -->
-                <details open class="collapsible-section" id="sec-home">
+                <details open class="collapsible-section app-section" id="sec-home" data-app-section="settings">
                     <summary>
                         <span class="summary-title"><i class="fa-solid fa-house-chimney"></i> Home</span>
                         <i class="fa-solid fa-chevron-down chevron"></i>
@@ -118,72 +152,12 @@
                 </details>
 
                 <!-- Section 3: Routing Weights (Collapsed by default) -->
-                <details class="collapsible-section" id="sec-weights">
+                <details class="collapsible-section app-section" id="sec-weights" data-app-section="settings">
                     <summary>
                         <span class="summary-title"><i class="fa-solid fa-sliders"></i> Routing Weights</span>
                         <i class="fa-solid fa-chevron-down chevron"></i>
                     </summary>
                     <div class="section-content">
-                        <!-- Street Inspector Tool (Debug Mode Only) -->
-                        <div class="debug-tool-group hidden" id="debug-inspector-tool" style="margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-                            <label class="switch-container">
-                                <span class="switch-label" style="font-weight: 600; color: #ffb300;"><i class="fa-solid fa-magnifying-glass-location"></i> Street Inspector Tool</span>
-                                <div class="switch-wrapper">
-                                    <input type="checkbox" id="toggle-street-inspector">
-                                    <span class="switch-slider"></span>
-                                </div>
-                            </label>
-                            <span class="subtext" style="display: block; margin-top: 4px; font-size: 11px; color: #94a3b8; line-height: 1.4;">
-                                Toggle ON and click any street on the map to inspect its raw OSM & GIS attributes. Or, hold <strong>Shift</strong> while clicking the map.
-                            </span>
-                        </div>
-
-                        <!-- Permissions Mocking Tool (Debug Mode Only) -->
-                        <div class="debug-tool-group hidden" id="debug-permissions-tool" style="margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 12px;">
-                            <h4 style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #ffb300; margin-bottom: 8px;"><i class="fa-solid fa-shield-halved"></i> Permissions Mocking API</h4>
-                            
-                            <div class="debug-select-group" style="margin-bottom: 10px;">
-                                <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px;">Geolocation State</label>
-                                <div class="select-container" style="margin-bottom: 4px; position: relative;">
-                                    <select id="mock-geolocation-state" class="dropdown-select" style="font-size: 12px; height: 32px; padding: 4px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; color: var(--text-primary); width: 100%; -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
-                                        <option value="default">Default (Real Browser API)</option>
-                                        <option value="granted">Mock: Granted (Center at Valmont)</option>
-                                        <option value="denied">Mock: Denied (Error Code 1)</option>
-                                        <option value="unavailable">Mock: Position Unavailable (Error Code 2)</option>
-                                        <option value="timeout">Mock: Timeout (Error Code 3)</option>
-                                        <option value="slow">Mock: Slow Fix (5s delay then Grant)</option>
-                                    </select>
-                                    <i class="fa-solid fa-chevron-down select-arrow" style="font-size: 8px; right: 10px; position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-secondary);"></i>
-                                </div>
-                            </div>
-                            
-                            <div class="debug-select-group" style="margin-bottom: 10px;">
-                                <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px;">Device Compass State</label>
-                                <div class="select-container" style="margin-bottom: 4px; position: relative;">
-                                    <select id="mock-compass-state" class="dropdown-select" style="font-size: 12px; height: 32px; padding: 4px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; color: var(--text-primary); width: 100%; -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
-                                        <option value="default">Default (Real Browser API)</option>
-                                        <option value="granted">Mock: Supported & Granted</option>
-                                        <option value="denied">Mock: Supported & Denied</option>
-                                        <option value="unsupported">Mock: Not Supported</option>
-                                    </select>
-                                    <i class="fa-solid fa-chevron-down select-arrow" style="font-size: 8px; right: 10px; position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-secondary);"></i>
-                                </div>
-                            </div>
-                            
-                            <div class="debug-select-group">
-                                <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px;">Wake Lock State</label>
-                                <div class="select-container" style="position: relative;">
-                                    <select id="mock-wakelock-state" class="dropdown-select" style="font-size: 12px; height: 32px; padding: 4px 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; color: var(--text-primary); width: 100%; -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
-                                        <option value="default">Default (Real Browser API)</option>
-                                        <option value="granted">Mock: Supported & Granted</option>
-                                        <option value="denied">Mock: Supported & Denied (Throws Error)</option>
-                                        <option value="unsupported">Mock: Not Supported</option>
-                                    </select>
-                                    <i class="fa-solid fa-chevron-down select-arrow" style="font-size: 8px; right: 10px; position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-secondary);"></i>
-                                </div>
-                            </div>
-                        </div>
-
                         <div class="route-profile-manager" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px;">
                             <label class="subtext" for="route-profile-select" style="font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Routing Profile</label>
                             <select id="route-profile-select" class="dropdown-select">
@@ -209,7 +183,7 @@
                 </details>
 
                 <!-- Section 4: Map Layers (Collapsed by default) -->
-                <details class="collapsible-section" id="sec-layers">
+                <details class="collapsible-section app-section" id="sec-layers" data-app-section="settings">
                     <summary>
                         <span class="summary-title"><i class="fa-solid fa-layer-group"></i> Map Layers</span>
                         <i class="fa-solid fa-chevron-down chevron"></i>
@@ -257,7 +231,7 @@
                 </details>
 
                 <!-- Section 5: User Account (Collapsed by default) -->
-                <details class="collapsible-section" id="sec-auth">
+                <details class="collapsible-section app-section" id="sec-auth" data-app-section="settings">
                     <summary>
                         <span class="summary-title"><i class="fa-solid fa-user-circle"></i> User Account</span>
                         <i class="fa-solid fa-chevron-down chevron"></i>
@@ -266,7 +240,7 @@
                         <!-- Logged Out State -->
                         <div id="auth-logged-out" class="auth-state-container">
                             <p class="section-desc" style="margin-bottom: 12px;">Create an account or log in to register your profile.</p>
-                            
+
                             <div class="auth-tabs">
                                 <button type="button" id="tab-btn-login" class="auth-tab-btn active">Log In</button>
                                 <button type="button" id="tab-btn-signup" class="auth-tab-btn">Sign Up</button>
@@ -304,7 +278,7 @@
                                     <span class="profile-status"><i class="fa-solid fa-circle-check"></i> Authenticated</span>
                                 </div>
                             </div>
-                            
+
                             <!-- Cloud Sync Toggle -->
                             <div class="settings-option-group" style="margin: 12px 0 16px 0; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
                                 <label class="switch-container">
@@ -318,16 +292,16 @@
                                     Sync past routes and GPS tracks automatically with your account.
                                 </span>
                             </div>
-                            
+
                             <button type="button" id="btn-logout" class="btn btn-secondary btn-auth-logout"><i class="fa-solid fa-right-from-bracket"></i> Log Out</button>
                         </div>
                     </div>
                 </details>
 
                 <!-- Section 6: Adventure History (Collapsed by default) -->
-                <details class="collapsible-section" id="sec-history">
+                <details open class="collapsible-section app-section" id="sec-history" data-app-section="history">
                     <summary>
-                        <span class="summary-title"><i class="fa-solid fa-clock-rotate-left"></i> Adventure History</span>
+                        <span class="summary-title"><i class="fa-solid fa-clock-rotate-left"></i> History</span>
                         <i class="fa-solid fa-chevron-down chevron"></i>
                     </summary>
                     <div class="section-content">
@@ -381,8 +355,75 @@
                     </div>
                 </details>
 
+                <!-- Debug tools stay isolated from normal app navigation. -->
+                <details open class="collapsible-section app-section debug-section hidden" id="sec-debug-tools" data-app-section="debug">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-bug"></i> Debug Tools</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content">
+                        <div class="debug-tool-group hidden" id="debug-inspector-tool">
+                            <label class="switch-container">
+                                <span class="switch-label debug-tool-title"><i class="fa-solid fa-magnifying-glass-location"></i> Street Inspector Tool</span>
+                                <div class="switch-wrapper">
+                                    <input type="checkbox" id="toggle-street-inspector">
+                                    <span class="switch-slider"></span>
+                                </div>
+                            </label>
+                            <span class="subtext debug-tool-help">
+                                Toggle on and click any street on the map to inspect its raw OSM and GIS attributes. Shift-click is also available in debug mode.
+                            </span>
+                        </div>
+
+                        <div class="debug-tool-group hidden" id="debug-permissions-tool">
+                            <h4 class="debug-tool-heading"><i class="fa-solid fa-shield-halved"></i> Permissions Mocking API</h4>
+
+                            <div class="debug-select-group">
+                                <label>Geolocation State</label>
+                                <div class="select-container debug-select-container">
+                                    <select id="mock-geolocation-state" class="dropdown-select debug-select">
+                                        <option value="default">Default (Real Browser API)</option>
+                                        <option value="granted">Mock: Granted (Center at Valmont)</option>
+                                        <option value="denied">Mock: Denied (Error Code 1)</option>
+                                        <option value="unavailable">Mock: Position Unavailable (Error Code 2)</option>
+                                        <option value="timeout">Mock: Timeout (Error Code 3)</option>
+                                        <option value="slow">Mock: Slow Fix (5s delay then Grant)</option>
+                                    </select>
+                                    <i class="fa-solid fa-chevron-down select-arrow"></i>
+                                </div>
+                            </div>
+
+                            <div class="debug-select-group">
+                                <label>Device Compass State</label>
+                                <div class="select-container debug-select-container">
+                                    <select id="mock-compass-state" class="dropdown-select debug-select">
+                                        <option value="default">Default (Real Browser API)</option>
+                                        <option value="granted">Mock: Supported & Granted</option>
+                                        <option value="denied">Mock: Supported & Denied</option>
+                                        <option value="unsupported">Mock: Not Supported</option>
+                                    </select>
+                                    <i class="fa-solid fa-chevron-down select-arrow"></i>
+                                </div>
+                            </div>
+
+                            <div class="debug-select-group">
+                                <label>Wake Lock State</label>
+                                <div class="select-container debug-select-container">
+                                    <select id="mock-wakelock-state" class="dropdown-select debug-select">
+                                        <option value="default">Default (Real Browser API)</option>
+                                        <option value="granted">Mock: Supported & Granted</option>
+                                        <option value="denied">Mock: Supported & Denied (Throws Error)</option>
+                                        <option value="unsupported">Mock: Not Supported</option>
+                                    </select>
+                                    <i class="fa-solid fa-chevron-down select-arrow"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
                 <!-- Section 4: How to Route (Collapsed by default) -->
-                <details class="collapsible-section" id="sec-instructions">
+                <details class="collapsible-section app-section" id="sec-instructions" data-app-section="plan">
                     <summary>
                         <span class="summary-title"><i class="fa-solid fa-circle-question"></i> How to Route</span>
                         <i class="fa-solid fa-chevron-down chevron"></i>
@@ -397,7 +438,7 @@
                 </details>
 
                 <!-- Route Summary Panel -->
-                <div class="route-info-box hidden" id="route-info">
+                <div class="route-info-box app-section hidden" id="route-info" data-app-section="plan">
                     <h2><i class="fa-solid fa-route"></i> Route Summary</h2>
                     <div class="info-grid">
                         <div class="info-item">
@@ -643,6 +684,7 @@
     <script src="mock-permissions.js"></script>
     <script src="app.js"></script>
     <script src="sim.js"></script>
+    <script src="navigationMetricsFilter.js"></script>
     <script src="navigation.js"></script>
 </body>
 </html>

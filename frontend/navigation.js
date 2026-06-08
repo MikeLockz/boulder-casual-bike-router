@@ -21,7 +21,8 @@ const Navigation = (() => {
         originalMapState: null, // { center, zoom, bearing } to restore on exit
         routeId: null,
         lastLoggedPosition: null,
-        lastLoggedTime: 0
+        lastLoggedTime: 0,
+        idleAnchorPosition: null
     };
 
     // --- Constants ---
@@ -252,6 +253,12 @@ const Navigation = (() => {
 
         // Update bottom bar
         updateBottomBar();
+
+        if (updateIdleAnchor(smoothLat, smoothLng, accuracy)) {
+            showToast("Navigation ended after a long idle stop.");
+            stop(mapInstance);
+            return;
+        }
         
         // Telemetry logging to backend
         logTick(smoothLat, smoothLng, accuracy, speed);
@@ -868,6 +875,11 @@ const Navigation = (() => {
         state.lastLoggedTime = Date.now();
         state.localTicksCache = [];
         state.routeGeojson = routeGeojson;
+        state.idleAnchorPosition = {
+            lat: startLat,
+            lon: startLon,
+            timestampMs: Date.now()
+        };
         
         state.localStartRequest = {
             local_id: tempId,
@@ -983,22 +995,12 @@ const Navigation = (() => {
             }
         }
         
-        // 1. Calculate stats locally
-        let actualDistance = 0.0;
-        if (state.localTicksCache.length >= 2) {
-            for (let i = 0; i < state.localTicksCache.length - 1; i++) {
-                const t1 = state.localTicksCache[i];
-                const t2 = state.localTicksCache[i+1];
-                actualDistance += getDistance(t1.lat, t1.lon, t2.lat, t2.lon);
-            }
-        }
-        
-        let actualDuration = 0.0;
-        if (state.localTicksCache.length >= 2) {
-            const first = new Date(state.localTicksCache[0].timestamp).getTime();
-            const last = new Date(state.localTicksCache[state.localTicksCache.length - 1].timestamp).getTime();
-            actualDuration = (last - first) / 1000;
-        }
+        // 1. Calculate stats locally with the shared navigation metric filter.
+        const metricSummary = window.NavigationMetricFilter
+            ? window.NavigationMetricFilter.summarizeTicks(state.localTicksCache)
+            : { distanceMeters: 0, durationSeconds: 0 };
+        let actualDistance = metricSummary.distanceMeters || 0.0;
+        let actualDuration = metricSummary.durationSeconds || 0.0;
         if (actualDuration <= 0) {
             actualDuration = state.localTicksCache.length * 3;
         }
@@ -1095,6 +1097,32 @@ const Navigation = (() => {
         state.localStartRequest = null;
         state.routeGeojson = null;
         state.localTicksCache = [];
+        state.idleAnchorPosition = null;
+    }
+
+    function updateIdleAnchor(lat, lon, accuracy) {
+        const filter = window.NavigationMetricFilter;
+        if (!filter) return false;
+
+        const accuracyNumber = Number(accuracy);
+        if (Number.isFinite(accuracyNumber) && accuracyNumber > filter.CONFIG.maxAccuracyMeters) {
+            return false;
+        }
+
+        const now = Date.now();
+        const current = { lat, lon, timestampMs: now };
+        if (!state.idleAnchorPosition) {
+            state.idleAnchorPosition = current;
+            return false;
+        }
+
+        const distanceFromAnchor = filter.distanceMeters(state.idleAnchorPosition, current);
+        if (distanceFromAnchor > filter.CONFIG.stationaryRadiusMeters) {
+            state.idleAnchorPosition = current;
+            return false;
+        }
+
+        return filter.shouldAutoEndForIdle(state.idleAnchorPosition, current, now);
     }
 
     // --- Expose public API ---

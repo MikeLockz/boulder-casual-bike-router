@@ -180,6 +180,64 @@ body {
     transform: scale(1.1);
 }
 
+.app-tab-bar {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, 0.18);
+}
+
+.app-tab-bar:has(.debug-tab:not(.hidden)) {
+    grid-template-columns: repeat(5, 1fr);
+}
+
+.app-tab-btn {
+    min-width: 0;
+    height: 46px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.app-tab-btn i {
+    font-size: 14px;
+}
+
+.app-tab-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+}
+
+.app-tab-btn.active {
+    background: rgba(100, 255, 218, 0.1);
+    border-color: rgba(100, 255, 218, 0.22);
+    color: var(--accent-color);
+}
+
+.app-tab-btn.debug-tab.active,
+.app-tab-btn.debug-tab:hover {
+    color: #ffb300;
+    border-color: rgba(255, 179, 0, 0.25);
+    background: rgba(255, 179, 0, 0.08);
+}
+
+.app-section-hidden {
+    display: none !important;
+}
+
 /* Scrollable Panel Body */
 .panel-body {
     flex-grow: 1;
@@ -257,6 +315,86 @@ details[open] summary .chevron {
     color: var(--text-secondary);
     line-height: 1.5;
     margin-bottom: 14px;
+}
+
+.debug-section {
+    border-color: rgba(255, 179, 0, 0.25);
+    background: rgba(255, 179, 0, 0.035);
+}
+
+.debug-section .summary-title i,
+.debug-tool-title,
+.debug-tool-heading {
+    color: #ffb300;
+}
+
+.debug-tool-group {
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.debug-tool-group:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.debug-tool-heading {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+}
+
+.debug-tool-help {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.4;
+}
+
+.debug-select-group {
+    margin-bottom: 10px;
+}
+
+.debug-select-group:last-child {
+    margin-bottom: 0;
+}
+
+.debug-select-group label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.debug-select-container {
+    position: relative;
+}
+
+.debug-select {
+    height: 32px;
+    padding: 4px 28px 4px 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: var(--text-primary);
+    width: 100%;
+    appearance: none;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.debug-select-container .select-arrow {
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: var(--text-secondary);
+    font-size: 8px;
 }
 
 /* Presets List */

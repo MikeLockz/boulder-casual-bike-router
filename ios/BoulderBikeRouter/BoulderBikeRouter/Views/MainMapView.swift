@@ -123,6 +123,7 @@ struct MainMapView: View {
             if let end = viewModel.endLocation {
                 endLocationText = String(format: "%.4f, %.4f", end.latitude, end.longitude)
             }
+            seedHomeSelectionFromCurrentLocation()
         }
         .onChange(of: locationManager.currentLocation) { _, newLocation in
             if let loc = newLocation {
@@ -137,7 +138,17 @@ struct MainMapView: View {
                         navigationManager.updateLocation(loc)
                         updateCameraHeading(loc)
                     }
+
+                    if viewModel.isSelectingHomeLocation && viewModel.pendingHomeCoordinate == nil {
+                        viewModel.updatePendingHomeLocation(loc.coordinate)
+                        centerMap(on: loc.coordinate, spanDelta: 0.01)
+                    }
                 }
+            }
+        }
+        .onChange(of: viewModel.isSelectingHomeLocation) { _, isSelecting in
+            if isSelecting {
+                seedHomeSelectionFromCurrentLocation()
             }
         }
         .onChange(of: viewModel.startLocation) { _, newLoc in
@@ -213,6 +224,31 @@ struct MainMapView: View {
         }
     }
 
+    private func seedHomeSelectionFromCurrentLocation() {
+        guard viewModel.isSelectingHomeLocation else { return }
+        locationManager.requestAuthorization()
+        locationManager.startUpdating()
+
+        let coordinate = locationManager.currentLocation?.coordinate ?? viewModel.currentLocation
+        if let coordinate {
+            if viewModel.pendingHomeCoordinate == nil {
+                viewModel.updatePendingHomeLocation(coordinate)
+            }
+            centerMap(on: coordinate, spanDelta: 0.01)
+        }
+    }
+
+    private func centerMap(on coordinate: CLLocationCoordinate2D, spanDelta: CLLocationDegrees) {
+        withAnimation {
+            cameraPosition = .region(
+                MKCoordinateRegion(
+                    center: coordinate,
+                    span: MKCoordinateSpan(latitudeDelta: spanDelta, longitudeDelta: spanDelta)
+                )
+            )
+        }
+    }
+
     private func currentStartCoordinate() -> CLLocationCoordinate2D? {
         locationManager.currentLocation?.coordinate
     }
@@ -229,14 +265,7 @@ struct MainMapView: View {
         locationManager.startUpdating()
         
         if let userLoc = locationManager.currentLocation {
-            withAnimation {
-                cameraPosition = .region(
-                    MKCoordinateRegion(
-                        center: userLoc.coordinate,
-                        span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
-                    )
-                )
-            }
+            centerMap(on: userLoc.coordinate, spanDelta: 0.02)
         }
     }
 
@@ -691,62 +720,64 @@ struct MainMapView: View {
     @ViewBuilder
     private func mapCanvas(proxy: MapProxy) -> some View {
         Map(position: $cameraPosition, interactionModes: .all) {
-            // Start Marker
-            if let start = viewModel.startLocation {
-                Annotation("Start", coordinate: start, anchor: .bottom) {
-                    markerView(color: .primaryMint)
-                }
-            } else if let historyRoute = viewModel.selectedHistoryRoute {
-                Annotation("Start", coordinate: CLLocationCoordinate2D(latitude: historyRoute.startLat, longitude: historyRoute.startLon), anchor: .bottom) {
-                    markerView(color: .primaryMint)
-                }
-            }
-            
-            // Destination Marker
-            if let end = viewModel.endLocation {
-                Annotation("Destination", coordinate: end, anchor: .bottom) {
-                    markerView(color: .errorRose)
-                }
-            } else if let historyRoute = viewModel.selectedHistoryRoute {
-                Annotation("Destination", coordinate: CLLocationCoordinate2D(latitude: historyRoute.endLat, longitude: historyRoute.endLon), anchor: .bottom) {
-                    markerView(color: .errorRose)
-                }
-            }
-
-            // Render computed route path polylines
-            if let route = viewModel.routeResponse {
-                ForEach(route.segments) { segment in
-                    MapPolyline(coordinates: segment.clCoordinates)
-                        .stroke(infraColor(for: segment.type), lineWidth: 6)
-                }
-            } else if let details = viewModel.selectedHistoryRouteDetails {
-                ForEach(0..<details.plannedRouteCoordinates.count, id: \.self) { pathIdx in
-                    MapPolyline(coordinates: details.plannedRouteCoordinates[pathIdx])
-                        .stroke(Color.secondary, lineWidth: 4)
-                }
-                
-                let tickCoordinates = viewModel.selectedHistoryRouteTicks.map { $0.clCoordinate }
-                if tickCoordinates.count >= 2 {
-                    MapPolyline(coordinates: tickCoordinates)
-                        .stroke(Color.orange, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                } else if let tickCoordinate = tickCoordinates.first {
-                    Annotation("", coordinate: tickCoordinate) {
-                        Circle()
-                            .fill(Color.orange)
-                            .frame(width: 8, height: 8)
-                            .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                            .shadow(radius: 2)
+            if !viewModel.isSelectingHomeLocation {
+                // Start Marker
+                if let start = viewModel.startLocation {
+                    Annotation("Start", coordinate: start, anchor: .bottom) {
+                        markerView(color: .primaryMint)
+                    }
+                } else if let historyRoute = viewModel.selectedHistoryRoute {
+                    Annotation("Start", coordinate: CLLocationCoordinate2D(latitude: historyRoute.startLat, longitude: historyRoute.startLon), anchor: .bottom) {
+                        markerView(color: .primaryMint)
                     }
                 }
-            }
 
-            // Render waypoints as minor circles
-            ForEach(0..<viewModel.waypoints.count, id: \.self) { idx in
-                Annotation("", coordinate: viewModel.waypoints[idx]) {
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 8, height: 8)
-                        .shadow(radius: 2)
+                // Destination Marker
+                if let end = viewModel.endLocation {
+                    Annotation("Destination", coordinate: end, anchor: .bottom) {
+                        markerView(color: .errorRose)
+                    }
+                } else if let historyRoute = viewModel.selectedHistoryRoute {
+                    Annotation("Destination", coordinate: CLLocationCoordinate2D(latitude: historyRoute.endLat, longitude: historyRoute.endLon), anchor: .bottom) {
+                        markerView(color: .errorRose)
+                    }
+                }
+
+                // Render computed route path polylines
+                if let route = viewModel.routeResponse {
+                    ForEach(route.segments) { segment in
+                        MapPolyline(coordinates: segment.clCoordinates)
+                            .stroke(infraColor(for: segment.type), lineWidth: 6)
+                    }
+                } else if let details = viewModel.selectedHistoryRouteDetails {
+                    ForEach(0..<details.plannedRouteCoordinates.count, id: \.self) { pathIdx in
+                        MapPolyline(coordinates: details.plannedRouteCoordinates[pathIdx])
+                            .stroke(Color.secondary, lineWidth: 4)
+                    }
+
+                    let tickCoordinates = viewModel.selectedHistoryRouteTicks.map { $0.clCoordinate }
+                    if tickCoordinates.count >= 2 {
+                        MapPolyline(coordinates: tickCoordinates)
+                            .stroke(Color.orange, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                    } else if let tickCoordinate = tickCoordinates.first {
+                        Annotation("", coordinate: tickCoordinate) {
+                            Circle()
+                                .fill(Color.orange)
+                                .frame(width: 8, height: 8)
+                                .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                                .shadow(radius: 2)
+                        }
+                    }
+                }
+
+                // Render waypoints as minor circles
+                ForEach(0..<viewModel.waypoints.count, id: \.self) { idx in
+                    Annotation("", coordinate: viewModel.waypoints[idx]) {
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 8, height: 8)
+                            .shadow(radius: 2)
+                    }
                 }
             }
 
@@ -760,9 +791,18 @@ struct MainMapView: View {
             if let pendingHome = viewModel.pendingHomeCoordinate {
                 Annotation("Home", coordinate: pendingHome, anchor: .bottom) {
                     markerView(color: .mintGlow)
+                        .gesture(
+                            DragGesture(coordinateSpace: .named("mapCanvas"))
+                                .onChanged { value in
+                                    if let coordinate = proxy.convert(value.location, from: .local) {
+                                        viewModel.updatePendingHomeLocation(coordinate)
+                                    }
+                                }
+                        )
                 }
             }
         }
+        .coordinateSpace(name: "mapCanvas")
         .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
         .onTapGesture { screenPoint in
             if viewModel.isSelectingHomeLocation {

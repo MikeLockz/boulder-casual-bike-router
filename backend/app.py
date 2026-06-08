@@ -52,6 +52,13 @@ DEFAULT_WEIGHTS = {
     "facility_contraflow": 0.45         # Contra Flow Bike Lane
 }
 
+NAV_METRIC_FILTER = {
+    "max_accuracy_meters": 75.0,
+    "stationary_radius_meters": 65.0,
+    "idle_auto_end_seconds": 2700.0,
+    "max_step_speed_mps": 15.0,
+}
+
 # In-memory graph storage
 G_connected = None
 nodes_global = {}
@@ -109,17 +116,69 @@ def sorted_navigation_ticks(ticks):
         key=lambda tick: parse_navigation_date(tick.get("timestamp")) or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
     )
 
+def usable_navigation_tick(tick):
+    lat = tick.get("lat")
+    lon = tick.get("lon")
+    timestamp = parse_navigation_date(tick.get("timestamp"))
+    if lat is None or lon is None or not timestamp:
+        return None
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except (TypeError, ValueError):
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    accuracy = tick.get("accuracy")
+    if accuracy is not None:
+        try:
+            if float(accuracy) > NAV_METRIC_FILTER["max_accuracy_meters"]:
+                return None
+        except (TypeError, ValueError):
+            pass
+    return {**tick, "lat": lat, "lon": lon, "_parsed_timestamp": timestamp}
+
+def filtered_navigation_tick_summary(ticks):
+    """Apply the shared navigation metric filter to remove stale idle jitter."""
+    usable_ticks = [tick for tick in (usable_navigation_tick(t) for t in sorted_navigation_ticks(ticks)) if tick]
+    if not usable_ticks:
+        return {"ticks": [], "distance_meters": 0.0, "started_at": None, "ended_at": None, "idle_cutoff_at": None}
+
+    kept_ticks = [usable_ticks[0]]
+    anchor_tick = usable_ticks[0]
+    distance_meters = 0.0
+    idle_cutoff_at = None
+
+    for tick in usable_ticks[1:]:
+        anchor_time = anchor_tick["_parsed_timestamp"]
+        tick_time = tick["_parsed_timestamp"]
+        elapsed = max(0.0, (tick_time - anchor_time).total_seconds())
+        step_distance = haversine_distance((anchor_tick["lat"], anchor_tick["lon"]), (tick["lat"], tick["lon"]))
+
+        if elapsed > 0 and (step_distance / elapsed) > NAV_METRIC_FILTER["max_step_speed_mps"]:
+            continue
+
+        if step_distance <= NAV_METRIC_FILTER["stationary_radius_meters"]:
+            if elapsed >= NAV_METRIC_FILTER["idle_auto_end_seconds"]:
+                idle_cutoff_at = anchor_time + datetime.timedelta(seconds=NAV_METRIC_FILTER["idle_auto_end_seconds"])
+                break
+            kept_ticks.append(tick)
+            continue
+
+        distance_meters += step_distance
+        anchor_tick = tick
+        kept_ticks.append(tick)
+
+    return {
+        "ticks": kept_ticks,
+        "distance_meters": distance_meters,
+        "started_at": kept_ticks[0]["_parsed_timestamp"] if kept_ticks else None,
+        "ended_at": kept_ticks[-1]["_parsed_timestamp"] if kept_ticks else None,
+        "idle_cutoff_at": idle_cutoff_at
+    }
+
 def calculate_tick_distance_meters(ticks):
-    actual_distance = 0.0
-    sorted_ticks = sorted_navigation_ticks(ticks)
-    if len(sorted_ticks) < 2:
-        return actual_distance
-    for i in range(len(sorted_ticks) - 1):
-        pt1 = (sorted_ticks[i].get("lat"), sorted_ticks[i].get("lon"))
-        pt2 = (sorted_ticks[i + 1].get("lat"), sorted_ticks[i + 1].get("lon"))
-        if pt1[0] is not None and pt1[1] is not None and pt2[0] is not None and pt2[1] is not None:
-            actual_distance += haversine_distance(pt1, pt2)
-    return actual_distance
+    return filtered_navigation_tick_summary(ticks).get("distance_meters", 0.0)
 
 def calculate_route_duration_seconds(route, ended_at=None, ticks=None):
     start_time = parse_navigation_date(route.get("started_at"))
@@ -142,8 +201,14 @@ def calculate_route_duration_seconds(route, ended_at=None, ticks=None):
 def calculate_navigation_metrics(route, ticks=None, ended_at=None, status=None):
     """Return canonical actual and presentation metrics for a navigation route."""
     ticks = ticks or []
-    actual_distance = calculate_tick_distance_meters(ticks)
-    actual_duration = calculate_route_duration_seconds(route, ended_at=ended_at, ticks=ticks)
+    tick_summary = filtered_navigation_tick_summary(ticks)
+    actual_distance = tick_summary["distance_meters"]
+    effective_ended_at = ended_at
+    if tick_summary.get("idle_cutoff_at"):
+        parsed_ended_at = parse_navigation_date(ended_at)
+        if not parsed_ended_at or parsed_ended_at > tick_summary["idle_cutoff_at"]:
+            effective_ended_at = tick_summary["idle_cutoff_at"].isoformat().replace("+00:00", "Z")
+    actual_duration = calculate_route_duration_seconds(route, ended_at=effective_ended_at or ended_at, ticks=tick_summary["ticks"])
 
     total_length = float(route.get("total_length_meters") or 0.0)
     total_duration = float(route.get("total_estimated_time_seconds") or 0.0)
@@ -176,8 +241,12 @@ def calculate_navigation_metrics(route, ticks=None, ended_at=None, status=None):
         "average_speed": average_speed,
         "display_distance_meters": display_distance,
         "display_duration_seconds": display_duration,
-        "display_average_speed": display_average_speed
+        "display_average_speed": display_average_speed,
+        "_idle_cutoff_at": tick_summary["idle_cutoff_at"].isoformat().replace("+00:00", "Z") if tick_summary.get("idle_cutoff_at") else None
     }
+
+def navigation_metrics_payload(metrics):
+    return {key: value for key, value in metrics.items() if not key.startswith("_")}
 
 def route_with_display_metrics(route):
     route_copy = dict(route)
@@ -2083,6 +2152,29 @@ def nav_tick(route_id):
     try:
         resp = requests.post(f"{pb_url}/api/collections/navigation_ticks/records", json=pb_payload, timeout=5)
         if resp.status_code in [200, 201]:
+            try:
+                route_resp = requests.get(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", timeout=5)
+                if route_resp.status_code == 200:
+                    route_record = route_resp.json()
+                    ticks_resp = requests.get(
+                        f"{pb_url}/api/collections/navigation_ticks/records?filter=route='{route_id}'&sort=timestamp&limit=5000",
+                        timeout=5
+                    )
+                    if ticks_resp.status_code == 200:
+                        ticks = ticks_resp.json().get("items", [])
+                        metrics = calculate_navigation_metrics(route_record, ticks=ticks, status=route_record.get("status"))
+                        if route_record.get("status") == "active" and metrics.get("_idle_cutoff_at"):
+                            requests.patch(
+                                f"{pb_url}/api/collections/navigation_routes/records/{route_id}",
+                                json={
+                                    "status": "cancelled",
+                                    "ended_at": metrics["_idle_cutoff_at"],
+                                    **navigation_metrics_payload(metrics)
+                                },
+                                timeout=5
+                            )
+            except Exception as e:
+                print(f"[-] Error checking idle navigation route {route_id}: {e}")
             return jsonify({"status": "success"}), 201
         else:
             return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
@@ -2142,13 +2234,18 @@ def nav_end(route_id):
         print(f"Error fetching ticks for calculations: {e}")
     
     metrics = calculate_navigation_metrics(route_record, ticks=ticks, ended_at=now_str, status=status)
+    idle_cutoff_at = metrics.get("_idle_cutoff_at")
+    if idle_cutoff_at:
+        now_str = idle_cutoff_at
+        if status == "active":
+            status = "cancelled"
     
     pb_update = {
         "status": status,
         "ended_at": now_str,
         "ended_lat": data.get("ended_lat"),
         "ended_lon": data.get("ended_lon"),
-        **metrics
+        **navigation_metrics_payload(metrics)
     }
     
     try:
@@ -2156,7 +2253,7 @@ def nav_end(route_id):
         if resp.status_code == 200:
             return jsonify({
                 "status": "success",
-                **metrics
+                **navigation_metrics_payload(metrics)
             })
         else:
             return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
@@ -2608,9 +2705,14 @@ def nav_sync():
                         ended_at=pb_payload.get("ended_at"),
                         status=pb_payload.get("status")
                     )
+                    metric_payload = navigation_metrics_payload(metrics)
+                    if metrics.get("_idle_cutoff_at"):
+                        metric_payload["ended_at"] = metrics["_idle_cutoff_at"]
+                        if pb_payload.get("status") == "active":
+                            metric_payload["status"] = "cancelled"
                     requests.patch(
                         f"{pb_url}/api/collections/navigation_routes/records/{server_id}",
-                        json=metrics,
+                        json=metric_payload,
                         headers=headers,
                         timeout=5
                     )

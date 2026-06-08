@@ -49,6 +49,7 @@ class NavigationManager {
     private var localStartRequest: NavigationStartRequest? = nil
     private var routeGeojsonString: String? = nil
     private var startedAtString: String? = nil
+    private var idleAnchorLocation: CLLocation? = nil
     
     // Proximity triggers to prevent repeating announcements
     private var announcedPre = Set<Int>()
@@ -134,6 +135,7 @@ class NavigationManager {
         
         self.localStartRequest = startReq
         self.localTicksCache.removeAll()
+        self.idleAnchorLocation = CLLocation(latitude: startLat, longitude: startLon)
         
         // Save GeoJSON string representation
         let encoder = JSONEncoder()
@@ -168,9 +170,6 @@ class NavigationManager {
 
     func stop() {
         isActive = false
-        maneuvers.removeAll()
-        routeCoords.removeAll()
-        segments.removeAll()
         currentBannerManeuver = nil
         
         // Re-enable screen sleep
@@ -200,31 +199,10 @@ class NavigationManager {
             }
         }
         
-        // 1. Calculate actual distance and duration locally from cached ticks
-        var actualDistance = 0.0
-        if localTicksCache.count >= 2 {
-            for i in 0..<(localTicksCache.count - 1) {
-                let t1 = localTicksCache[i]
-                let t2 = localTicksCache[i+1]
-                let loc1 = CLLocation(latitude: t1.lat, longitude: t1.lon)
-                let loc2 = CLLocation(latitude: t2.lat, longitude: t2.lon)
-                actualDistance += loc1.distance(from: loc2)
-            }
-        }
-        
-        var actualDuration = 0.0
-        if let startedAtString,
-           let startedAt = parseRouteDate(startedAtString),
-           let endedAt = parseRouteDate(endedAtStr) {
-            actualDuration = endedAt.timeIntervalSince(startedAt)
-        }
-        if actualDuration <= 0,
-           let firstTick = localTicksCache.first,
-           let lastTick = localTicksCache.last,
-           let firstTickDate = parseRouteDate(firstTick.timestamp),
-           let lastTickDate = parseRouteDate(lastTick.timestamp) {
-            actualDuration = lastTickDate.timeIntervalSince(firstTickDate)
-        }
+        // 1. Calculate actual distance and duration locally with the shared filter.
+        let metricSummary = NavigationMetricFilter.summarize(localTicksCache)
+        var actualDistance = metricSummary.distanceMeters
+        var actualDuration = metricSummary.durationSeconds
         if actualDuration <= 0 {
             actualDuration = Double(localTicksCache.count) * 3.0
         }
@@ -330,6 +308,10 @@ class NavigationManager {
         routeGeojsonString = nil
         startedAtString = nil
         localTicksCache.removeAll()
+        idleAnchorLocation = nil
+        maneuvers.removeAll()
+        routeCoords.removeAll()
+        segments.removeAll()
     }
 
     func toggleMute() {
@@ -366,9 +348,33 @@ class NavigationManager {
 
         // Check proximity to maneuvers
         checkManeuversProximity(userLocation: location, closestRouteIdx: closestIdx)
+
+        if shouldEndForIdle(location) {
+            speak("Navigation ended after a long idle stop.")
+            stop()
+            return
+        }
         
         // Log telemetry tick
         logLocationTick(location)
+    }
+
+    private func shouldEndForIdle(_ location: CLLocation) -> Bool {
+        guard location.horizontalAccuracy <= NavigationMetricFilter.maxAccuracyMeters else {
+            return false
+        }
+
+        guard let anchor = idleAnchorLocation else {
+            idleAnchorLocation = location
+            return false
+        }
+
+        if location.distance(from: anchor) > NavigationMetricFilter.stationaryRadiusMeters {
+            idleAnchorLocation = location
+            return false
+        }
+
+        return NavigationMetricFilter.shouldAutoEndForIdle(anchor: anchor, current: location)
     }
 
     private func checkManeuversProximity(userLocation: CLLocation, closestRouteIdx: Int) {

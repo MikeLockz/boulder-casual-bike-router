@@ -252,7 +252,9 @@ struct RouteHistoryDetailView: View {
             Button("Remove from History", role: .destructive) {
                 Task {
                     await viewModel.deleteHistoryRoute(route)
-                    onDismiss()
+                    await MainActor.run {
+                        onDismiss()
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {}

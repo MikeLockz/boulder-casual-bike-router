@@ -230,12 +230,12 @@ class MapViewModel {
     }
 
     @MainActor
-    func beginHomeLocationSelection() {
+    func beginHomeLocationSelection(currentCoordinate: CLLocationCoordinate2D? = nil) {
         guard isUserLoggedIn else {
             homeLocationError = "Sign in to set a home location."
             return
         }
-        pendingHomeCoordinate = homeLocation?.coordinate
+        pendingHomeCoordinate = currentCoordinate ?? currentLocation
         isSelectingHomeLocation = true
         homeLocationError = nil
     }
