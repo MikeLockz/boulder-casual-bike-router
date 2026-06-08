@@ -150,35 +150,6 @@ struct ControlPanelView: View {
                     }
                 }
 
-                // Playgrounds Dropdown Selector
-                Text("Route to a Playground")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 4)
-
-                Menu {
-                    ForEach(playgrounds) { pg in
-                        Button(pg.name) {
-                            selectedPlayground = pg
-                            selectedPresetId = nil
-                            onSelectPreset(PresetConfig(name: pg.name, desc: "Playground destination", start: [], end: [], waypoints: [], routeType: nil))
-                        }
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: "figure.play")
-                        Text(selectedPlayground?.name ?? "Select a Playground...")
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(.white)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-                    .background(Color.white.opacity(0.08))
-                    .cornerRadius(8)
-                }
             }
             .padding(.top, 6)
         } label: {

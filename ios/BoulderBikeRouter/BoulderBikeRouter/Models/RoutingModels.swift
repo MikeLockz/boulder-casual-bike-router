@@ -93,6 +93,14 @@ struct RouteResponse: Codable, Equatable {
         case totalWeight = "total_weight"
         case error
     }
+
+    var continuousCoordinates: [CLLocationCoordinate2D] {
+        routeCoordinatePaths.flatMap { $0 }
+    }
+
+    var routeCoordinatePaths: [[CLLocationCoordinate2D]] {
+        mergeRoutePaths(segments.map { $0.clCoordinates })
+    }
 }
 
 /// Configuration representing a routing weight parameter from the backend.
@@ -553,6 +561,32 @@ struct DetailedRouteResponse: Codable {
                 return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
             }
         }
+    }
+
+    var plannedRouteCoordinatePaths: [[CLLocationCoordinate2D]] {
+        mergeRoutePaths(plannedRouteCoordinates)
+    }
+}
+
+private func mergeRoutePaths(_ paths: [[CLLocationCoordinate2D]]) -> [[CLLocationCoordinate2D]] {
+    paths.reduce(into: []) { mergedPaths, path in
+        guard path.count >= 2 else { return }
+        guard !mergedPaths.isEmpty else {
+            mergedPaths.append(path)
+            return
+        }
+
+        if mergedPaths[mergedPaths.count - 1].last?.isSameRoutePoint(as: path[0]) == true {
+            mergedPaths[mergedPaths.count - 1].append(contentsOf: path.dropFirst())
+        } else {
+            mergedPaths.append(path)
+        }
+    }
+}
+
+private extension CLLocationCoordinate2D {
+    func isSameRoutePoint(as other: CLLocationCoordinate2D) -> Bool {
+        abs(latitude - other.latitude) < 0.0000001 && abs(longitude - other.longitude) < 0.0000001
     }
 }
 

@@ -65,7 +65,7 @@ class NavigationManager {
         return hasToken && isSyncEnabled
     }
 
-    func start(segments: [RouteSegment], modelContext: ModelContext) {
+    func start(segments: [RouteSegment], modelContext: ModelContext, destinationName: String? = nil) {
         guard !segments.isEmpty else { return }
         
         self.modelContext = modelContext
@@ -117,6 +117,13 @@ class NavigationManager {
         
         let weights = [String: Double]()
         
+        let resolvedDestinationName = destinationName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endPointName: String
+        if let resolvedDestinationName, !resolvedDestinationName.isEmpty {
+            endPointName = resolvedDestinationName
+        } else {
+            endPointName = segments.last?.name ?? "Destination"
+        }
         let startReq = NavigationStartRequest(
             displayName: nil,
             notes: nil,
@@ -125,7 +132,7 @@ class NavigationManager {
             endLat: endLat,
             endLon: endLon,
             startPointName: "Start Point",
-            endPointName: segments.last?.name ?? "Destination",
+            endPointName: endPointName,
             routeGeojson: geojson,
             totalLengthMeters: totalLength,
             totalEstimatedTimeSeconds: estTime,

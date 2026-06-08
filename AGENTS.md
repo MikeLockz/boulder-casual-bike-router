@@ -83,14 +83,15 @@ Use this file as the first stop in fresh chats. It captures durable context from
 - Simulator API base URL is compiled as `http://localhost:8081`, so simulator builds should hit the local nginx proxy directly.
 - Physical iPhone/device API base URL is compiled as `https://boulder.lockdev.com`; a real phone will not use Mac `localhost` unless the code's base URL is overridden or changed.
 - List available simulators: `xcrun simctl list devices available`.
+- Always use the `iPhone 17 Pro` simulator for iOS simulator builds and tests unless the user explicitly asks for a different simulator. Verify availability with `simctl` if needed.
 - Current known available simulator names include `iPhone 16`, `iPhone 16 Pro`, `iPhone 16 Pro Max`, and a booted `iPhone 17 Pro`. If a note says `iphone60`, treat it as likely shorthand/typo for the `iPhone 16` simulator and verify with `simctl`.
-- Build for iPhone 16 simulator:
+- Build for iPhone 17 Pro simulator:
   ```bash
-  xcodebuild -project ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj -scheme BoulderBikeRouter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' build
+  xcodebuild -project ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj -scheme BoulderBikeRouter -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
   ```
 - Run tests on simulator:
   ```bash
-  xcodebuild test -project ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj -scheme BoulderBikeRouter -destination 'platform=iOS Simulator,name=iPhone 16'
+  xcodebuild test -project ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj -scheme BoulderBikeRouter -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
   ```
 - If the named simulator is unavailable, use a listed device UUID:
   ```bash

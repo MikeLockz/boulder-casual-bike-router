@@ -13,23 +13,19 @@ struct MainTabView: View {
             // Tab View contents
             VStack(spacing: 0) {
                 ZStack {
-                    if viewModel.selectedHistoryRoute != nil {
+                    switch selectedTab {
+                    case 0:
                         MainMapView(viewModel: viewModel, isDrawerOpen: $isDrawerOpen)
-                    } else {
-                        switch selectedTab {
-                        case 0:
-                            MainMapView(viewModel: viewModel, isDrawerOpen: $isDrawerOpen)
-                        case 1:
-                            RoutesTabView(viewModel: viewModel) {
-                                selectedTab = 0
-                            }
-                        case 2:
-                            HistoryTabView(pastRoutes: viewModel.pastRoutes, routeToPresent: $historyRouteToPresent)
-                        case 3:
-                            SettingsTabView(viewModel: viewModel)
-                        default:
-                            EmptyView()
+                    case 1:
+                        RoutesTabView(viewModel: viewModel) {
+                            selectTab(0)
                         }
+                    case 2:
+                        HistoryTabView(pastRoutes: viewModel.pastRoutes, routeToPresent: $historyRouteToPresent)
+                    case 3:
+                        SettingsTabView(viewModel: viewModel)
+                    default:
+                        EmptyView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -67,7 +63,12 @@ struct MainTabView: View {
         }
         .onChange(of: viewModel.isSelectingHomeLocation) { _, isSelecting in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                selectedTab = isSelecting ? 0 : 3
+                selectTab(isSelecting ? 0 : 3)
+            }
+        }
+        .onChange(of: selectedTab) { _, newTab in
+            if newTab != 0 {
+                viewModel.clearHistorySelection()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HistoryRouteMapBack"))) { notification in
@@ -75,9 +76,14 @@ struct MainTabView: View {
                 historyRouteToPresent = route
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HistoryRouteSelected"))) { _ in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                selectTab(0)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HomeLocationSaved"))) { _ in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                selectedTab = 3
+                selectTab(3)
             }
         }
     }
@@ -102,7 +108,7 @@ struct MainTabView: View {
         
         return Button(action: {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                selectedTab = index
+                selectTab(index)
             }
         }) {
             VStack(spacing: 4) {
@@ -118,6 +124,13 @@ struct MainTabView: View {
             .cornerRadius(8)
             .padding(.horizontal, 8)
         }
+    }
+
+    private func selectTab(_ index: Int) {
+        if index != 0 {
+            viewModel.clearHistorySelection()
+        }
+        selectedTab = index
     }
     
     // Helper to calculate safe area bottom inset

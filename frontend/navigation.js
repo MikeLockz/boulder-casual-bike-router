@@ -821,6 +821,10 @@ const Navigation = (() => {
         
         let startName = "Start Point";
         let endName = "Destination";
+        const routeTitle = typeof window.currentRouteTitle === "string" ? window.currentRouteTitle.trim() : "";
+        if (routeTitle && routeTitle !== "Custom Route") {
+            endName = routeTitle;
+        }
         
         const activePreset = document.querySelector(".preset-item.active");
         if (activePreset) {
@@ -834,11 +838,6 @@ const Navigation = (() => {
                 } else {
                     endName = text;
                 }
-            }
-        } else {
-            const playSelect = document.getElementById("playground-select");
-            if (playSelect && playSelect.selectedIndex > 0) {
-                endName = playSelect.options[playSelect.selectedIndex].text.trim();
             }
         }
         

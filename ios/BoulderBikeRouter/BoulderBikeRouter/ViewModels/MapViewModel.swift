@@ -37,6 +37,7 @@ class MapViewModel {
     // Selection states
     var selectedPresetName: String?
     var selectedPlayground: Playground?
+    var selectedDestinationName: String?
     var playgroundsList: [Playground] = []
     var showOfficialRoutesLayer: Bool = false
 
@@ -154,7 +155,7 @@ class MapViewModel {
             let config = try await apiService.fetchConfig()
             
             await MainActor.run {
-                self.presets = config.presets
+                self.presets = config.presets.filter { $0.routeType == "b180" || $0.routeType == "b360" }
                 self.weightsMetadata = config.weights
                 
                 // Populate dynamic weights dictionary
@@ -184,6 +185,7 @@ class MapViewModel {
 
     func selectPreset(_ preset: PresetConfig) {
         selectedPresetName = preset.name
+        selectedDestinationName = nil
 
         if preset.routeType == "playgrounds" {
             selectedPlayground = nil
@@ -211,12 +213,12 @@ class MapViewModel {
     }
 
     func selectPlayground(_ playground: Playground) {
-        guard let currentLocation else {
-            routingError = "Current location is unavailable. Allow location access to route to a playground."
+        guard startLocation != nil else {
+            routingError = "Set a start location before routing to a playground."
             return
         }
         selectedPlayground = playground
-        startLocation = currentLocation
+        selectedDestinationName = playground.name
         endLocation = playground.coordinate
         selectedPresetName = nil // clear preset selection
         
@@ -234,10 +236,12 @@ class MapViewModel {
         }
     }
 
-    func setEndLocation(_ coordinate: CLLocationCoordinate2D) {
+    func setEndLocation(_ coordinate: CLLocationCoordinate2D, destinationName: String? = nil) {
         endLocation = coordinate
         selectedPresetName = nil
         selectedPlayground = nil
+        let trimmedName = destinationName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        selectedDestinationName = (trimmedName?.isEmpty == false) ? trimmedName : nil
         Task {
             await fetchRoute()
         }
@@ -292,7 +296,7 @@ class MapViewModel {
         if target == "start" {
             setStartLocation(suggestion.coordinate)
         } else {
-            setEndLocation(suggestion.coordinate)
+            setEndLocation(suggestion.coordinate, destinationName: suggestion.name)
         }
         clearPlaceSuggestions(target: target)
     }
@@ -307,7 +311,7 @@ class MapViewModel {
             return
         }
         startLocation = routeStart
-        setEndLocation(homeLocation.coordinate)
+        setEndLocation(homeLocation.coordinate, destinationName: "Home")
     }
 
     @MainActor
@@ -393,16 +397,20 @@ class MapViewModel {
     }
 
     func resetWeights() {
-        var newWeights: [String: Double] = [:]
-        for w in weightsMetadata {
-            newWeights[w.key] = w.default
-        }
-        self.weights = newWeights
+        self.weights = defaultRouteWeights()
         self.routeOffsets = [:]
         
         Task {
             await fetchRoute()
         }
+    }
+
+    func defaultRouteWeights() -> [String: Double] {
+        var newWeights: [String: Double] = [:]
+        for w in weightsMetadata {
+            newWeights[w.key] = w.default
+        }
+        return newWeights
     }
 
     func loadRouteTuningProfiles() async {
@@ -497,11 +505,16 @@ class MapViewModel {
 
     @MainActor
     func createRouteTuningProfile(name: String) async {
+        await createRouteTuningProfile(name: name, weights: weights, offsets: routeOffsets)
+    }
+
+    @MainActor
+    func createRouteTuningProfile(name: String, weights: [String: Double], offsets: [String: Double] = [:]) async {
         guard let context = modelContext else { return }
         let profile = LocalRouteTuningProfile(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Routing Profile" : name,
             weights: weights,
-            offsets: routeOffsets,
+            offsets: offsets,
             isDefault: routeTuningProfiles.isEmpty,
             userId: currentUserId,
             synced: false
@@ -518,23 +531,36 @@ class MapViewModel {
 
     @MainActor
     func saveActiveRouteTuningProfile() async {
-        guard let context = modelContext else { return }
         guard let activeId = activeRouteTuningProfileId else {
             await createRouteTuningProfile(name: "Custom Routing Profile")
             return
         }
+        await saveRouteTuningProfile(id: activeId, name: nil, weights: weights, offsets: routeOffsets)
+    }
+
+    @MainActor
+    func saveRouteTuningProfile(id: String, name: String?, weights: [String: Double], offsets: [String: Double] = [:]) async {
+        guard let context = modelContext else { return }
         do {
             let descriptor = FetchDescriptor<LocalRouteTuningProfile>()
-            if let profile = try context.fetch(descriptor).first(where: { $0.id == activeId || $0.serverId == activeId }) {
+            if let profile = try context.fetch(descriptor).first(where: { $0.id == id || $0.serverId == id }) {
+                if let name {
+                    profile.name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Routing Profile" : name
+                }
                 profile.weights = weights
-                profile.offsets = routeOffsets
+                profile.offsets = offsets
                 profile.synced = false
                 profile.updatedAt = Date()
                 try context.save()
+                self.weights = weights
+                self.routeOffsets = offsets
+                activeRouteTuningProfileId = profile.id
+                UserDefaults.standard.set(profile.id, forKey: "active_route_tuning_profile_id")
                 if isUserLoggedIn && isCloudSyncEnabled {
                     await syncService?.syncPendingRouteTuningProfiles()
                 }
                 await loadRouteTuningProfiles()
+                await fetchRoute()
             }
         } catch {
             print("Failed to save route tuning profile: \(error.localizedDescription)")
@@ -544,9 +570,15 @@ class MapViewModel {
     @MainActor
     func deleteActiveRouteTuningProfile() async {
         guard let context = modelContext, let activeId = activeRouteTuningProfileId else { return }
+        await deleteRouteTuningProfile(id: activeId)
+    }
+
+    @MainActor
+    func deleteRouteTuningProfile(id: String) async {
+        guard let context = modelContext else { return }
         do {
             let descriptor = FetchDescriptor<LocalRouteTuningProfile>()
-            if let profile = try context.fetch(descriptor).first(where: { $0.id == activeId || $0.serverId == activeId }) {
+            if let profile = try context.fetch(descriptor).first(where: { $0.id == id || $0.serverId == id }) {
                 if let serverId = profile.serverId, isUserLoggedIn && isCloudSyncEnabled {
                     try? await apiService.deleteRouteTuningProfile(serverId: serverId)
                     context.delete(profile)
@@ -558,9 +590,11 @@ class MapViewModel {
                 }
                 try context.save()
             }
-            activeRouteTuningProfileId = nil
-            UserDefaults.standard.removeObject(forKey: "active_route_tuning_profile_id")
-            resetWeights()
+            if activeRouteTuningProfileId == id {
+                activeRouteTuningProfileId = nil
+                UserDefaults.standard.removeObject(forKey: "active_route_tuning_profile_id")
+                resetWeights()
+            }
             await loadRouteTuningProfiles()
         } catch {
             print("Failed to delete route tuning profile: \(error.localizedDescription)")
@@ -646,7 +680,6 @@ class MapViewModel {
     private func loadLocalFallbacks() {
         // Fallbacks matching the initial preset items if backend is unreachable on first run
         self.presets = [
-            PresetConfig(name: "Park Playgrounds", desc: "Choose a playground destination from your current location", start: [], end: [], waypoints: [], routeType: "playgrounds"),
             PresetConfig(name: "Boulder Loops B-180", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], routeType: "b180"),
             PresetConfig(name: "Boulder Loops B-360", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], routeType: "b360")
         ]

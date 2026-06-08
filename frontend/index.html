@@ -112,20 +112,8 @@
                         <i class="fa-solid fa-chevron-down chevron"></i>
                     </summary>
                     <div class="section-content">
-                        <p class="section-desc">Select a saved preset, loop configuration, or playground destination.</p>
+                        <p class="section-desc">Select a loop configuration.</p>
                         <div class="preset-list" id="preset-list"></div>
-                        
-                        <!-- New Playground Wayfinding Sub-section -->
-                        <div class="wayfinding-sub-section">
-                            <h3 class="sub-section-title"><i class="fa-solid fa-child-reaching"></i> Playgrounds from <span id="playground-start-title">Cedar Ave</span></h3>
-                            <p class="section-desc">Starts at <span id="playground-start-desc">Cedar Ave</span>. Select a park playground destination:</p>
-                            <div class="select-container">
-                                <select id="playground-select" class="dropdown-select">
-                                    <option value="" disabled selected>-- Select a Park with Playground --</option>
-                                </select>
-                                <i class="fa-solid fa-chevron-down select-arrow"></i>
-                            </div>
-                        </div>
                     </div>
                 </details>
 
@@ -153,36 +141,40 @@
                     </div>
                 </details>
 
-                <!-- Section 3: Routing Weights (Collapsed by default) -->
-                <details class="collapsible-section app-section" id="sec-weights" data-app-section="settings">
-                    <summary>
-                        <span class="summary-title"><i class="fa-solid fa-sliders"></i> Routing Weights</span>
-                        <i class="fa-solid fa-chevron-down chevron"></i>
-                    </summary>
-                    <div class="section-content">
-                        <div class="route-profile-manager" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px;">
-                            <label class="subtext" for="route-profile-select" style="font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Routing Profile</label>
-                            <select id="route-profile-select" class="dropdown-select">
-                                <option value="">System Defaults</option>
-                            </select>
-                            <div class="action-buttons" style="grid-template-columns: repeat(3, 1fr);">
-                                <button id="btn-new-route-profile" class="btn btn-secondary" type="button"><i class="fa-solid fa-plus"></i> New</button>
-                                <button id="btn-delete-route-profile" class="btn btn-secondary" type="button"><i class="fa-solid fa-trash"></i> Delete</button>
-                                <button id="btn-set-default-route-profile" class="btn btn-secondary" type="button"><i class="fa-solid fa-star"></i> Default</button>
-                            </div>
+                <!-- Section 3: Routing Weights -->
+                <div class="app-section settings-nav-section" id="sec-weights" data-app-section="settings">
+                    <button id="btn-manage-weights" class="settings-nav-row" type="button">
+                        <span class="settings-nav-title"><i class="fa-solid fa-sliders"></i> Manage Weights</span>
+                        <i class="fa-solid fa-chevron-right"></i>
+                    </button>
+                </div>
+
+                <div class="app-section weights-manager-view app-section-hidden" id="sec-weights-manager" data-app-section="settings">
+                    <div id="weights-list-view">
+                        <div class="subview-header">
+                            <button id="btn-weights-back" class="icon-btn" type="button" aria-label="Back"><i class="fa-solid fa-chevron-left"></i></button>
+                            <h3>Manage Weights</h3>
+                            <button id="btn-new-route-profile" class="icon-btn" type="button" aria-label="New weight setting"><i class="fa-solid fa-plus"></i></button>
                         </div>
+                        <div id="route-profile-list" class="route-profile-list"></div>
+                    </div>
 
+                    <div id="weights-editor-view" class="hidden">
+                        <div class="subview-header">
+                            <button id="btn-cancel-route-profile" class="icon-btn" type="button" aria-label="Cancel"><i class="fa-solid fa-xmark"></i></button>
+                            <h3 id="weights-editor-title">Weight Setting</h3>
+                            <button id="btn-delete-route-profile" class="icon-btn danger hidden" type="button" aria-label="Delete weight setting"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                        <label class="subtext" for="route-profile-name" style="font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Name</label>
+                        <input id="route-profile-name" class="text-input" type="text" placeholder="Weight setting name">
                         <p class="section-desc">Adjust sliders to influence path selection. Lower values attract routes; higher values penalize roads.</p>
-                        
                         <div id="sliders-container" style="display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px;"></div>
-
-
                         <div class="action-buttons">
-                            <button id="btn-reset" class="btn btn-secondary"><i class="fa-solid fa-rotate-left"></i> Reset Defaults</button>
-                            <button id="btn-save-profile" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i> Save Profile</button>
+                            <button id="btn-reset" class="btn btn-secondary" type="button"><i class="fa-solid fa-rotate-left"></i> Defaults</button>
+                            <button id="btn-save-profile" class="btn btn-primary" type="button"><i class="fa-solid fa-floppy-disk"></i> Save</button>
                         </div>
                     </div>
-                </details>
+                </div>
 
                 <!-- Section 4: Map Layers (Collapsed by default) -->
                 <details class="collapsible-section app-section" id="sec-layers" data-app-section="settings">
@@ -321,9 +313,8 @@
                                     <i class="fa-solid fa-pen"></i>
                                 </button>
                             </div>
-                            <div class="history-map-preview" id="history-map-preview">
-                                <div class="history-map-preview-line"></div>
-                                <span>Preview</span>
+                            <div class="history-map-preview" id="history-map-preview" aria-label="Route preview map">
+                                <div id="history-map-preview-map" class="history-map-preview-map"></div>
                             </div>
                             <div class="history-detail-header">
                                 <input id="history-detail-title" class="history-detail-title" type="text" readonly>
@@ -441,7 +432,7 @@
 
                 <!-- Route Summary Panel -->
                 <div class="route-info-box app-section hidden" id="route-info" data-app-section="plan">
-                    <h2><i class="fa-solid fa-route"></i> Route Summary</h2>
+                    <h2><i class="fa-solid fa-route"></i> <span id="route-summary-title">Custom Route</span></h2>
                     <div class="info-grid">
                         <div class="info-item">
                             <span class="label">Actual Distance</span>

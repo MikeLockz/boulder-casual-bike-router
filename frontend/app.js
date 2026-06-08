@@ -31,6 +31,10 @@ let homeRouteMarker = null;
 let routeSelectionTarget = null;
 let autocompleteTimers = {};
 let autocompleteAbortControllers = {};
+let activePlanMapSource = "planner";
+let playgroundPlaces = [];
+let playgroundLoadPromise = null;
+let currentRouteTitle = "Custom Route";
 
 const OFFICIAL_ROUTE_COLORS = {
     "Multi-Use Path": "#00e676",
@@ -121,6 +125,8 @@ const ROUTE_TUNING_PROFILES_KEY = "boulder_route_tuning_profiles";
 const ACTIVE_ROUTE_TUNING_PROFILE_KEY = "boulder_active_route_tuning_profile_id";
 let routeTuningProfiles = [];
 let activeRouteTuningProfileId = localStorage.getItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY) || "";
+let weightsEditorProfileId = null;
+let weightsEditorRestoreState = null;
 
 
 // Initialize app when DOM loads
@@ -176,7 +182,9 @@ async function loadBackendConfig() {
         const presetList = document.getElementById("preset-list");
         if (presetList) {
             presetList.innerHTML = "";
-            config.presets.forEach(p => {
+            config.presets
+                .filter(p => p.route_type === "b180" || p.route_type === "b360")
+                .forEach(p => {
                 const btn = document.createElement("button");
                 btn.className = "preset-item";
                 btn.setAttribute("data-start", p.start.join(","));
@@ -188,11 +196,7 @@ async function loadBackendConfig() {
                     btn.setAttribute("data-route-type", p.route_type);
                 }
 
-                const icon = p.route_type === "playgrounds"
-                    ? '<i class="fa-solid fa-child-reaching"></i> '
-                    : p.route_type
-                        ? '<i class="fa-solid fa-arrows-spin"></i> '
-                        : '';
+                const icon = p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : '';
                 btn.innerHTML = `
                     <span class="preset-name">${icon}${p.name}</span>
                     <span class="preset-desc">${p.desc}</span>
@@ -258,7 +262,6 @@ function fallbackLocalRendering() {
     const presetList = document.getElementById("preset-list");
     if (presetList) {
         const presets = [
-            { name: "Park Playgrounds", desc: "Choose a playground destination from your current location", start: [], end: [], waypoints: [], route_type: "playgrounds" },
             { name: "Boulder Loops B-180", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], route_type: "b180" },
             { name: "Boulder Loops B-360", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], route_type: "b360" }
         ];
@@ -271,7 +274,7 @@ function fallbackLocalRendering() {
             if (p.waypoints.length > 0) btn.setAttribute("data-waypoints", p.waypoints.map(wp => wp.join(",")).join(";"));
             if (p.route_type) btn.setAttribute("data-route-type", p.route_type);
             btn.innerHTML = `
-                <span class="preset-name">${p.route_type === "playgrounds" ? '<i class="fa-solid fa-child-reaching"></i> ' : p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : ''}${p.name}</span>
+                <span class="preset-name">${p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : ''}${p.name}</span>
                 <span class="preset-desc">${p.desc}</span>
             `;
             presetList.appendChild(btn);
@@ -354,6 +357,10 @@ function switchAppSection(sectionName) {
         section.classList.toggle("app-section-hidden", !shouldShow);
     });
 
+    if (target === "settings" && typeof setWeightsManagerMode === "function") {
+        setWeightsManagerMode("root");
+    }
+
     if (target !== "debug" && inspectModeActive) {
         inspectModeActive = false;
         const toggleStreetInspector = document.getElementById("toggle-street-inspector");
@@ -361,7 +368,27 @@ function switchAppSection(sectionName) {
         clearInspectHighlight();
     }
 
+    syncMapPresentationForSection(target);
     setTimeout(() => map?.invalidateSize(), 50);
+}
+
+function syncMapPresentationForSection(sectionName) {
+    const isPlanSurface = sectionName === "plan" || sectionName === "debug";
+    const mapContainer = map?.getContainer?.();
+    if (mapContainer) {
+        mapContainer.classList.toggle("map-non-plan", !isPlanSurface);
+    }
+
+    if (!isPlanSurface && activePlanMapSource === "history") {
+        clearHistoryMapLayers();
+        const routeInfo = document.getElementById("route-info");
+        if (routeInfo) routeInfo.classList.add("hidden");
+        const costContainer = document.getElementById("info-cost-container");
+        if (costContainer) costContainer.style.display = "";
+        const startNavBtn = document.getElementById("btn-start-nav");
+        if (startNavBtn) startNavBtn.style.display = "";
+        activePlanMapSource = "planner";
+    }
 }
 
 function formatCoordinateInput(latlng) {
@@ -385,6 +412,13 @@ function updateRouteInput(target, latlng) {
 function updateRouteInputValue(target, value) {
     const input = document.getElementById(target === "start" ? "route-start-input" : "route-end-input");
     if (input) input.value = value;
+}
+
+function setCurrentRouteTitle(title) {
+    currentRouteTitle = (title || "").trim() || "Custom Route";
+    window.currentRouteTitle = currentRouteTitle;
+    const titleEl = document.getElementById("route-summary-title");
+    if (titleEl) titleEl.textContent = currentRouteTitle;
 }
 
 function hideAutocompleteSuggestions(target) {
@@ -425,7 +459,8 @@ function renderAutocompleteSuggestions(target, places, query = "") {
             event.preventDefault();
             setRoutePoint(target, [Number(place.lat), Number(place.lng)], {
                 popup: place.name,
-                label: place.name
+                label: place.name,
+                routeTitle: target === "end" ? place.name : undefined
             });
             hideAutocompleteSuggestions(target);
         });
@@ -474,6 +509,12 @@ function handleAutocompleteInput(target, value) {
 }
 
 function setRoutePoint(target, latlngLike, options = {}) {
+    if (activePlanMapSource === "history") {
+        clearHistoryMapLayers();
+    }
+    activePlanMapSource = "planner";
+    document.querySelectorAll(".preset-item.active").forEach(preset => preset.classList.remove("active"));
+
     const latlng = L.latLng(latlngLike);
     const isStart = target === "start";
     const marker = L.marker(latlng, {
@@ -484,6 +525,7 @@ function setRoutePoint(target, latlngLike, options = {}) {
     const popupTitle = options.popup || (isStart ? "Start Point" : "Destination");
     marker.bindPopup(`<strong>${popupTitle}</strong><br>Drag to move`).openPopup();
     marker.on("dragend", () => {
+        if (!isStart) setCurrentRouteTitle();
         updateRouteInput(target, marker.getLatLng());
         calculateRoute();
     });
@@ -495,6 +537,7 @@ function setRoutePoint(target, latlngLike, options = {}) {
     } else {
         if (endMarker) map.removeLayer(endMarker);
         endMarker = marker;
+        setCurrentRouteTitle(options.routeTitle || options.label);
     }
 
     updateRouteInputValue(target, options.label || formatCoordinateInput(latlng));
@@ -555,41 +598,37 @@ function initSliders() {
 // Event Listeners for action buttons, presets, and toggle panels
 function initEventListeners() {
     // Reset weights
-    document.getElementById("btn-reset").addEventListener("click", resetUserWeights);
+    const resetButton = document.getElementById("btn-reset");
+    if (resetButton) {
+        resetButton.addEventListener("click", () => {
+            applyWeightsToSliders(SYSTEM_DEFAULT_WEIGHTS);
+        });
+    }
 
     // Save to Profile
     const saveProfileBtn = document.getElementById("btn-save-profile");
     if (saveProfileBtn) {
-        saveProfileBtn.addEventListener("click", saveActiveRouteTuningProfile);
-    }
-
-    const profileSelect = document.getElementById("route-profile-select");
-    if (profileSelect) {
-        profileSelect.addEventListener("change", () => {
-            activeRouteTuningProfileId = profileSelect.value;
-            localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
-            const profile = routeTuningProfiles.find(item => item.local_id === activeRouteTuningProfileId && !item.deleted);
-            applyRouteTuningProfile(profile);
-            if (startMarker && endMarker) {
-                calculateRoute();
-            }
-        });
+        saveProfileBtn.addEventListener("click", saveWeightsEditorProfile);
     }
 
     const newProfileBtn = document.getElementById("btn-new-route-profile");
     if (newProfileBtn) {
-        newProfileBtn.addEventListener("click", createRouteTuningProfile);
+        newProfileBtn.addEventListener("click", openWeightsEditorForNew);
     }
 
     const deleteProfileBtn = document.getElementById("btn-delete-route-profile");
     if (deleteProfileBtn) {
-        deleteProfileBtn.addEventListener("click", deleteActiveRouteTuningProfile);
+        deleteProfileBtn.addEventListener("click", deleteWeightsEditorProfile);
     }
 
-    const defaultProfileBtn = document.getElementById("btn-set-default-route-profile");
-    if (defaultProfileBtn) {
-        defaultProfileBtn.addEventListener("click", setActiveRouteTuningProfileDefault);
-    }
+    const manageWeightsBtn = document.getElementById("btn-manage-weights");
+    if (manageWeightsBtn) manageWeightsBtn.addEventListener("click", openWeightsManagerView);
+
+    const weightsBackBtn = document.getElementById("btn-weights-back");
+    if (weightsBackBtn) weightsBackBtn.addEventListener("click", closeWeightsManagerView);
+
+    const cancelProfileBtn = document.getElementById("btn-cancel-route-profile");
+    if (cancelProfileBtn) cancelProfileBtn.addEventListener("click", cancelWeightsEditor);
 
     // Panel toggle button floating
     const panelToggle = document.getElementById("panel-toggle");
@@ -641,7 +680,6 @@ function initEventListeners() {
 
     // Preset route selections
     const presets = document.querySelectorAll(".preset-item");
-    const playgroundSelect = document.getElementById("playground-select");
     const startInput = document.getElementById("route-start-input");
     const endInput = document.getElementById("route-end-input");
     const startCurrentBtn = document.getElementById("btn-start-current");
@@ -701,11 +739,13 @@ function initEventListeners() {
         });
     }
 
-    if (endPlaygroundBtn && playgroundSelect) {
-        endPlaygroundBtn.addEventListener("click", () => {
-            switchAppSection("routes");
-            playgroundSelect.focus();
-            playgroundSelect.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (endPlaygroundBtn) {
+        endPlaygroundBtn.addEventListener("click", async () => {
+            await loadPlaygrounds();
+            if (endInput) {
+                endInput.focus();
+            }
+            renderAutocompleteSuggestions("end", playgroundPlaces, "playgrounds");
         });
     }
 
@@ -742,11 +782,6 @@ function initEventListeners() {
             presets.forEach(p => p.classList.remove("active"));
             preset.classList.add("active");
 
-            // Reset playground select when a preset is chosen
-            if (playgroundSelect) {
-                playgroundSelect.selectedIndex = 0;
-            }
-
             // Update playground section title and description to match preset's starting location
             const presetName = preset.querySelector(".preset-name").textContent;
             let startName = "Cedar Ave";
@@ -762,15 +797,6 @@ function initEventListeners() {
             const waypointsStr = preset.getAttribute("data-waypoints");
             const routeType = preset.getAttribute("data-route-type");
 
-            if (routeType === "playgrounds") {
-                updatePlaygroundStartText("current location");
-                if (playgroundSelect) {
-                    playgroundSelect.focus();
-                    playgroundSelect.scrollIntoView({ behavior: "smooth", block: "center" });
-                }
-                return;
-            }
-            
             const startCoords = startStr.split(",").map(Number);
             const endCoords = endStr.split(",").map(Number);
             
@@ -782,23 +808,9 @@ function initEventListeners() {
             if (routeType === "b180" || routeType === "b360") {
                 switchAppSection("plan");
             }
-            loadPresetRoute(startCoords, endCoords, waypoints, routeType);
+            loadPresetRoute(startCoords, endCoords, waypoints, routeType, presetName);
         });
     });
-
-    // Playground dropdown selection
-    if (playgroundSelect) {
-        playgroundSelect.addEventListener("change", async (e) => {
-            // Remove active highlight from presets when a playground is selected
-            presets.forEach(p => p.classList.remove("active"));
-
-            const endStr = e.target.value;
-            const endCoords = endStr.split(",").map(Number);
-            const startCoords = await getCurrentStartCoords();
-            if (!startCoords) return;
-            loadPresetRoute(startCoords, endCoords);
-        });
-    }
 
     // Start Navigation button
     const navBtn = document.getElementById("btn-start-nav");
@@ -962,23 +974,134 @@ function applyRouteTuningProfile(profile) {
 }
 
 function renderRouteTuningProfiles() {
-    const select = document.getElementById("route-profile-select");
-    if (!select) return;
     const visibleProfiles = getVisibleRouteTuningProfiles();
-    select.innerHTML = '<option value="">System Defaults</option>';
-    visibleProfiles.forEach(profile => {
-        const option = document.createElement("option");
-        option.value = profile.local_id;
-        option.textContent = `${profile.is_default ? "★ " : ""}${profile.name}${profile.synced ? "" : " • local"}`;
-        select.appendChild(option);
-    });
     const hasActive = visibleProfiles.some(profile => profile.local_id === activeRouteTuningProfileId);
     if (!hasActive) {
         const defaultProfile = visibleProfiles.find(profile => profile.is_default);
         activeRouteTuningProfileId = defaultProfile?.local_id || "";
         localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
     }
-    select.value = activeRouteTuningProfileId;
+
+    const list = document.getElementById("route-profile-list");
+    if (!list) return;
+    list.innerHTML = "";
+
+    if (visibleProfiles.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.textContent = "No custom weight settings yet.";
+        list.appendChild(empty);
+        return;
+    }
+
+    visibleProfiles.forEach(profile => {
+        const row = document.createElement("div");
+        row.className = "route-profile-row";
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "route-profile-open";
+        button.innerHTML = `
+            <span class="route-profile-name">${profile.is_default ? '<i class="fa-solid fa-star"></i> ' : ""}${escapeHtml(profile.name)}</span>
+            <span class="route-profile-meta">${profile.synced ? "Synced" : "Local changes"}</span>
+        `;
+        button.addEventListener("click", () => openWeightsEditorForProfile(profile.local_id));
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "icon-btn danger";
+        deleteBtn.setAttribute("aria-label", `Delete ${profile.name}`);
+        deleteBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+        deleteBtn.addEventListener("click", () => deleteRouteTuningProfileById(profile.local_id));
+
+        row.appendChild(button);
+        row.appendChild(deleteBtn);
+        list.appendChild(row);
+    });
+}
+
+function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+    }[char]));
+}
+
+function captureWeightsEditorRestoreState() {
+    return {
+        activeId: activeRouteTuningProfileId,
+        weights: getWeightsFromSliders(),
+        offsets: {}
+    };
+}
+
+function restoreWeightsEditorState() {
+    if (!weightsEditorRestoreState) return;
+    activeRouteTuningProfileId = weightsEditorRestoreState.activeId || "";
+    localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
+    applyWeightsToSliders(weightsEditorRestoreState.weights || SYSTEM_DEFAULT_WEIGHTS);
+    weightsEditorRestoreState = null;
+}
+
+function setWeightsManagerMode(mode) {
+    const rootSections = ["sec-home", "sec-weights", "sec-layers", "sec-auth"];
+    const manager = document.getElementById("sec-weights-manager");
+    rootSections.forEach(id => {
+        const section = document.getElementById(id);
+        if (section) section.classList.toggle("app-section-hidden", mode !== "root");
+    });
+    if (manager) manager.classList.toggle("app-section-hidden", mode === "root");
+    const listView = document.getElementById("weights-list-view");
+    const editorView = document.getElementById("weights-editor-view");
+    if (listView) listView.classList.toggle("hidden", mode === "editor");
+    if (editorView) editorView.classList.toggle("hidden", mode !== "editor");
+}
+
+function openWeightsManagerView() {
+    setWeightsManagerMode("list");
+    renderRouteTuningProfiles();
+}
+
+function closeWeightsManagerView() {
+    setWeightsManagerMode("root");
+}
+
+function openWeightsEditorForNew() {
+    weightsEditorRestoreState = captureWeightsEditorRestoreState();
+    weightsEditorProfileId = null;
+    const nameInput = document.getElementById("route-profile-name");
+    const title = document.getElementById("weights-editor-title");
+    const deleteBtn = document.getElementById("btn-delete-route-profile");
+    if (nameInput) nameInput.value = "Custom Routing Profile";
+    if (title) title.textContent = "New Weight Setting";
+    if (deleteBtn) deleteBtn.classList.add("hidden");
+    applyWeightsToSliders(SYSTEM_DEFAULT_WEIGHTS);
+    setWeightsManagerMode("editor");
+}
+
+function openWeightsEditorForProfile(profileId) {
+    const profile = routeTuningProfiles.find(item => item.local_id === profileId && !item.deleted);
+    if (!profile) return;
+    weightsEditorRestoreState = captureWeightsEditorRestoreState();
+    weightsEditorProfileId = profile.local_id;
+    const nameInput = document.getElementById("route-profile-name");
+    const title = document.getElementById("weights-editor-title");
+    const deleteBtn = document.getElementById("btn-delete-route-profile");
+    if (nameInput) nameInput.value = profile.name;
+    if (title) title.textContent = "Edit Weight Setting";
+    if (deleteBtn) deleteBtn.classList.remove("hidden");
+    activeRouteTuningProfileId = profile.local_id;
+    localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
+    applyRouteTuningProfile(profile);
+    setWeightsManagerMode("editor");
+}
+
+function cancelWeightsEditor() {
+    restoreWeightsEditorState();
+    setWeightsManagerMode("list");
 }
 
 async function loadRouteTuningProfiles() {
@@ -1035,8 +1158,7 @@ async function persistRouteTuningProfile(profile) {
     renderRouteTuningProfiles();
 }
 
-async function createRouteTuningProfile() {
-    const name = prompt("Profile name", "Custom Routing Profile");
+async function createRouteTuningProfile(name = "Custom Routing Profile", showCreatedToast = true) {
     if (!name || !name.trim()) return;
     const userId = getCurrentUserId();
     const profile = normalizeRouteTuningProfile({
@@ -1051,7 +1173,7 @@ async function createRouteTuningProfile() {
     activeRouteTuningProfileId = profile.local_id;
     localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
     await persistRouteTuningProfile(profile);
-    showToast("Routing profile created.");
+    if (showCreatedToast) showToast("Routing profile created.");
 }
 
 async function saveActiveRouteTuningProfile() {
@@ -1100,6 +1222,55 @@ async function deleteActiveRouteTuningProfile() {
     renderRouteTuningProfiles();
     applyRouteTuningProfile(null);
     showToast("Routing profile deleted.");
+}
+
+async function saveWeightsEditorProfile() {
+    const nameInput = document.getElementById("route-profile-name");
+    const name = (nameInput?.value || "Custom Routing Profile").trim() || "Custom Routing Profile";
+    if (weightsEditorProfileId) {
+        activeRouteTuningProfileId = weightsEditorProfileId;
+        localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
+        let profile = routeTuningProfiles.find(item => item.local_id === weightsEditorProfileId && !item.deleted);
+        if (!profile) return;
+        profile = {
+            ...profile,
+            name,
+            weights: getWeightsFromSliders(),
+            offsets: profile.offsets || {},
+            synced: false,
+            updated_at: new Date().toISOString()
+        };
+        await persistRouteTuningProfile(profile);
+        showToast(isCloudSyncActiveForProfiles() ? "Weight setting saved and synced." : "Weight setting saved locally.");
+    } else {
+        await createRouteTuningProfile(name, false);
+        showToast("Weight setting created.");
+    }
+    weightsEditorRestoreState = null;
+    renderRouteTuningProfiles();
+    setWeightsManagerMode("list");
+    if (startMarker && endMarker) calculateRoute();
+}
+
+async function deleteRouteTuningProfileById(profileId) {
+    const previousActiveId = activeRouteTuningProfileId;
+    activeRouteTuningProfileId = profileId;
+    localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
+    await deleteActiveRouteTuningProfile();
+    if (previousActiveId !== profileId && activeRouteTuningProfileId === "") {
+        activeRouteTuningProfileId = previousActiveId;
+        localStorage.setItem(ACTIVE_ROUTE_TUNING_PROFILE_KEY, activeRouteTuningProfileId);
+        const previousProfile = routeTuningProfiles.find(item => item.local_id === previousActiveId && !item.deleted);
+        applyRouteTuningProfile(previousProfile);
+    }
+    renderRouteTuningProfiles();
+}
+
+async function deleteWeightsEditorProfile() {
+    if (!weightsEditorProfileId) return;
+    await deleteRouteTuningProfileById(weightsEditorProfileId);
+    weightsEditorRestoreState = null;
+    setWeightsManagerMode("list");
 }
 
 async function setActiveRouteTuningProfileDefault() {
@@ -1192,6 +1363,7 @@ function clearRoute() {
     if (endInput) endInput.value = "";
     hideAutocompleteSuggestions("start");
     hideAutocompleteSuggestions("end");
+    setCurrentRouteTitle();
     clearPolylines();
     clearWaypoints();
     clearActiveCrossings();
@@ -1276,6 +1448,7 @@ async function calculateRoute() {
 
         // Draw path segments
         drawRoute(data.segments);
+        activePlanMapSource = "planner";
 
         // Store segments for navigation module
         window.lastRouteSegments = data.segments;
@@ -1286,6 +1459,7 @@ async function calculateRoute() {
         
         document.getElementById("info-distance").textContent = `${distanceMiles} mi`;
         document.getElementById("info-cost").textContent = costScore;
+        setCurrentRouteTitle(currentRouteTitle);
         document.getElementById("route-info").classList.remove("hidden");
 
         // Render turn-by-turn directions dynamically
@@ -1377,7 +1551,10 @@ function drawRoute(segments) {
 }
 
 // Load a preset route by coordinates
-async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType = null) {
+async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType = null, routeTitle = null) {
+    activePlanMapSource = "planner";
+    setCurrentRouteTitle(routeTitle);
+
     // Clear existing route markers and waypoints
     if (startMarker) map.removeLayer(startMarker);
     if (endMarker) map.removeLayer(endMarker);
@@ -1415,6 +1592,7 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
             const distanceMiles = routeType === "b180" ? 13.66 : 29.29;
             document.getElementById("info-distance").textContent = `${distanceMiles} mi`;
             document.getElementById("info-cost").textContent = "N/A (Official Track)";
+            setCurrentRouteTitle(routeType === "b180" ? "Boulder Loops B-180" : "Boulder Loops B-360");
             document.getElementById("route-info").classList.remove("hidden");
             const startNavBtn = document.getElementById("btn-start-nav");
             if (startNavBtn) {
@@ -1455,6 +1633,7 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
     }).addTo(map);
     endMarker.bindPopup("<strong>Destination</strong><br>Drag to move");
     endMarker.on("dragend", () => {
+        setCurrentRouteTitle();
         updateRouteInput("end", endMarker.getLatLng());
         calculateRoute();
     });
@@ -1563,9 +1742,9 @@ function appendOfficialLayerNavigationSegments(layer, segments, name) {
 }
 
 function lockWeights(lock) {
-    const sliders = document.querySelectorAll("#sec-weights input[type='range']");
+    const sliders = document.querySelectorAll("#sliders-container input[type='range']");
     const resetButton = document.getElementById("btn-reset");
-    const weightsSection = document.getElementById("sec-weights");
+    const weightsSection = document.getElementById("sec-weights-manager");
     
     sliders.forEach(slider => {
         slider.disabled = lock;
@@ -1575,16 +1754,17 @@ function lockWeights(lock) {
     }
     
     if (lock) {
-        weightsSection.classList.add("weights-locked");
-        if (!document.getElementById("weights-lock-msg")) {
+        weightsSection?.classList.add("weights-locked");
+        if (weightsSection && !document.getElementById("weights-lock-msg")) {
             const msg = document.createElement("div");
             msg.id = "weights-lock-msg";
             msg.className = "lock-message";
             msg.innerHTML = `<i class="fa-solid fa-lock"></i> Sliders locked to official route paths`;
-            weightsSection.querySelector(".section-content").prepend(msg);
+            const editor = document.getElementById("weights-editor-view");
+            if (editor) editor.prepend(msg);
         }
     } else {
-        weightsSection.classList.remove("weights-locked");
+        weightsSection?.classList.remove("weights-locked");
         const msg = document.getElementById("weights-lock-msg");
         if (msg) msg.remove();
     }
@@ -2157,26 +2337,31 @@ async function loadCrossings() {
     }
 }
 
-// Fetch playgrounds and populate the dropdown dynamically on load
+// Fetch playgrounds and cache them for the destination suggestion list.
 async function loadPlaygrounds() {
-    const playgroundSelect = document.getElementById("playground-select");
-    if (!playgroundSelect) return;
-    
-    try {
-        const response = await fetch(`${API_BASE}/api/playgrounds`);
-        const playgrounds = await response.json();
-        
-        playgrounds.forEach(pg => {
-            const option = document.createElement("option");
-            option.value = `${pg.lat},${pg.lon}`;
-            option.textContent = pg.name;
-            playgroundSelect.appendChild(option);
+    if (playgroundPlaces.length) return playgroundPlaces;
+    if (playgroundLoadPromise) return playgroundLoadPromise;
+
+    playgroundLoadPromise = fetch(`${API_BASE}/api/playgrounds`)
+        .then(response => response.json())
+        .then(playgrounds => {
+            playgroundPlaces = playgrounds.map((pg, index) => ({
+                id: pg.id || `playground-${index}`,
+                name: pg.name,
+                type: "playground",
+                lat: Number(pg.lat),
+                lng: Number(pg.lon ?? pg.lng)
+            }));
+            console.log(`Loaded ${playgroundPlaces.length} playgrounds for destination suggestions.`);
+            return playgroundPlaces;
+        })
+        .catch(err => {
+            playgroundLoadPromise = null;
+            console.error("Failed to load playgrounds:", err);
+            return [];
         });
-        
-        console.log(`Loaded ${playgrounds.length} playgrounds dynamically into the dropdown.`);
-    } catch (err) {
-        console.error("Failed to load playgrounds:", err);
-    }
+
+    return playgroundLoadPromise;
 }
 
 // Clear any crossings currently rendered on the map
@@ -3460,6 +3645,9 @@ async function resetUserWeights() {
 // --- Adventure History Rendering & Telemetry ---
 let historyMarkers = [];
 let historyPolylines = [];
+let historyPreviewMap = null;
+let historyPreviewLayers = [];
+let historyPreviewRenderToken = 0;
 let currentHistoryItems = [];
 let currentHistoryRoute = null;
 let isHistoryDetailEditing = false;
@@ -3776,11 +3964,13 @@ async function showHistoryDetail(routeId) {
     document.getElementById("history-list")?.classList.add("hidden");
     document.getElementById("history-detail")?.classList.remove("hidden");
     renderHistoryDetail(route);
+    renderHistoryMapPreview(route);
 }
 
 function hideHistoryDetail() {
     currentHistoryRoute = null;
     isHistoryDetailEditing = false;
+    destroyHistoryMapPreview();
     document.getElementById("history-detail")?.classList.add("hidden");
     document.getElementById("history-list")?.classList.remove("hidden");
 }
@@ -3886,6 +4076,7 @@ async function updateHistoryRoute(route, changes) {
         ) || currentHistoryRoute;
         currentHistoryRoute = refreshed;
         renderHistoryDetail(refreshed);
+        renderHistoryMapPreview(refreshed);
     }
 }
 
@@ -3929,6 +4120,178 @@ async function deleteHistoryRoute(route) {
     showToast("Route removed from history.");
 }
 
+function destroyHistoryMapPreview() {
+    historyPreviewRenderToken += 1;
+    historyPreviewLayers = [];
+    if (historyPreviewMap) {
+        historyPreviewMap.remove();
+        historyPreviewMap = null;
+    }
+    const container = document.getElementById("history-map-preview-map");
+    if (container) container.innerHTML = "";
+}
+
+async function resolveHistoryRouteDetails(route) {
+    let localRoute = null;
+    const routeIds = new Set([route?.id, route?.local_id, route?.server_id].filter(Boolean));
+
+    try {
+        localRoute = getLocalHistoryRoutes().find(item =>
+            !item.deleted && [item.id, item.local_id, item.server_id].some(id => routeIds.has(id))
+        );
+    } catch (e) {}
+
+    const cachedRoute = localRoute || route;
+    if (cachedRoute?.route_geojson || cachedRoute?.ticks?.length) {
+        return cachedRoute;
+    }
+
+    const serverId = getRouteServerId(route);
+    const authData = getStoredAuthSession();
+    if (!serverId || !authData) {
+        return cachedRoute;
+    }
+
+    const response = await fetch(`${API_BASE}/api/navigation/${serverId}`, {
+        headers: { "Authorization": `Bearer ${authData.token}` }
+    });
+    if (!response.ok) throw new Error("Failed to fetch route preview details");
+    const serverRoute = await response.json();
+    return { ...cachedRoute, ...serverRoute, server_id: serverRoute.id };
+}
+
+function collectGeoJsonLinePaths(geojson) {
+    const paths = [];
+
+    function addGeometry(geometry) {
+        if (!geometry) return;
+        if (geometry.type === "LineString") {
+            const path = geometry.coordinates
+                .filter(coord => Array.isArray(coord) && coord.length >= 2)
+                .map(coord => [coord[1], coord[0]]);
+            if (path.length >= 2) paths.push(path);
+            return;
+        }
+        if (geometry.type === "MultiLineString") {
+            geometry.coordinates.forEach(line => addGeometry({ type: "LineString", coordinates: line }));
+            return;
+        }
+        if (geometry.type === "GeometryCollection") {
+            geometry.geometries.forEach(addGeometry);
+        }
+    }
+
+    if (geojson?.type === "FeatureCollection") {
+        geojson.features.forEach(feature => addGeometry(feature.geometry));
+    } else if (geojson?.type === "Feature") {
+        addGeometry(geojson.geometry);
+    } else {
+        addGeometry(geojson);
+    }
+
+    return paths;
+}
+
+function getHistoryPreviewPaths(route) {
+    const geoJsonPaths = collectGeoJsonLinePaths(route?.route_geojson);
+    if (geoJsonPaths.length) return geoJsonPaths;
+
+    const tickPath = (route?.ticks || [])
+        .slice()
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+        .filter(tick => Number.isFinite(Number(tick.lat)) && Number.isFinite(Number(tick.lon)))
+        .map(tick => [Number(tick.lat), Number(tick.lon)]);
+    if (tickPath.length >= 2) return [tickPath];
+
+    if (Number.isFinite(Number(route?.start_lat)) && Number.isFinite(Number(route?.start_lon)) &&
+        Number.isFinite(Number(route?.end_lat)) && Number.isFinite(Number(route?.end_lon))) {
+        return [[[Number(route.start_lat), Number(route.start_lon)], [Number(route.end_lat), Number(route.end_lon)]]];
+    }
+
+    return [];
+}
+
+async function renderHistoryMapPreview(route) {
+    const container = document.getElementById("history-map-preview-map");
+    if (!container || !route) return;
+
+    const renderToken = ++historyPreviewRenderToken;
+    if (historyPreviewMap) {
+        historyPreviewMap.remove();
+        historyPreviewMap = null;
+    }
+    container.innerHTML = "";
+    historyPreviewLayers = [];
+
+    try {
+        const detailRoute = await resolveHistoryRouteDetails(route);
+        if (renderToken !== historyPreviewRenderToken || currentHistoryRoute?.id !== route.id) return;
+
+        historyPreviewMap = L.map(container, {
+            zoomControl: false,
+            attributionControl: false,
+            dragging: false,
+            touchZoom: false,
+            scrollWheelZoom: false,
+            doubleClickZoom: false,
+            boxZoom: false,
+            keyboard: false,
+            tap: false
+        });
+
+        L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+            subdomains: "abcd",
+            maxZoom: 20
+        }).addTo(historyPreviewMap);
+
+        const paths = getHistoryPreviewPaths(detailRoute);
+        paths.forEach(path => {
+            historyPreviewLayers.push(L.polyline(path, {
+                color: "#64ffda",
+                weight: 5,
+                opacity: 0.95,
+                lineCap: "round",
+                lineJoin: "round",
+                interactive: false
+            }).addTo(historyPreviewMap));
+        });
+
+        const startLatLng = [Number(detailRoute.start_lat), Number(detailRoute.start_lon)];
+        const endLatLng = [Number(detailRoute.end_lat), Number(detailRoute.end_lon)];
+        if (startLatLng.every(Number.isFinite)) {
+            historyPreviewLayers.push(L.circleMarker(startLatLng, {
+                radius: 6,
+                color: "#ffffff",
+                weight: 2,
+                fillColor: "#00e676",
+                fillOpacity: 1,
+                interactive: false
+            }).addTo(historyPreviewMap));
+        }
+        if (endLatLng.every(Number.isFinite)) {
+            historyPreviewLayers.push(L.circleMarker(endLatLng, {
+                radius: 6,
+                color: "#ffffff",
+                weight: 2,
+                fillColor: "#ff1744",
+                fillOpacity: 1,
+                interactive: false
+            }).addTo(historyPreviewMap));
+        }
+
+        const boundsPoints = paths.flat().concat([startLatLng, endLatLng].filter(point => point.every(Number.isFinite)));
+        if (boundsPoints.length) {
+            historyPreviewMap.fitBounds(L.latLngBounds(boundsPoints), { padding: [20, 20], animate: false });
+        } else {
+            historyPreviewMap.setView(BOULDER_CO, ZOOM_LEVEL);
+        }
+        setTimeout(() => historyPreviewMap?.invalidateSize(), 50);
+    } catch (err) {
+        console.error("Failed to render history map preview:", err);
+        container.innerHTML = "";
+    }
+}
+
 function initializeHistoryDetailControls() {
     document.getElementById("btn-history-detail-back")?.addEventListener("click", hideHistoryDetail);
     document.getElementById("btn-history-detail-edit")?.addEventListener("click", toggleHistoryDetailEdit);
@@ -3944,6 +4307,7 @@ function initializeHistoryDetailControls() {
 async function loadHistoryRouteOnMap(routeId) {
     clearRoute();
     clearHistoryMapLayers();
+    activePlanMapSource = "history";
     switchAppSection("plan");
     
     let localRoute = null;
@@ -4056,6 +4420,7 @@ async function loadHistoryRouteOnMap(routeId) {
         
     } catch (err) {
         console.error("Error drawing history route:", err);
+        activePlanMapSource = "planner";
         alert("Unable to draw history route telemetry on map.");
     }
 }

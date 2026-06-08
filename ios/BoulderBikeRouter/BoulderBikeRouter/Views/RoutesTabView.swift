@@ -24,7 +24,7 @@ struct RoutesTabView: View {
                     
                     // Section 1: Presets & Destinations
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("PRESETS & LOOP CONFIGURATIONS")
+                        Text("LOOP CONFIGURATIONS")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundColor(.onSurfaceVariant)
                             .tracking(1)
@@ -49,7 +49,7 @@ struct RoutesTabView: View {
                                                     .stroke(viewModel.selectedPresetName == preset.name ? Color.primaryMint.opacity(0.5) : Color.onSurfaceVariant.opacity(0.1), lineWidth: 1)
                                             )
                                         
-                                        Image(systemName: preset.routeType == "playgrounds" ? "figure.play" : preset.routeType != nil ? "arrow.triangle.2.circlepath" : "map.fill")
+                                        Image(systemName: "arrow.triangle.2.circlepath")
                                             .foregroundColor(viewModel.selectedPresetName == preset.name ? .primaryMint : .onSurfaceVariant)
                                     }
                                     
@@ -80,43 +80,6 @@ struct RoutesTabView: View {
                             }
                         }
                     }
-                    
-                    // Section 2: Playground Selector
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("ROUTE TO A PARK PLAYGROUND")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.onSurfaceVariant)
-                            .tracking(1)
-                            .padding(.horizontal, 4)
-                        
-                        Menu {
-                            ForEach(viewModel.playgroundsList) { pg in
-                                Button(pg.name) {
-                                    viewModel.selectPlayground(pg)
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Image(systemName: "figure.play")
-                                    .foregroundColor(.primaryMint)
-                                Text(viewModel.selectedPlayground?.name ?? "Select a Playground...")
-                                    .foregroundColor(.onSurface)
-                                Spacer()
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .foregroundColor(.onSurfaceVariant)
-                            }
-                            .font(.system(size: 14, weight: .medium))
-                            .padding(.vertical, 14)
-                            .padding(.horizontal, 16)
-                            .background(Color.surfaceElevated)
-                            .cornerRadius(8)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.onSurfaceVariant.opacity(0.1), lineWidth: 1)
-                            )
-                        }
-                    }
-
                 }
                 .padding(24)
             }
