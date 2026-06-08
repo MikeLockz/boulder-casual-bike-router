@@ -629,13 +629,23 @@ class MapViewModel {
     }
     
     func selectHistoryRoute(_ route: PastRoute) async {
+        await loadHistoryRouteDetails(route, activateSelection: true)
+    }
+
+    func preloadHistoryRouteDetails(_ route: PastRoute) async {
+        await loadHistoryRouteDetails(route, activateSelection: false)
+    }
+
+    private func loadHistoryRouteDetails(_ route: PastRoute, activateSelection: Bool) async {
         // First, check if we have the route with detailed ticks locally in SwiftData
         if let context = modelContext {
             let routeId = route.id
             let descriptor = FetchDescriptor<LocalRoute>()
             if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
                 await MainActor.run {
-                    self.selectedHistoryRoute = route
+                    if activateSelection {
+                        self.selectedHistoryRoute = route
+                    }
                     let sortedTicks = localRoute.ticks.sorted { $0.timestamp < $1.timestamp }.map { $0.toNavigationTick }
                     self.selectedHistoryRouteTicks = sortedTicks
                     
@@ -671,9 +681,11 @@ class MapViewModel {
                         ticks: sortedTicks
                     )
                     
-                    self.startLocation = nil
-                    self.endLocation = nil
-                    self.routeResponse = nil
+                    if activateSelection {
+                        self.startLocation = nil
+                        self.endLocation = nil
+                        self.routeResponse = nil
+                    }
                 }
                 return
             }
@@ -683,13 +695,17 @@ class MapViewModel {
         do {
             let details = try await apiService.fetchRouteDetails(routeId: route.id)
             await MainActor.run {
-                self.selectedHistoryRoute = route
+                if activateSelection {
+                    self.selectedHistoryRoute = route
+                }
                 self.selectedHistoryRouteTicks = details.ticks.sorted { $0.timestamp < $1.timestamp }
                 self.selectedHistoryRouteDetails = details
                 
-                self.startLocation = nil
-                self.endLocation = nil
-                self.routeResponse = nil
+                if activateSelection {
+                    self.startLocation = nil
+                    self.endLocation = nil
+                    self.routeResponse = nil
+                }
             }
         } catch {
             print("Failed to load history route details: \(error.localizedDescription)")

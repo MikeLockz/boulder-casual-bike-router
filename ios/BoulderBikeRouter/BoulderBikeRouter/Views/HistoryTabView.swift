@@ -1,7 +1,9 @@
 import SwiftUI
+import MapKit
 
 struct HistoryTabView: View {
     let pastRoutes: [PastRoute]
+    @Binding var routeToPresent: PastRoute?
     @Environment(MapViewModel.self) private var viewModel
     @State private var selectedDetailRoute: PastRoute?
     
@@ -88,7 +90,7 @@ struct HistoryTabView: View {
                                         Circle()
                                             .fill(Color.primaryMint)
                                             .frame(width: 6, height: 6)
-                                        Text(route.startPointName)
+                                        Text(coordinateText(latitude: route.startLat, longitude: route.startLon))
                                             .font(.system(size: 12))
                                             .foregroundColor(.onSurfaceVariant)
                                             .lineLimit(1)
@@ -98,7 +100,7 @@ struct HistoryTabView: View {
                                         Circle()
                                             .fill(Color.errorRose)
                                             .frame(width: 6, height: 6)
-                                        Text(route.endPointName)
+                                        Text(coordinateText(latitude: route.endLat, longitude: route.endLon))
                                             .font(.system(size: 12))
                                             .foregroundColor(.onSurfaceVariant)
                                             .lineLimit(1)
@@ -144,6 +146,12 @@ struct HistoryTabView: View {
             }
             .environment(viewModel)
         }
+        .onAppear {
+            presentPendingRouteIfNeeded()
+        }
+        .onChange(of: routeToPresent) { _, _ in
+            presentPendingRouteIfNeeded()
+        }
     }
     
     private func formatDuration(_ seconds: Int) -> String {
@@ -158,6 +166,16 @@ struct HistoryTabView: View {
             let remainingMinutes = minutes % 60
             return "\(hours)h \(remainingMinutes)m"
         }
+    }
+
+    private func coordinateText(latitude: Double, longitude: Double) -> String {
+        String(format: "%.5f, %.5f", latitude, longitude)
+    }
+
+    private func presentPendingRouteIfNeeded() {
+        guard let route = routeToPresent else { return }
+        selectedDetailRoute = route
+        routeToPresent = nil
     }
 }
 
@@ -242,37 +260,87 @@ struct RouteHistoryDetailView: View {
     }
 
     private var mapPreview: some View {
-        ZStack(alignment: .bottomLeading) {
-            LinearGradient(
-                colors: [Color.primaryMint.opacity(0.28), Color.forestDeep, Color.surfaceContainer],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            Path { path in
-                path.move(to: CGPoint(x: 34, y: 112))
-                path.addCurve(to: CGPoint(x: 150, y: 58), control1: CGPoint(x: 76, y: 78), control2: CGPoint(x: 98, y: 154))
-                path.addCurve(to: CGPoint(x: 302, y: 92), control1: CGPoint(x: 210, y: 0), control2: CGPoint(x: 236, y: 134))
+        Map(position: .constant(.region(previewRegion)), interactionModes: []) {
+            ForEach(0..<previewRouteCoordinates.count, id: \.self) { pathIdx in
+                MapPolyline(coordinates: previewRouteCoordinates[pathIdx])
+                    .stroke(Color.mintGlow, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
             }
-            .stroke(Color.mintGlow, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-            .shadow(color: .mintGlow.opacity(0.6), radius: 10)
 
-            Text("Preview")
-                .font(.system(size: 11, weight: .bold))
-                .textCase(.uppercase)
-                .tracking(1.2)
-                .foregroundColor(.forestDeep)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.primaryMint)
-                .clipShape(Capsule())
-                .padding(14)
+            Annotation("Start", coordinate: startCoordinate, anchor: .bottom) {
+                previewMarker(color: .primaryMint)
+            }
+
+            Annotation("End", coordinate: endCoordinate, anchor: .bottom) {
+                previewMarker(color: .errorRose)
+            }
         }
         .frame(height: 170)
+        .disabled(true)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(
             RoundedRectangle(cornerRadius: 16)
                 .stroke(Color.onSurfaceVariant.opacity(0.08), lineWidth: 1)
         )
+        .task(id: route.id) {
+            if viewModel.selectedHistoryRouteDetails?.id != route.id {
+                await viewModel.preloadHistoryRouteDetails(route)
+            }
+        }
+    }
+
+    private var startCoordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: route.startLat, longitude: route.startLon)
+    }
+
+    private var endCoordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: route.endLat, longitude: route.endLon)
+    }
+
+    private var previewRouteCoordinates: [[CLLocationCoordinate2D]] {
+        if viewModel.selectedHistoryRouteDetails?.id == route.id,
+           let details = viewModel.selectedHistoryRouteDetails {
+            let plannedCoordinates = details.plannedRouteCoordinates.filter { $0.count >= 2 }
+            if !plannedCoordinates.isEmpty {
+                return plannedCoordinates
+            }
+
+            let tickCoordinates = details.ticks
+                .sorted { $0.timestamp < $1.timestamp }
+                .map { $0.clCoordinate }
+            if tickCoordinates.count >= 2 {
+                return [tickCoordinates]
+            }
+        }
+
+        return [[startCoordinate, endCoordinate]]
+    }
+
+    private var previewRegion: MKCoordinateRegion {
+        let coordinates = previewRouteCoordinates.flatMap { $0 } + [startCoordinate, endCoordinate]
+        let minLat = coordinates.map(\.latitude).min() ?? route.startLat
+        let maxLat = coordinates.map(\.latitude).max() ?? route.endLat
+        let minLon = coordinates.map(\.longitude).min() ?? route.startLon
+        let maxLon = coordinates.map(\.longitude).max() ?? route.endLon
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+
+        return MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(
+                latitudeDelta: max((maxLat - minLat) * 1.7, 0.008),
+                longitudeDelta: max((maxLon - minLon) * 1.7, 0.008)
+            )
+        )
+    }
+
+    private func previewMarker(color: Color) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: 12, height: 12)
+            .overlay(Circle().stroke(Color.white, lineWidth: 2))
+            .shadow(radius: 2)
     }
 
     private var header: some View {

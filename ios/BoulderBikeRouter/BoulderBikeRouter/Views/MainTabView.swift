@@ -5,6 +5,7 @@ struct MainTabView: View {
     @State private var viewModel = MapViewModel()
     @State private var selectedTab: Int = 0
     @State private var isDrawerOpen: Bool = false
+    @State private var historyRouteToPresent: PastRoute?
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
@@ -12,17 +13,21 @@ struct MainTabView: View {
             // Tab View contents
             VStack(spacing: 0) {
                 ZStack {
-                    switch selectedTab {
-                    case 0:
+                    if viewModel.selectedHistoryRoute != nil {
                         MainMapView(viewModel: viewModel, isDrawerOpen: $isDrawerOpen)
-                    case 1:
-                        RoutesTabView(viewModel: viewModel)
-                    case 2:
-                        HistoryTabView(pastRoutes: viewModel.pastRoutes)
-                    case 3:
-                        SettingsTabView(viewModel: viewModel)
-                    default:
-                        EmptyView()
+                    } else {
+                        switch selectedTab {
+                        case 0:
+                            MainMapView(viewModel: viewModel, isDrawerOpen: $isDrawerOpen)
+                        case 1:
+                            RoutesTabView(viewModel: viewModel)
+                        case 2:
+                            HistoryTabView(pastRoutes: viewModel.pastRoutes, routeToPresent: $historyRouteToPresent)
+                        case 3:
+                            SettingsTabView(viewModel: viewModel)
+                        default:
+                            EmptyView()
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -58,16 +63,16 @@ struct MainTabView: View {
                 await viewModel.loadConfiguration()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HistoryRouteSelected"))) { _ in
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                selectedTab = 0
-            }
-        }
         .onChange(of: viewModel.isSelectingHomeLocation) { _, isSelecting in
             if isSelecting {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                     selectedTab = 0
                 }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HistoryRouteMapBack"))) { notification in
+            if let route = notification.object as? PastRoute {
+                historyRouteToPresent = route
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HomeLocationSaved"))) { _ in

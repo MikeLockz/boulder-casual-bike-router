@@ -112,10 +112,21 @@ class SimulatedLocationProvider: LocationProvider {
     private var speedMultiplier: Double = 1.0 // 1x, 2x, 4x, etc.
     private let baseUpdateInterval: TimeInterval = 1.0 // 1 second ticks
     private let casualSpeedMps = 4.47 // 10 mph in m/s
+    private var simulatedHeading: CLLocationDirection = 0.0
+    private var headingInitialized = false
+    private var compassDrift: CLLocationDirection = 0.0
+    private let compassJitterDegrees = 1.5
+    private let compassDriftStepDegrees = 0.15
+    private let compassDriftMaxDegrees = 3.0
+    private let compassFollowFactor = 0.35
+    private let compassMaxStepDegrees = 12.0
 
     func setRoute(_ coords: [CLLocationCoordinate2D]) {
         self.coordinates = coords
         self.currentIndex = 0
+        self.simulatedHeading = 0.0
+        self.headingInitialized = false
+        self.compassDrift = 0.0
     }
 
     func setSpeedMultiplier(_ multiplier: Double) {
@@ -150,7 +161,8 @@ class SimulatedLocationProvider: LocationProvider {
         }
 
         let coord = coordinates[currentIndex]
-        let headingVal = calculateHeading()
+        let routeCourse = calculateRouteCourse(at: currentIndex)
+        let headingVal = updateSimulatedHeading(toward: routeCourse)
         
         let location = CLLocation(
             coordinate: coord,
@@ -171,11 +183,50 @@ class SimulatedLocationProvider: LocationProvider {
         currentIndex += 1
     }
 
-    private func calculateHeading() -> CLLocationDirection {
-        guard currentIndex < coordinates.count - 1 else { return 0.0 }
-        let pt1 = coordinates[currentIndex]
-        let pt2 = coordinates[currentIndex + 1]
-        
+    private func calculateRouteCourse(at index: Int) -> CLLocationDirection {
+        guard coordinates.count >= 2 else { return simulatedHeading }
+
+        let behindIndex = max(0, index - 1)
+        let aheadIndex = min(coordinates.count - 1, index + 3)
+
+        if behindIndex != aheadIndex {
+            return bearing(from: coordinates[behindIndex], to: coordinates[aheadIndex])
+        }
+
+        if index > 0 {
+            return bearing(from: coordinates[index - 1], to: coordinates[index])
+        }
+
+        return bearing(from: coordinates[index], to: coordinates[index + 1])
+    }
+
+    private func updateSimulatedHeading(toward routeCourse: CLLocationDirection) -> CLLocationDirection {
+        compassDrift = clamp(
+            compassDrift + Double.random(in: -compassDriftStepDegrees...compassDriftStepDegrees),
+            min: -compassDriftMaxDegrees,
+            max: compassDriftMaxDegrees
+        )
+
+        let compassNoise = Double.random(in: -compassJitterDegrees...compassJitterDegrees)
+        let target = normalizeHeading(routeCourse + compassDrift + compassNoise)
+
+        if !headingInitialized {
+            simulatedHeading = target
+            headingInitialized = true
+            return simulatedHeading
+        }
+
+        let headingDiff = shortestAngleDiff(from: simulatedHeading, to: target)
+        let step = clamp(
+            headingDiff * compassFollowFactor,
+            min: -compassMaxStepDegrees,
+            max: compassMaxStepDegrees
+        )
+        simulatedHeading = normalizeHeading(simulatedHeading + step)
+        return simulatedHeading
+    }
+
+    private func bearing(from pt1: CLLocationCoordinate2D, to pt2: CLLocationCoordinate2D) -> CLLocationDirection {
         let lat1 = pt1.latitude * .pi / 180.0
         let lat2 = pt2.latitude * .pi / 180.0
         let dLon = (pt2.longitude - pt1.longitude) * .pi / 180.0
@@ -184,6 +235,21 @@ class SimulatedLocationProvider: LocationProvider {
         let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
         let bearing = atan2(y, x) * 180.0 / .pi
         return (bearing + 360.0).truncatingRemainder(dividingBy: 360.0)
+    }
+
+    private func shortestAngleDiff(from: CLLocationDirection, to: CLLocationDirection) -> CLLocationDirection {
+        var diff = to - from
+        while diff > 180.0 { diff -= 360.0 }
+        while diff < -180.0 { diff += 360.0 }
+        return diff
+    }
+
+    private func normalizeHeading(_ heading: CLLocationDirection) -> CLLocationDirection {
+        (heading + 360.0).truncatingRemainder(dividingBy: 360.0)
+    }
+
+    private func clamp(_ value: Double, min: Double, max: Double) -> Double {
+        Swift.max(min, Swift.min(max, value))
     }
 }
 

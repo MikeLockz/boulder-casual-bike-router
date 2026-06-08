@@ -499,10 +499,11 @@ struct MainMapView: View {
             
             Spacer()
             
-            Button("Close") {
+            Button("Back") {
                 withAnimation {
                     viewModel.clearHistorySelection()
                 }
+                NotificationCenter.default.post(name: NSNotification.Name("HistoryRouteMapBack"), object: route)
             }
             .font(.system(size: 14, weight: .bold))
             .foregroundColor(.errorRose)
