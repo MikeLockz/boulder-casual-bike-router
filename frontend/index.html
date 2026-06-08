@@ -45,16 +45,37 @@
                     </summary>
                     <div class="section-content">
                         <p id="preset-instruction" class="section-desc">Select a route preset or click points on the map to start planning.</p>
-                        <div class="route-planner-actions" aria-label="Route planner start options">
-                            <button type="button" id="btn-focus-playgrounds" class="route-planner-action" title="Choose a playground">
-                                <i class="fa-solid fa-child-reaching"></i>
-                            </button>
-                            <button type="button" id="btn-route-from-home" class="route-planner-action" title="Route to home">
-                                <i class="fa-solid fa-house-chimney"></i>
-                            </button>
-                            <button type="button" id="btn-route-set-pin" class="route-planner-action" title="Set a route pin on the map">
-                                <i class="fa-solid fa-map-pin"></i>
-                            </button>
+                        <div class="route-planner-inputs" aria-label="Route planner coordinates">
+                            <div class="route-planner-row">
+                                <i class="fa-solid fa-circle route-point-dot start"></i>
+                                <input type="text" id="route-start-input" class="route-coordinate-input" placeholder="Start Location (lat, lng)">
+                                <div class="route-planner-actions">
+                                    <button type="button" id="btn-start-current" class="route-planner-action" title="Use current location for start">
+                                        <i class="fa-solid fa-location-crosshairs"></i>
+                                    </button>
+                                    <button type="button" id="btn-start-home" class="route-planner-action" title="Use home for start">
+                                        <i class="fa-solid fa-house-chimney"></i>
+                                    </button>
+                                    <button type="button" id="btn-start-pin" class="route-planner-action" title="Drop start pin on map">
+                                        <i class="fa-solid fa-map-pin"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="route-planner-row">
+                                <i class="fa-solid fa-square route-point-dot end"></i>
+                                <input type="text" id="route-end-input" class="route-coordinate-input" placeholder="Destination (lat, lng)">
+                                <div class="route-planner-actions">
+                                    <button type="button" id="btn-end-playground" class="route-planner-action" title="Choose a playground destination">
+                                        <i class="fa-solid fa-child-reaching"></i>
+                                    </button>
+                                    <button type="button" id="btn-end-home" class="route-planner-action" title="Use home for destination">
+                                        <i class="fa-solid fa-house-chimney"></i>
+                                    </button>
+                                    <button type="button" id="btn-end-pin" class="route-planner-action" title="Drop destination pin on map">
+                                        <i class="fa-solid fa-map-pin"></i>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                         <div class="preset-list" id="preset-list"></div>
                         

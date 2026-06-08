@@ -27,6 +27,7 @@ let homeSelectionActive = false;
 let pendingHomeLatLng = null;
 let pendingHomeMarker = null;
 let homeRouteMarker = null;
+let routeSelectionTarget = null;
 
 const OFFICIAL_ROUTE_COLORS = {
     "Multi-Use Path": "#00e676",
@@ -305,39 +306,72 @@ function onMapClick(e) {
         return;
     }
 
+    if (routeSelectionTarget) {
+        setRoutePoint(routeSelectionTarget, latlng, { popup: routeSelectionTarget === "start" ? "Start Point" : "Destination" });
+        showToast(`${routeSelectionTarget === "start" ? "Start" : "Destination"} set from map.`);
+        routeSelectionTarget = null;
+        return;
+    }
+
     if (!startMarker) {
-        // Set Start marker
-        startMarker = L.marker(latlng, {
-            draggable: true,
-            icon: createCustomIcon("green")
-        }).addTo(map);
-        
-        startMarker.bindPopup("<strong>Start Point</strong><br>Drag to move").openPopup();
-        startMarker.on("dragend", calculateRoute);
+        setRoutePoint("start", latlng, { popup: "Start Point" });
         updatePlaygroundStartText("Custom Start");
         
     } else if (!endMarker) {
-        // Set Destination marker
-        endMarker = L.marker(latlng, {
-            draggable: true,
-            icon: createCustomIcon("red")
-        }).addTo(map);
-        
-        endMarker.bindPopup("<strong>Destination</strong><br>Drag to move").openPopup();
-        endMarker.on("dragend", calculateRoute);
-        
-        // Calculate route once both are set
-        calculateRoute();
+        setRoutePoint("end", latlng, { popup: "Destination" });
     } else {
         // Reset and set new start
         clearRoute();
-        startMarker = L.marker(latlng, {
-            draggable: true,
-            icon: createCustomIcon("green")
-        }).addTo(map);
-        startMarker.bindPopup("<strong>Start Point</strong>").openPopup();
-        startMarker.on("dragend", calculateRoute);
+        setRoutePoint("start", latlng, { popup: "Start Point" });
         updatePlaygroundStartText("Custom Start");
+    }
+}
+
+function formatCoordinateInput(latlng) {
+    return `${latlng.lat.toFixed(6)}, ${latlng.lng.toFixed(6)}`;
+}
+
+function parseCoordinateInput(value) {
+    const parts = String(value || "").split(",").map(part => part.trim());
+    if (parts.length !== 2) return null;
+    const lat = Number(parts[0]);
+    const lng = Number(parts[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return L.latLng(lat, lng);
+}
+
+function updateRouteInput(target, latlng) {
+    const input = document.getElementById(target === "start" ? "route-start-input" : "route-end-input");
+    if (input) input.value = formatCoordinateInput(latlng);
+}
+
+function setRoutePoint(target, latlngLike, options = {}) {
+    const latlng = L.latLng(latlngLike);
+    const isStart = target === "start";
+    const marker = L.marker(latlng, {
+        draggable: true,
+        icon: options.icon || createCustomIcon(isStart ? "green" : "red")
+    }).addTo(map);
+
+    const popupTitle = options.popup || (isStart ? "Start Point" : "Destination");
+    marker.bindPopup(`<strong>${popupTitle}</strong><br>Drag to move`).openPopup();
+    marker.on("dragend", () => {
+        updateRouteInput(target, marker.getLatLng());
+        calculateRoute();
+    });
+
+    if (isStart) {
+        if (startMarker) map.removeLayer(startMarker);
+        startMarker = marker;
+        updatePlaygroundStartText(options.startLabel || "Custom Start");
+    } else {
+        if (endMarker) map.removeLayer(endMarker);
+        endMarker = marker;
+    }
+
+    updateRouteInput(target, latlng);
+    if (startMarker && endMarker) {
+        calculateRoute();
     }
 }
 
@@ -480,31 +514,69 @@ function initEventListeners() {
     // Preset route selections
     const presets = document.querySelectorAll(".preset-item");
     const playgroundSelect = document.getElementById("playground-select");
-    const focusPlaygroundsBtn = document.getElementById("btn-focus-playgrounds");
-    const routeFromHomeBtn = document.getElementById("btn-route-from-home");
-    const routeSetPinBtn = document.getElementById("btn-route-set-pin");
+    const startInput = document.getElementById("route-start-input");
+    const endInput = document.getElementById("route-end-input");
+    const startCurrentBtn = document.getElementById("btn-start-current");
+    const startHomeBtn = document.getElementById("btn-start-home");
+    const startPinBtn = document.getElementById("btn-start-pin");
+    const endPlaygroundBtn = document.getElementById("btn-end-playground");
+    const endHomeBtn = document.getElementById("btn-end-home");
+    const endPinBtn = document.getElementById("btn-end-pin");
     const setHomeBtn = document.getElementById("btn-set-home");
     const deleteHomeBtn = document.getElementById("btn-delete-home");
     const cancelHomePinBtn = document.getElementById("btn-cancel-home-pin");
     const saveHomePinBtn = document.getElementById("btn-save-home-pin");
 
-    if (focusPlaygroundsBtn && playgroundSelect) {
-        focusPlaygroundsBtn.addEventListener("click", () => {
-            const section = document.getElementById("sec-presets");
-            if (section) section.open = true;
+    if (startInput) {
+        startInput.addEventListener("change", () => {
+            const latlng = parseCoordinateInput(startInput.value);
+            if (latlng) setRoutePoint("start", latlng, { popup: "Start Point" });
+        });
+    }
+
+    if (endInput) {
+        endInput.addEventListener("change", () => {
+            const latlng = parseCoordinateInput(endInput.value);
+            if (latlng) setRoutePoint("end", latlng, { popup: "Destination" });
+        });
+    }
+
+    if (startCurrentBtn) {
+        startCurrentBtn.addEventListener("click", async () => {
+            const coords = await getCurrentStartCoords();
+            if (!coords) return;
+            setRoutePoint("start", coords, { popup: "Start Point (Your Location)", startLabel: "Current Location" });
+        });
+    }
+
+    if (startHomeBtn) {
+        startHomeBtn.addEventListener("click", () => setHomeAsRoutePoint("start"));
+    }
+
+    if (startPinBtn) {
+        startPinBtn.addEventListener("click", () => {
+            routeSelectionTarget = "start";
+            stopHomeSelectionMode(false);
+            showToast("Click the map to set the start location.");
+        });
+    }
+
+    if (endPlaygroundBtn && playgroundSelect) {
+        endPlaygroundBtn.addEventListener("click", () => {
             playgroundSelect.focus();
             playgroundSelect.scrollIntoView({ behavior: "smooth", block: "center" });
         });
     }
 
-    if (routeFromHomeBtn) {
-        routeFromHomeBtn.addEventListener("click", routeFromHome);
+    if (endHomeBtn) {
+        endHomeBtn.addEventListener("click", () => setHomeAsRoutePoint("end"));
     }
 
-    if (routeSetPinBtn) {
-        routeSetPinBtn.addEventListener("click", () => {
+    if (endPinBtn) {
+        endPinBtn.addEventListener("click", () => {
+            routeSelectionTarget = "end";
             stopHomeSelectionMode(false);
-            showToast("Click the map to set a route start pin.");
+            showToast("Click the map to set the destination.");
         });
     }
 
@@ -961,6 +1033,10 @@ function clearRoute() {
         map.removeLayer(endMarker);
         endMarker = null;
     }
+    const startInput = document.getElementById("route-start-input");
+    const endInput = document.getElementById("route-end-input");
+    if (startInput) startInput.value = "";
+    if (endInput) endInput.value = "";
     clearPolylines();
     clearWaypoints();
     clearActiveCrossings();
@@ -1206,7 +1282,11 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
         icon: createCustomIcon("green")
     }).addTo(map);
     startMarker.bindPopup("<strong>Start Point</strong><br>Drag to move");
-    startMarker.on("dragend", calculateRoute);
+    startMarker.on("dragend", () => {
+        updateRouteInput("start", startMarker.getLatLng());
+        calculateRoute();
+    });
+    updateRouteInput("start", startLatLng);
 
     // Set Destination
     endMarker = L.marker(endLatLng, {
@@ -1214,7 +1294,11 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
         icon: createCustomIcon("red")
     }).addTo(map);
     endMarker.bindPopup("<strong>Destination</strong><br>Drag to move");
-    endMarker.on("dragend", calculateRoute);
+    endMarker.on("dragend", () => {
+        updateRouteInput("end", endMarker.getLatLng());
+        calculateRoute();
+    });
+    updateRouteInput("end", endLatLng);
 
     // Draw waypoints as small, semi-transparent circles
     waypoints.forEach((wp, index) => {
@@ -1567,7 +1651,11 @@ function autoLocateUser() {
                     }).addTo(map);
                     
                     startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
-                    startMarker.on("dragend", calculateRoute);
+                    startMarker.on("dragend", () => {
+                        updateRouteInput("start", startMarker.getLatLng());
+                        calculateRoute();
+                    });
+                    updateRouteInput("start", startMarker.getLatLng());
 
                     showUserGPSDot(lat, lon);
                     updatePlaygroundStartText("Current Location");
@@ -1634,7 +1722,11 @@ function requestLocation() {
                     }).addTo(map);
                     
                     startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
-                    startMarker.on("dragend", calculateRoute);
+                    startMarker.on("dragend", () => {
+                        updateRouteInput("start", startMarker.getLatLng());
+                        calculateRoute();
+                    });
+                    updateRouteInput("start", startMarker.getLatLng());
 
                     showUserGPSDot(lat, lon);
                     updatePlaygroundStartText("Current Location");
@@ -1745,7 +1837,11 @@ function onDemandLocate(isRetry = false) {
                     }).addTo(map);
                     
                     startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
-                    startMarker.on("dragend", calculateRoute);
+                    startMarker.on("dragend", () => {
+                        updateRouteInput("start", startMarker.getLatLng());
+                        calculateRoute();
+                    });
+                    updateRouteInput("start", startMarker.getLatLng());
 
                     showUserGPSDot(lat, lon);
                     updatePlaygroundStartText("Current Location");
@@ -2956,6 +3052,20 @@ async function getCurrentStartCoords() {
     return null;
 }
 
+function setHomeAsRoutePoint(target) {
+    if (!homeLocation) {
+        showToast(currentUser ? "Set your home location first." : "Log in and set your home location first.");
+        openHomeSettingsView();
+        return;
+    }
+    setRoutePoint(target, [homeLocation.lat, homeLocation.lng], {
+        popup: "Home",
+        icon: createCustomIcon("home"),
+        startLabel: target === "start" ? "Home" : undefined
+    });
+    showToast(target === "start" ? "Home set as start." : "Home set as destination.");
+}
+
 async function routeFromHome() {
     if (!homeLocation) {
         showToast(currentUser ? "Set your home location first." : "Log in and set your home location first.");
@@ -2966,11 +3076,8 @@ async function routeFromHome() {
     stopHomeSelectionMode(true);
     const startCoords = await getCurrentStartCoords();
     if (!startCoords) return;
-    await loadPresetRoute(startCoords, [homeLocation.lat, homeLocation.lng]);
-    if (endMarker) {
-        endMarker.setIcon(createCustomIcon("home"));
-        endMarker.bindPopup("<strong>Home</strong><br>Drag to adjust destination").openPopup();
-    }
+    setRoutePoint("start", startCoords, { popup: "Start Point (Your Location)", startLabel: "Current Location" });
+    setHomeAsRoutePoint("end");
     updatePlaygroundStartText("Current Location");
     showToast("Routing to home from your current location.");
 }

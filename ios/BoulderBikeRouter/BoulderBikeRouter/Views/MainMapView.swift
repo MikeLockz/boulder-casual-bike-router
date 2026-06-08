@@ -399,6 +399,16 @@ struct MainMapView: View {
                     }
 
                     Button(action: {
+                        if let home = viewModel.homeLocation {
+                            viewModel.setStartLocation(home.coordinate)
+                        }
+                    }) {
+                        Image(systemName: "house.fill")
+                            .foregroundColor(viewModel.homeLocation == nil ? .onSurfaceVariant : .primaryMint)
+                    }
+                    .disabled(viewModel.homeLocation == nil)
+
+                    Button(action: {
                         withAnimation {
                             mapSelectionMode = .start
                         }

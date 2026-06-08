@@ -1647,17 +1647,61 @@ input[type="range"]::-webkit-slider-thumb:hover {
     border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.route-planner-actions {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
+.route-planner-inputs {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
     margin: 10px 0 14px;
 }
 
-.route-planner-action {
-    height: 42px;
-    border: 1px solid rgba(100, 255, 218, 0.18);
+.route-planner-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 10px;
+    background: rgba(0, 0, 0, 0.18);
+}
+
+.route-point-dot {
+    font-size: 8px;
+}
+
+.route-point-dot.start {
+    color: #00e676;
+}
+
+.route-point-dot.end {
+    color: #ff1744;
+}
+
+.route-coordinate-input {
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13px;
+}
+
+.route-coordinate-input::placeholder {
+    color: var(--text-secondary);
+}
+
+.route-planner-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 34px);
+    gap: 6px;
+}
+
+.route-planner-action {
+    width: 34px;
+    height: 34px;
+    border: 1px solid rgba(100, 255, 218, 0.18);
+    border-radius: 8px;
     background: rgba(255, 255, 255, 0.035);
     color: var(--text-secondary);
     cursor: pointer;
