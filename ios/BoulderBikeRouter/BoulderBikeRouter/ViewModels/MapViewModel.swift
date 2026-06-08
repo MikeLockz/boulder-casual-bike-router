@@ -17,6 +17,13 @@ class MapViewModel {
     var isSavingHomeLocation: Bool = false
     var isSelectingHomeLocation: Bool = false
     var pendingHomeCoordinate: CLLocationCoordinate2D?
+    var startPlaceSuggestions: [PlaceSuggestion] = []
+    var endPlaceSuggestions: [PlaceSuggestion] = []
+    var startPlaceSearchCompleted: Bool = false
+    var endPlaceSearchCompleted: Bool = false
+    var startPlaceSearchQuery: String = ""
+    var endPlaceSearchQuery: String = ""
+    var placeAutocompleteError: String?
 
     // Map markers and route state
     var startLocation: CLLocationCoordinate2D?
@@ -94,6 +101,16 @@ class MapViewModel {
 
     // Services
     private let apiService = APIService()
+
+    private func parseCoordinateText(_ text: String) -> CLLocationCoordinate2D? {
+        let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if parts.count == 2,
+           let lat = Double(parts[0]),
+           let lon = Double(parts[1]) {
+            return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+        return nil
+    }
 
     init() {
         // Populate local fallback configurations so the app works offline
@@ -214,6 +231,60 @@ class MapViewModel {
         Task {
             await fetchRoute()
         }
+    }
+
+    func searchPlaces(query: String, target: String) async {
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count >= 2, parseCoordinateText(normalized) == nil else {
+            await MainActor.run {
+                self.clearPlaceSuggestions(target: target)
+            }
+            return
+        }
+
+        do {
+            let suggestions = try await apiService.fetchPlaceSuggestions(query: normalized)
+            await MainActor.run {
+                if target == "start" {
+                    self.startPlaceSuggestions = suggestions
+                    self.startPlaceSearchCompleted = true
+                    self.startPlaceSearchQuery = normalized
+                } else {
+                    self.endPlaceSuggestions = suggestions
+                    self.endPlaceSearchCompleted = true
+                    self.endPlaceSearchQuery = normalized
+                }
+                self.placeAutocompleteError = nil
+            }
+        } catch {
+            await MainActor.run {
+                self.clearPlaceSuggestions(target: target)
+                self.placeAutocompleteError = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    func clearPlaceSuggestions(target: String) {
+        if target == "start" {
+            startPlaceSuggestions = []
+            startPlaceSearchCompleted = false
+            startPlaceSearchQuery = ""
+        } else {
+            endPlaceSuggestions = []
+            endPlaceSearchCompleted = false
+            endPlaceSearchQuery = ""
+        }
+    }
+
+    @MainActor
+    func selectPlaceSuggestion(_ suggestion: PlaceSuggestion, target: String) {
+        if target == "start" {
+            setStartLocation(suggestion.coordinate)
+        } else {
+            setEndLocation(suggestion.coordinate)
+        }
+        clearPlaceSuggestions(target: target)
     }
 
     func routeToHome(from currentCoordinate: CLLocationCoordinate2D?) {

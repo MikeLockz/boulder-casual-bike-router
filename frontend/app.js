@@ -29,6 +29,8 @@ let pendingHomeLatLng = null;
 let pendingHomeMarker = null;
 let homeRouteMarker = null;
 let routeSelectionTarget = null;
+let autocompleteTimers = {};
+let autocompleteAbortControllers = {};
 
 const OFFICIAL_ROUTE_COLORS = {
     "Multi-Use Path": "#00e676",
@@ -378,6 +380,97 @@ function updateRouteInput(target, latlng) {
     if (input) input.value = formatCoordinateInput(latlng);
 }
 
+function updateRouteInputValue(target, value) {
+    const input = document.getElementById(target === "start" ? "route-start-input" : "route-end-input");
+    if (input) input.value = value;
+}
+
+function hideAutocompleteSuggestions(target) {
+    const suggestions = document.getElementById(target === "start" ? "route-start-suggestions" : "route-end-suggestions");
+    if (!suggestions) return;
+    suggestions.innerHTML = "";
+    suggestions.classList.add("hidden");
+}
+
+function renderAutocompleteSuggestions(target, places, query = "") {
+    const suggestions = document.getElementById(target === "start" ? "route-start-suggestions" : "route-end-suggestions");
+    if (!suggestions) return;
+
+    suggestions.innerHTML = "";
+    if (!places.length) {
+        const empty = document.createElement("div");
+        empty.className = "route-place-empty";
+        empty.setAttribute("role", "status");
+        empty.textContent = query ? `0 results found for "${query}"` : "0 results found";
+        suggestions.appendChild(empty);
+        suggestions.classList.remove("hidden");
+        return;
+    }
+
+    places.forEach(place => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "route-place-suggestion";
+        button.setAttribute("role", "option");
+        const name = document.createElement("span");
+        name.className = "route-place-name";
+        name.textContent = place.name;
+        const meta = document.createElement("span");
+        meta.className = "route-place-meta";
+        meta.textContent = place.type || "place";
+        button.append(name, meta);
+        button.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            setRoutePoint(target, [Number(place.lat), Number(place.lng)], {
+                popup: place.name,
+                label: place.name
+            });
+            hideAutocompleteSuggestions(target);
+        });
+        suggestions.appendChild(button);
+    });
+
+    suggestions.classList.remove("hidden");
+}
+
+async function fetchAutocompleteSuggestions(target, query) {
+    if (autocompleteAbortControllers[target]) {
+        autocompleteAbortControllers[target].abort();
+    }
+    const controller = new AbortController();
+    autocompleteAbortControllers[target] = controller;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/autocomplete?q=${encodeURIComponent(query)}&limit=8`, {
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            hideAutocompleteSuggestions(target);
+            return;
+        }
+        const places = await response.json();
+        renderAutocompleteSuggestions(target, Array.isArray(places) ? places : [], query);
+    } catch (error) {
+        if (error.name !== "AbortError") {
+            console.warn("[Autocomplete] Failed to fetch suggestions:", error);
+        }
+    }
+}
+
+function handleAutocompleteInput(target, value) {
+    clearTimeout(autocompleteTimers[target]);
+
+    const query = String(value || "").trim();
+    if (query.length < 2 || parseCoordinateInput(query)) {
+        hideAutocompleteSuggestions(target);
+        return;
+    }
+
+    autocompleteTimers[target] = setTimeout(() => {
+        fetchAutocompleteSuggestions(target, query);
+    }, 220);
+}
+
 function setRoutePoint(target, latlngLike, options = {}) {
     const latlng = L.latLng(latlngLike);
     const isStart = target === "start";
@@ -402,7 +495,7 @@ function setRoutePoint(target, latlngLike, options = {}) {
         endMarker = marker;
     }
 
-    updateRouteInput(target, latlng);
+    updateRouteInputValue(target, options.label || formatCoordinateInput(latlng));
     if (startMarker && endMarker) {
         calculateRoute();
     }
@@ -561,6 +654,12 @@ function initEventListeners() {
     const saveHomePinBtn = document.getElementById("btn-save-home-pin");
 
     if (startInput) {
+        startInput.addEventListener("input", () => {
+            handleAutocompleteInput("start", startInput.value);
+        });
+        startInput.addEventListener("blur", () => {
+            setTimeout(() => hideAutocompleteSuggestions("start"), 120);
+        });
         startInput.addEventListener("change", () => {
             const latlng = parseCoordinateInput(startInput.value);
             if (latlng) setRoutePoint("start", latlng, { popup: "Start Point" });
@@ -568,6 +667,12 @@ function initEventListeners() {
     }
 
     if (endInput) {
+        endInput.addEventListener("input", () => {
+            handleAutocompleteInput("end", endInput.value);
+        });
+        endInput.addEventListener("blur", () => {
+            setTimeout(() => hideAutocompleteSuggestions("end"), 120);
+        });
         endInput.addEventListener("change", () => {
             const latlng = parseCoordinateInput(endInput.value);
             if (latlng) setRoutePoint("end", latlng, { popup: "Destination" });
@@ -1071,6 +1176,8 @@ function clearRoute() {
     const endInput = document.getElementById("route-end-input");
     if (startInput) startInput.value = "";
     if (endInput) endInput.value = "";
+    hideAutocompleteSuggestions("start");
+    hideAutocompleteSuggestions("end");
     clearPolylines();
     clearWaypoints();
     clearActiveCrossings();

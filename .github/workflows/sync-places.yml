@@ -1,0 +1,138 @@
+name: Sync Boulder Places
+
+on:
+  workflow_dispatch:
+    inputs:
+      pb_url:
+        description: "PocketBase URL reachable from the production host"
+        required: true
+        default: "http://127.0.0.1:8090"
+      restart_pocketbase:
+        description: "Restart PocketBase first so new migrations are applied"
+        required: true
+        type: boolean
+        default: true
+      refresh_place_cache:
+        description: "Fetch fresh place-focused OSM data before syncing"
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  sync-places:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:deploy
+
+      - name: SSH into NUC and sync places
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          PB_URL: ${{ inputs.pb_url }}
+          RESTART_POCKETBASE: ${{ inputs.restart_pocketbase }}
+          REFRESH_PLACE_CACHE: ${{ inputs.refresh_place_cache }}
+        with:
+          host: 100.127.44.82
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: PB_URL,RESTART_POCKETBASE,REFRESH_PLACE_CACHE
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            PROJECT_DIR="/opt/boulder-casual-bike-router"
+            DOCKER_DIR="/root/lockdev-home"
+            PB_SYNC_EMAIL="places-sync@boulder.lockdev.com"
+            PB_SYNC_CREATED=0
+
+            cleanup_sync_superuser() {
+              if [ "${PB_SYNC_CREATED:-0}" = "1" ]; then
+                cd "$DOCKER_DIR"
+                docker compose exec -T pocketbase \
+                  /usr/local/bin/pocketbase superuser delete \
+                  "$PB_SYNC_EMAIL" --dir /pb_data >/dev/null 2>&1 || true
+              fi
+            }
+            trap cleanup_sync_superuser EXIT
+
+            echo "Fetching latest production source..."
+            cd "$PROJECT_DIR"
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "Preparing Python environment..."
+            cd "$PROJECT_DIR"
+            if [ ! -x .places-sync-venv/bin/python ]; then
+              python3 -m venv .places-sync-venv
+            fi
+            .places-sync-venv/bin/python -m pip install --quiet --upgrade pip
+            .places-sync-venv/bin/python -m pip install --quiet requests
+
+            if [ "$RESTART_POCKETBASE" = "true" ]; then
+              echo "Restarting PocketBase to apply migrations..."
+              cd "$DOCKER_DIR"
+              docker compose restart pocketbase
+              cd "$PROJECT_DIR"
+            fi
+
+            echo "Waiting for PocketBase health..."
+            for attempt in $(seq 1 30); do
+              if .places-sync-venv/bin/python - "$PB_URL" <<'PY'
+            import sys
+            import urllib.request
+
+            url = sys.argv[1].rstrip("/") + "/api/health"
+            try:
+                with urllib.request.urlopen(url, timeout=2) as response:
+                    raise SystemExit(0 if 200 <= response.status < 300 else 1)
+            except Exception:
+                raise SystemExit(1)
+            PY
+              then
+                break
+              fi
+              if [ "$attempt" = "30" ]; then
+                echo "PocketBase did not become healthy at $PB_URL"
+                exit 1
+              fi
+              sleep 2
+            done
+
+            echo "Creating one-run PocketBase sync credential..."
+            POCKETBASE_ADMIN_EMAIL="$PB_SYNC_EMAIL"
+            POCKETBASE_ADMIN_PASSWORD="$(
+              .places-sync-venv/bin/python - <<'PY'
+            import secrets
+            print(secrets.token_urlsafe(36))
+            PY
+            )"
+            cd "$DOCKER_DIR"
+            docker compose exec -T pocketbase \
+              /usr/local/bin/pocketbase superuser upsert \
+              "$POCKETBASE_ADMIN_EMAIL" "$POCKETBASE_ADMIN_PASSWORD" \
+              --dir /pb_data >/dev/null
+            PB_SYNC_CREATED=1
+            cd "$PROJECT_DIR"
+
+            REFRESH_ARGS=""
+            if [ "$REFRESH_PLACE_CACHE" = "true" ]; then
+              REFRESH_ARGS="--refresh-place-cache"
+            fi
+
+            echo "Syncing places from dedicated open-data place sources..."
+            POCKETBASE_URL="$PB_URL" \
+            POCKETBASE_ADMIN_EMAIL="$POCKETBASE_ADMIN_EMAIL" \
+            POCKETBASE_ADMIN_PASSWORD="$POCKETBASE_ADMIN_PASSWORD" \
+              .places-sync-venv/bin/python tools/sync_places.py \
+                --pb-url "$PB_URL" \
+                --place-cache-file backend/boulder_place_osm_data.json \
+                $REFRESH_ARGS \
+                --playground-cache-file backend/boulder_playground_data.json \
+                --replace-generated
+
+            echo "Places sync complete."

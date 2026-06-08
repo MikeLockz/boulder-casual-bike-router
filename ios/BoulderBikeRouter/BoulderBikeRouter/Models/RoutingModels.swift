@@ -156,6 +156,20 @@ struct BackendConfig: Codable {
     let weights: [WeightConfig]
 }
 
+/// Search result returned by `/api/autocomplete`.
+struct PlaceSuggestion: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let type: String
+    let lat: Double
+    let lng: Double
+    let source: String?
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lng)
+    }
+}
+
 /// User-managed routing weights and offsets profile.
 struct RouteTuningProfile: Codable, Identifiable, Hashable {
     let id: String

@@ -122,6 +122,48 @@ class APIService {
         }
     }
 
+    /// Fetch place autocomplete suggestions for route planning.
+    func fetchPlaceSuggestions(query: String, limit: Int = 8) async throws -> [PlaceSuggestion] {
+        guard let baseURL = URL(string: baseURLLabel),
+              let autocompleteURL = URL(string: "/api/autocomplete", relativeTo: baseURL),
+              var components = URLComponents(url: autocompleteURL, resolvingAgainstBaseURL: true) else {
+            throw APIError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "GET"
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode([PlaceSuggestion].self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
     /// Fetch the full dynamic app configurations (presets, sliders meta)
     func fetchConfig() async throws -> BackendConfig {
         guard let baseURL = URL(string: baseURLLabel),

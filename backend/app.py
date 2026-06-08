@@ -3,6 +3,8 @@ import json
 import math
 import sys
 import datetime
+import re
+import difflib
 
 try:
     import requests
@@ -1819,6 +1821,196 @@ def clamp_number(value, minimum, maximum):
     except (TypeError, ValueError):
         return None
     return max(minimum, min(maximum, numeric))
+
+def normalize_place_query(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def escape_pocketbase_filter_value(value):
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+def place_record_to_api(record):
+    return {
+        "id": record.get("id"),
+        "name": record.get("name") or "",
+        "type": record.get("type") or "place",
+        "lat": record.get("lat"),
+        "lng": record.get("lng"),
+        "source": record.get("source") or "osm"
+    }
+
+PLACE_TYPE_PRIORITY = {
+    "playground": 5,
+    "park": 8,
+    "pedestrian": 10,
+    "trailhead": 12,
+    "path": 14,
+    "cycleway": 16,
+    "footway": 18,
+    "bus_stop": 25,
+    "restaurant": 30,
+    "cafe": 30,
+    "library": 30,
+    "school": 35,
+    "university": 35,
+    "peak": 40,
+    "secondary": 70,
+    "tertiary": 75,
+    "residential": 80,
+    "unclassified": 82,
+    "service": 90,
+    "proposed": 95,
+}
+
+def place_type_priority(place_type):
+    return PLACE_TYPE_PRIORITY.get(str(place_type or "").lower(), 60)
+
+def place_match_score(record, query):
+    name = normalize_place_query(record.get("name", ""))
+    score = 0
+    if record.get("_fuzzy_score") is not None:
+        score -= float(record.get("_fuzzy_score") or 0) * 75
+    if name == query:
+        score -= 100
+    elif name.startswith(query):
+        score -= 50
+    elif f" {query}" in name:
+        score -= 25
+    score += place_type_priority(record.get("type"))
+    score += min(len(name), 80) / 100.0
+    return score
+
+def aggregate_place_records(records, query, limit):
+    grouped = {}
+    for record in records:
+        name = str(record.get("name") or "").strip()
+        lat = record.get("lat")
+        lng = record.get("lng")
+        if not name or lat is None or lng is None:
+            continue
+        try:
+            lat = float(lat)
+            lng = float(lng)
+        except (TypeError, ValueError):
+            continue
+
+        key = normalize_place_query(name)
+        existing = grouped.get(key)
+        score = place_match_score(record, query)
+        if not existing:
+            grouped[key] = {
+                "id": record.get("id"),
+                "name": name,
+                "type": record.get("type") or "place",
+                "lat_total": lat,
+                "lng_total": lng,
+                "count": 1,
+                "source": record.get("source") or "osm",
+                "score": score,
+            }
+            continue
+
+        existing["lat_total"] += lat
+        existing["lng_total"] += lng
+        existing["count"] += 1
+        if score < existing["score"]:
+            existing["id"] = record.get("id")
+            existing["type"] = record.get("type") or existing["type"]
+            existing["source"] = record.get("source") or existing["source"]
+            existing["score"] = score
+
+    results = []
+    for item in grouped.values():
+        count = item["count"]
+        results.append({
+            "id": item["id"],
+            "name": item["name"],
+            "type": item["type"],
+            "lat": item["lat_total"] / count,
+            "lng": item["lng_total"] / count,
+            "source": item["source"],
+            "match_count": count,
+        })
+
+    results.sort(key=lambda item: (
+        place_match_score(item, query),
+        normalize_place_query(item.get("name", ""))
+    ))
+    return results[:limit]
+
+def fuzzy_place_score(query, search_name):
+    query = normalize_place_query(query)
+    search_name = normalize_place_query(search_name)
+    if not query or not search_name:
+        return 0.0
+    name_parts = [search_name]
+    name_parts.extend(part for part in re.split(r"[^a-z0-9]+", search_name) if part)
+    return max(difflib.SequenceMatcher(None, query, part).ratio() for part in name_parts)
+
+def fetch_fuzzy_place_candidates(pb_url, query):
+    candidates = []
+    page = 1
+    per_page = 500
+    while page <= 20:
+        resp = requests.get(
+            f"{pb_url}/api/collections/places/records",
+            params={
+                "page": page,
+                "perPage": per_page,
+                "sort": "search_name",
+            },
+            timeout=8
+        )
+        if resp.status_code != 200:
+            return [], resp
+        data = resp.json()
+        for record in data.get("items", []):
+            score = fuzzy_place_score(query, record.get("search_name") or record.get("name") or "")
+            if score >= 0.72:
+                candidates.append({**record, "_fuzzy_score": score})
+        if page >= int(data.get("totalPages") or 1):
+            break
+        page += 1
+
+    candidates.sort(key=lambda record: (
+        -float(record.get("_fuzzy_score", 0)),
+        place_type_priority(record.get("type")),
+        normalize_place_query(record.get("name", ""))
+    ))
+    return candidates[:250], None
+
+@app.route("/api/autocomplete", methods=["GET"])
+def autocomplete_places():
+    query = normalize_place_query(request.args.get("q", ""))
+    if len(query) < 2:
+        return jsonify([])
+
+    limit = clamp_number(request.args.get("limit", 10), 1, 25) or 10
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    escaped_query = escape_pocketbase_filter_value(query)
+
+    try:
+        resp = requests.get(
+            f"{pb_url}/api/collections/places/records",
+            params={
+                "filter": f'search_name ~ "{escaped_query}"',
+                "sort": "search_name",
+                "perPage": max(int(limit) * 30, 100),
+            },
+            timeout=5
+        )
+        if resp.status_code == 404:
+            return jsonify({"error": "Places collection has not been migrated yet."}), 503
+        if resp.status_code != 200:
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+
+        records = resp.json().get("items", [])
+        if not records:
+            records, fuzzy_resp = fetch_fuzzy_place_candidates(pb_url, query)
+            if fuzzy_resp is not None:
+                return jsonify({"error": f"PocketBase returned {fuzzy_resp.status_code}: {fuzzy_resp.text}"}), fuzzy_resp.status_code
+        return jsonify(aggregate_place_records(records, query, int(limit))), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch autocomplete places: {e}"}), 500
 
 def sanitize_route_tuning_payload(data, partial=False):
     """Validate and normalize route tuning profile payloads."""

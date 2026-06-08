@@ -26,6 +26,8 @@ struct MainMapView: View {
     @State private var mapSelectionMode: MapSelectionTarget? = nil
     @State private var startLocationText: String = ""
     @State private var endLocationText: String = ""
+    @State private var startAutocompleteTask: Task<Void, Never>? = nil
+    @State private var endAutocompleteTask: Task<Void, Never>? = nil
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -412,6 +414,9 @@ struct MainMapView: View {
                             viewModel.setStartLocation(coord)
                         }
                     })
+                    .onChange(of: startLocationText) { _, newValue in
+                        schedulePlaceAutocomplete(target: "start", query: newValue)
+                    }
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 14))
                     .foregroundColor(.onSurface)
@@ -451,6 +456,13 @@ struct MainMapView: View {
                 .background(Color.forestDeep.opacity(0.5))
                 .cornerRadius(8)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+
+                placeSuggestionList(
+                    viewModel.startPlaceSuggestions,
+                    target: "start",
+                    searchCompleted: viewModel.startPlaceSearchCompleted,
+                    query: viewModel.startPlaceSearchQuery
+                )
                 
                 // End Location Input Row
                 HStack(spacing: 10) {
@@ -463,6 +475,9 @@ struct MainMapView: View {
                             viewModel.setEndLocation(coord)
                         }
                     })
+                    .onChange(of: endLocationText) { _, newValue in
+                        schedulePlaceAutocomplete(target: "end", query: newValue)
+                    }
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 14))
                     .foregroundColor(.onSurface)
@@ -502,6 +517,13 @@ struct MainMapView: View {
                 .background(Color.forestDeep.opacity(0.5))
                 .cornerRadius(8)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+
+                placeSuggestionList(
+                    viewModel.endPlaceSuggestions,
+                    target: "end",
+                    searchCompleted: viewModel.endPlaceSearchCompleted,
+                    query: viewModel.endPlaceSearchQuery
+                )
             }
         }
         .padding(16)
@@ -510,6 +532,84 @@ struct MainMapView: View {
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
         .padding(.horizontal, 16)
         .padding(.top, 50)
+    }
+
+    @ViewBuilder
+    private func placeSuggestionList(_ suggestions: [PlaceSuggestion], target: String, searchCompleted: Bool, query: String) -> some View {
+        if !suggestions.isEmpty || searchCompleted {
+            VStack(spacing: 0) {
+                if suggestions.isEmpty {
+                    Text(query.isEmpty ? "0 results found" : "0 results found for \"\(query)\"")
+                        .font(.system(size: 13))
+                        .foregroundColor(.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                } else {
+                    ForEach(suggestions) { suggestion in
+                        Button(action: {
+                            viewModel.selectPlaceSuggestion(suggestion, target: target)
+                        }) {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(suggestion.name)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(.onSurface)
+                                        .lineLimit(1)
+
+                                    Text(suggestion.type)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.onSurfaceVariant)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "mappin.circle")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.primaryMint)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                        }
+                        .buttonStyle(.plain)
+
+                        if suggestion.id != suggestions.last?.id {
+                            Divider()
+                                .background(Color.onSurfaceVariant.opacity(0.15))
+                        }
+                    }
+                }
+            }
+            .background(Color.forestDeep.opacity(0.92))
+            .cornerRadius(8)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primaryMint.opacity(0.16), lineWidth: 1))
+        }
+    }
+
+    private func schedulePlaceAutocomplete(target: String, query: String) {
+        if parseCoordinate(from: query) != nil {
+            Task { @MainActor in
+                viewModel.clearPlaceSuggestions(target: target)
+            }
+            return
+        }
+
+        if target == "start" {
+            startAutocompleteTask?.cancel()
+            startAutocompleteTask = Task {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+                await viewModel.searchPlaces(query: query, target: target)
+            }
+        } else {
+            endAutocompleteTask?.cancel()
+            endAutocompleteTask = Task {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+                await viewModel.searchPlaces(query: query, target: target)
+            }
+        }
     }
     
     private func historySelectionBanner(_ route: PastRoute) -> some View {
