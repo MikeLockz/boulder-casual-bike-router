@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RoutesTabView: View {
     @Bindable var viewModel: MapViewModel
+    let onShowPlan: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,6 +34,9 @@ struct RoutesTabView: View {
                             Button(action: {
                                 withAnimation(.spring()) {
                                     viewModel.selectPreset(preset)
+                                    if preset.routeType == "b180" || preset.routeType == "b360" {
+                                        onShowPlan()
+                                    }
                                 }
                             }) {
                                 HStack(spacing: 16) {
@@ -45,7 +49,7 @@ struct RoutesTabView: View {
                                                     .stroke(viewModel.selectedPresetName == preset.name ? Color.primaryMint.opacity(0.5) : Color.onSurfaceVariant.opacity(0.1), lineWidth: 1)
                                             )
                                         
-                                        Image(systemName: preset.routeType != nil ? "arrow.triangle.2.circlepath" : "map.fill")
+                                        Image(systemName: preset.routeType == "playgrounds" ? "figure.play" : preset.routeType != nil ? "arrow.triangle.2.circlepath" : "map.fill")
                                             .foregroundColor(viewModel.selectedPresetName == preset.name ? .primaryMint : .onSurfaceVariant)
                                     }
                                     

@@ -20,7 +20,9 @@ struct MainTabView: View {
                         case 0:
                             MainMapView(viewModel: viewModel, isDrawerOpen: $isDrawerOpen)
                         case 1:
-                            RoutesTabView(viewModel: viewModel)
+                            RoutesTabView(viewModel: viewModel) {
+                                selectedTab = 0
+                            }
                         case 2:
                             HistoryTabView(pastRoutes: viewModel.pastRoutes, routeToPresent: $historyRouteToPresent)
                         case 3:

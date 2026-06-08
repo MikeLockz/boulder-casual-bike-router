@@ -199,39 +199,15 @@ migrate((app) => {
 
   const routePresets = [
     {
-      "name": "North Boulder ➔ Iris Ave",
-      "desc": "Cedar Ave to 28th St & Iris",
-      "start": [40.028446, -105.281088],
-      "end": [40.038662, -105.263851],
+      "name": "Park Playgrounds",
+      "desc": "Choose a playground destination from your current location",
+      "start": [],
+      "end": [],
       "waypoints": [],
-      "route_type": null
+      "route_type": "playgrounds"
     },
     {
-      "name": "CU Campus ➔ North Park",
-      "desc": "Broadway Path & residential streets",
-      "start": [40.007, -105.263],
-      "end": [40.028, -105.283],
-      "waypoints": [],
-      "route_type": null
-    },
-    {
-      "name": "Valmont Park ➔ Pearl Street Mall",
-      "desc": "Using off-street multi-use paths",
-      "start": [40.030, -105.234],
-      "end": [40.018, -105.279],
-      "waypoints": [],
-      "route_type": null
-    },
-    {
-      "name": "Table Mesa ➔ CU Campus",
-      "desc": "Safe commuting corridors",
-      "start": [39.986, -105.262],
-      "end": [40.007, -105.263],
-      "waypoints": [],
-      "route_type": null
-    },
-    {
-      "name": "Boulder B-180 Loop",
+      "name": "Boulder Loops B-180",
       "desc": "12 mi scenic loop (Valmont Park)",
       "start": [40.030, -105.234],
       "end": [40.030, -105.234],
@@ -248,7 +224,7 @@ migrate((app) => {
       "route_type": "b180"
     },
     {
-      "name": "Boulder B-360 Loop",
+      "name": "Boulder Loops B-360",
       "desc": "24 mi grand loop (Valmont Park)",
       "start": [40.030, -105.234],
       "end": [40.030, -105.234],

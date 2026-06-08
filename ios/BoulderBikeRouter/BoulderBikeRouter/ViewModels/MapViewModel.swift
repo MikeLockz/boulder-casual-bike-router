@@ -176,6 +176,7 @@ class MapViewModel {
         } catch {
             print("Failed to load configurations from API backend. Using local fallbacks. Error: \(error.localizedDescription)")
             await MainActor.run {
+                self.loadLocalFallbacks()
                 self.isConfigLoaded = true // proceed with fallbacks
             }
         }
@@ -183,6 +184,15 @@ class MapViewModel {
 
     func selectPreset(_ preset: PresetConfig) {
         selectedPresetName = preset.name
+
+        if preset.routeType == "playgrounds" {
+            selectedPlayground = nil
+            routeResponse = nil
+            routingError = nil
+            isWeightsLocked = false
+            return
+        }
+
         startLocation = preset.startCoordinate
         endLocation = preset.endCoordinate
         waypoints = preset.waypointCoordinates
@@ -588,6 +598,23 @@ class MapViewModel {
             self.isLoadingRoute = true
             self.routingError = nil
         }
+
+        if let routeType = presets.first(where: { $0.name == selectedPresetName })?.routeType,
+           routeType == "b180" || routeType == "b360" {
+            do {
+                let response = try await apiService.fetchOfficialLoopRoute(routeType: routeType)
+                await MainActor.run {
+                    self.routeResponse = response
+                    self.isLoadingRoute = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.routingError = error.localizedDescription
+                    self.isLoadingRoute = false
+                }
+            }
+            return
+        }
         
         // Build waypoints coordinate array
         let wpsArray = waypoints.map { [$0.latitude, $0.longitude] }
@@ -619,9 +646,9 @@ class MapViewModel {
     private func loadLocalFallbacks() {
         // Fallbacks matching the initial preset items if backend is unreachable on first run
         self.presets = [
-            PresetConfig(name: "North Boulder ➔ Iris Ave", desc: "Cedar Ave to 28th St & Iris", start: [40.028446, -105.281088], end: [40.038662, -105.263851], waypoints: [], routeType: nil),
-            PresetConfig(name: "CU Campus ➔ North Park", desc: "Broadway Path & residential streets", start: [40.007, -105.263], end: [40.028, -105.283], waypoints: [], routeType: nil),
-            PresetConfig(name: "Valmont Park ➔ Pearl Street Mall", desc: "Using off-street multi-use paths", start: [40.030, -105.234], end: [40.018, -105.279], waypoints: [], routeType: nil)
+            PresetConfig(name: "Park Playgrounds", desc: "Choose a playground destination from your current location", start: [], end: [], waypoints: [], routeType: "playgrounds"),
+            PresetConfig(name: "Boulder Loops B-180", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], routeType: "b180"),
+            PresetConfig(name: "Boulder Loops B-360", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], routeType: "b360")
         ]
         
         self.weightsMetadata = [

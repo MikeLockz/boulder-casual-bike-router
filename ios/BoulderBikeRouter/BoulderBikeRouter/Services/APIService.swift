@@ -22,6 +22,19 @@ enum APIError: Error, LocalizedError {
     }
 }
 
+private struct OfficialLoopFeatureCollection: Decodable {
+    let features: [OfficialLoopFeature]
+}
+
+private struct OfficialLoopFeature: Decodable {
+    let geometry: OfficialLoopGeometry
+}
+
+private struct OfficialLoopGeometry: Decodable {
+    let type: String
+    let coordinates: [[[Double]]]
+}
+
 /// Service that manages connection to the Biking Boulder backend service.
 class APIService {
     private var baseURLLabel: String = {
@@ -87,6 +100,85 @@ class APIService {
         } catch {
             throw APIError.decodingError(error)
         }
+    }
+
+    /// Fetch an official Boulder loop GeoJSON and convert it into the app's route response shape.
+    func fetchOfficialLoopRoute(routeType: String) async throws -> RouteResponse {
+        guard routeType == "b180" || routeType == "b360",
+              let baseURL = URL(string: baseURLLabel),
+              let routeURL = URL(string: "/official_\(routeType).json", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: routeURL)
+        urlRequest.httpMethod = "GET"
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            let geojson = try JSONDecoder().decode(OfficialLoopFeatureCollection.self, from: data)
+            return makeOfficialLoopRouteResponse(from: geojson, routeType: routeType)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    private func makeOfficialLoopRouteResponse(from geojson: OfficialLoopFeatureCollection, routeType: String) -> RouteResponse {
+        let name = routeType == "b180" ? "Boulder Loops B-180" : "Boulder Loops B-360"
+        var segments: [RouteSegment] = []
+        var totalLength = 0.0
+
+        for feature in geojson.features {
+            let lines: [[[Double]]]
+            if feature.geometry.type == "MultiLineString" {
+                lines = feature.geometry.coordinates
+            } else if feature.geometry.type == "LineString" {
+                lines = [feature.geometry.coordinates.flatMap { $0 }]
+            } else {
+                lines = []
+            }
+
+            for line in lines {
+                guard line.count >= 2 else { continue }
+                for index in 0..<(line.count - 1) {
+                    let from = line[index]
+                    let to = line[index + 1]
+                    guard from.count >= 2, to.count >= 2 else { continue }
+
+                    let fromLocation = CLLocation(latitude: from[1], longitude: from[0])
+                    let toLocation = CLLocation(latitude: to[1], longitude: to[0])
+                    let length = fromLocation.distance(from: toLocation)
+                    totalLength += length
+
+                    segments.append(RouteSegment(
+                        coords: [[from[1], from[0]], [to[1], to[0]]],
+                        type: "separated_path",
+                        name: name,
+                        length: length,
+                        multiplier: 1.0,
+                        bikestress: "None",
+                        offstreetType: "official_loop",
+                        bicyclesAllowed: "Yes",
+                        ebikeAllowed: "Yes"
+                    ))
+                }
+            }
+        }
+
+        return RouteResponse(segments: segments, totalLengthMeters: totalLength, totalWeight: totalLength, error: nil)
     }
 
     /// Fetch the list of playgrounds with location data

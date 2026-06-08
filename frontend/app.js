@@ -188,8 +188,13 @@ async function loadBackendConfig() {
                     btn.setAttribute("data-route-type", p.route_type);
                 }
 
+                const icon = p.route_type === "playgrounds"
+                    ? '<i class="fa-solid fa-child-reaching"></i> '
+                    : p.route_type
+                        ? '<i class="fa-solid fa-arrows-spin"></i> '
+                        : '';
                 btn.innerHTML = `
-                    <span class="preset-name">${p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : ''}${p.name}</span>
+                    <span class="preset-name">${icon}${p.name}</span>
                     <span class="preset-desc">${p.desc}</span>
                 `;
                 presetList.appendChild(btn);
@@ -253,12 +258,9 @@ function fallbackLocalRendering() {
     const presetList = document.getElementById("preset-list");
     if (presetList) {
         const presets = [
-            { name: "North Boulder ➔ Iris Ave", desc: "Cedar Ave to 28th St & Iris", start: [40.028446, -105.281088], end: [40.038662, -105.263851], waypoints: [], route_type: null },
-            { name: "CU Campus ➔ North Park", desc: "Broadway Path & residential streets", start: [40.007, -105.263], end: [40.028, -105.283], waypoints: [], route_type: null },
-            { name: "Valmont Park ➔ Pearl Street Mall", desc: "Using off-street paths", start: [40.030, -105.234], end: [40.018, -105.279], waypoints: [], route_type: null },
-            { name: "Table Mesa ➔ CU Campus", desc: "Safe commuting corridors", start: [39.986, -105.262], end: [40.007, -105.263], waypoints: [], route_type: null },
-            { name: "Boulder B-180 Loop", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], route_type: "b180" },
-            { name: "Boulder B-360 Loop", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], route_type: "b360" }
+            { name: "Park Playgrounds", desc: "Choose a playground destination from your current location", start: [], end: [], waypoints: [], route_type: "playgrounds" },
+            { name: "Boulder Loops B-180", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], route_type: "b180" },
+            { name: "Boulder Loops B-360", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], route_type: "b360" }
         ];
         presetList.innerHTML = "";
         presets.forEach(p => {
@@ -269,7 +271,7 @@ function fallbackLocalRendering() {
             if (p.waypoints.length > 0) btn.setAttribute("data-waypoints", p.waypoints.map(wp => wp.join(",")).join(";"));
             if (p.route_type) btn.setAttribute("data-route-type", p.route_type);
             btn.innerHTML = `
-                <span class="preset-name">${p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : ''}${p.name}</span>
+                <span class="preset-name">${p.route_type === "playgrounds" ? '<i class="fa-solid fa-child-reaching"></i> ' : p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : ''}${p.name}</span>
                 <span class="preset-desc">${p.desc}</span>
             `;
             presetList.appendChild(btn);
@@ -758,6 +760,16 @@ function initEventListeners() {
             const startStr = preset.getAttribute("data-start");
             const endStr = preset.getAttribute("data-end");
             const waypointsStr = preset.getAttribute("data-waypoints");
+            const routeType = preset.getAttribute("data-route-type");
+
+            if (routeType === "playgrounds") {
+                updatePlaygroundStartText("current location");
+                if (playgroundSelect) {
+                    playgroundSelect.focus();
+                    playgroundSelect.scrollIntoView({ behavior: "smooth", block: "center" });
+                }
+                return;
+            }
             
             const startCoords = startStr.split(",").map(Number);
             const endCoords = endStr.split(",").map(Number);
@@ -767,7 +779,9 @@ function initEventListeners() {
                 waypoints = waypointsStr.split(";").map(wp => wp.split(",").map(Number));
             }
 
-            const routeType = preset.getAttribute("data-route-type");
+            if (routeType === "b180" || routeType === "b360") {
+                switchAppSection("plan");
+            }
             loadPresetRoute(startCoords, endCoords, waypoints, routeType);
         });
     });
@@ -1402,6 +1416,11 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
             document.getElementById("info-distance").textContent = `${distanceMiles} mi`;
             document.getElementById("info-cost").textContent = "N/A (Official Track)";
             document.getElementById("route-info").classList.remove("hidden");
+            const startNavBtn = document.getElementById("btn-start-nav");
+            if (startNavBtn) {
+                startNavBtn.style.display = "";
+                startNavBtn.disabled = false;
+            }
             
         } catch (err) {
             console.error("Failed to load official route GeoJSON:", err);
@@ -1467,6 +1486,8 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
 
 function drawOfficialGeoJSON(data, routeType) {
     clearPolylines();
+    const navSegments = [];
+    const routeName = routeType === "b180" ? "Boulder Loops B-180" : "Boulder Loops B-360";
     
     const geojsonLayer = L.geoJSON(data, {
         style: function (feature) {
@@ -1506,13 +1527,39 @@ function drawOfficialGeoJSON(data, routeType) {
         });
 
         routeSegments.push(layer);
+        appendOfficialLayerNavigationSegments(layer, navSegments, routeName);
     });
+
+    window.lastRouteSegments = navSegments;
 
     // Fit map bounds to the exact route
     if (routeSegments.length > 0) {
         const group = new L.featureGroup(routeSegments);
         map.fitBounds(group.getBounds(), getFitBoundsOptions());
     }
+}
+
+function appendOfficialLayerNavigationSegments(layer, segments, name) {
+    const latLngs = layer.getLatLngs();
+    const lines = Array.isArray(latLngs[0]) ? latLngs : [latLngs];
+
+    lines.forEach(line => {
+        for (let i = 0; i < line.length - 1; i++) {
+            const from = line[i];
+            const to = line[i + 1];
+            segments.push({
+                coords: [[from.lat, from.lng], [to.lat, to.lng]],
+                type: "separated_path",
+                name,
+                length: getLatLngDistance(from.lat, from.lng, to.lat, to.lng),
+                multiplier: 1.0,
+                bikestress: "None",
+                offstreet_type: "official_loop",
+                bicycles_allowed: "Yes",
+                ebike_allowed: "Yes"
+            });
+        }
+    });
 }
 
 function lockWeights(lock) {
