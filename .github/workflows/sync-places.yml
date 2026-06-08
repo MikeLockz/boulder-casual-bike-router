@@ -67,9 +67,7 @@ jobs:
 
             echo "Preparing Python environment..."
             cd "$PROJECT_DIR"
-            if ! python3 - <<'PY' >/dev/null 2>&1
-            import ensurepip
-            PY
+            if ! python3 -c 'import ensurepip' >/dev/null 2>&1
             then
               apt-get update
               PYTHON_VENV_PACKAGE="python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')-venv"
@@ -94,17 +92,7 @@ jobs:
 
             echo "Waiting for PocketBase health..."
             for attempt in $(seq 1 30); do
-              if .places-sync-venv/bin/python - "$PB_URL" <<'PY'
-            import sys
-            import urllib.request
-
-            url = sys.argv[1].rstrip("/") + "/api/health"
-            try:
-                with urllib.request.urlopen(url, timeout=2) as response:
-                    raise SystemExit(0 if 200 <= response.status < 300 else 1)
-            except Exception:
-                raise SystemExit(1)
-            PY
+              if curl -fsS --max-time 2 "${PB_URL%/}/api/health" >/dev/null
               then
                 break
               fi
@@ -117,12 +105,7 @@ jobs:
 
             echo "Creating one-run PocketBase sync credential..."
             POCKETBASE_ADMIN_EMAIL="$PB_SYNC_EMAIL"
-            POCKETBASE_ADMIN_PASSWORD="$(
-              .places-sync-venv/bin/python - <<'PY'
-            import secrets
-            print(secrets.token_urlsafe(36))
-            PY
-            )"
+            POCKETBASE_ADMIN_PASSWORD="$(.places-sync-venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(36))')"
             cd "$DOCKER_DIR"
             docker compose exec -T pocketbase \
               /usr/local/bin/pocketbase superuser upsert \
