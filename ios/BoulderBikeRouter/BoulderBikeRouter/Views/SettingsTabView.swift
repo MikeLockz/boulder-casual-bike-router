@@ -4,6 +4,7 @@ import CoreLocation
 struct SettingsTabView: View {
     @Bindable var viewModel: MapViewModel
     @State private var isAuthSheetPresented = false
+    @State private var authInitialMode: AuthView.AuthMode = .signIn
     @State private var screen: SettingsScreen = .root
     @State private var editorProfile: RouteTuningProfile?
     @State private var draftName = "Custom Routing Profile"
@@ -14,6 +15,7 @@ struct SettingsTabView: View {
 
     private enum SettingsScreen {
         case root
+        case account
         case weightsList
         case weightsEditor
     }
@@ -26,6 +28,8 @@ struct SettingsTabView: View {
                     switch screen {
                     case .root:
                         rootContent
+                    case .account:
+                        accountContent
                     case .weightsList:
                         weightsListContent
                     case .weightsEditor:
@@ -39,7 +43,7 @@ struct SettingsTabView: View {
         .background(Color.forestDeep)
         .ignoresSafeArea(edges: .top)
         .sheet(isPresented: $isAuthSheetPresented) {
-            AuthView(viewModel: viewModel)
+            AuthView(viewModel: viewModel, initialMode: authInitialMode)
         }
         .alert("Delete Weight Setting?", isPresented: Binding(
             get: { deleteCandidate != nil },
@@ -109,6 +113,7 @@ struct SettingsTabView: View {
     private var headerTitle: String {
         switch screen {
         case .root: return "Settings"
+        case .account: return "Account Settings"
         case .weightsList: return "Manage Weights"
         case .weightsEditor: return editorProfile == nil ? "New Weight Setting" : "Edit Weight Setting"
         }
@@ -116,9 +121,8 @@ struct SettingsTabView: View {
 
     private var rootContent: some View {
         VStack(spacing: 24) {
-            accountSection
+            accountNavSection
             if viewModel.isUserLoggedIn {
-                accountSecuritySection
                 homeSection
             }
             weightsNavSection
@@ -126,72 +130,112 @@ struct SettingsTabView: View {
         }
     }
 
-    private var accountSection: some View {
+    private var accountNavSection: some View {
         settingsGroup(title: "ACCOUNT") {
-            if viewModel.isUserLoggedIn, let email = viewModel.currentUserEmail {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Signed In As")
-                            .font(.system(size: 12))
-                            .foregroundColor(.onSurfaceVariant)
-                        Text(email)
+            Button(action: { screen = .account }) {
+                HStack(spacing: 12) {
+                    Image(systemName: "person.crop.circle")
+                        .foregroundColor(.primaryMint)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Account")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.onSurface)
+                        Text(accountSummaryText)
+                            .font(.system(size: 12))
+                            .foregroundColor(.onSurfaceVariant)
                     }
                     Spacer()
-                    Button("Sign Out") {
-                        viewModel.signOut()
-                    }
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(.errorRose)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.errorRose.opacity(0.1))
-                    .cornerRadius(6)
-                }
-                .padding(16)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Sync past routes and saved places automatically by signing in or creating a free account.")
-                        .font(.system(size: 12))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundColor(.onSurfaceVariant)
-                        .lineSpacing(4)
-
-                    Button(action: { isAuthSheetPresented = true }) {
-                        Label("Sign In or Create Account", systemImage: "person.badge.key.fill")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(.forestDeep)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.primaryMint)
-                            .cornerRadius(8)
-                    }
                 }
                 .padding(16)
             }
         }
     }
 
-    private var accountSecuritySection: some View {
-        settingsGroup(title: "ACCOUNT & SECURITY") {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Cloud Sync")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.onSurface)
-                    Text("Sync past routes & saved places via iCloud")
-                        .font(.system(size: 12))
-                        .foregroundColor(.onSurfaceVariant)
+    private var accountContent: some View {
+        VStack(spacing: 24) {
+            settingsGroup(title: "STATUS") {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.primaryMint.opacity(0.12))
+                                .frame(width: 42, height: 42)
+                            Image(systemName: viewModel.isUserLoggedIn ? "checkmark.seal.fill" : "person.crop.circle.badge.questionmark")
+                                .foregroundColor(.primaryMint)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(viewModel.isUserLoggedIn ? "Authenticated" : "Not Signed In")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.onSurface)
+                            Text(accountSummaryText)
+                                .font(.system(size: 12))
+                                .foregroundColor(.onSurfaceVariant)
+                        }
+
+                        Spacer()
+                    }
+
+                    if !viewModel.isUserLoggedIn {
+                        HStack(spacing: 8) {
+                            Button(action: { presentAuth(.signIn) }) {
+                                Label("Sign In", systemImage: "person.badge.key.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.primaryMint)
+
+                            Button(action: { presentAuth(.signUp) }) {
+                                Text("Sign Up")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.primaryMint)
+                        }
+                    } else {
+                        Button("Sign Out") {
+                            viewModel.signOut()
+                        }
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.errorRose)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.errorRose.opacity(0.1))
+                        .cornerRadius(8)
+                    }
                 }
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { viewModel.isCloudSyncEnabled },
-                    set: { viewModel.isCloudSyncEnabled = $0 }
-                ))
-                .labelsHidden()
-                .tint(.primaryMint)
+                .padding(16)
             }
-            .padding(16)
+
+            if viewModel.isUserLoggedIn {
+                settingsGroup(title: "CLOUD SYNC") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(cloudSyncStatusText)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.onSurface)
+                            Text("Sync past routes and saved places with your account.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.onSurfaceVariant)
+                        }
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { viewModel.isCloudSyncEnabled },
+                            set: { viewModel.isCloudSyncEnabled = $0 }
+                        ))
+                        .labelsHidden()
+                        .tint(.primaryMint)
+                    }
+                    .padding(16)
+                }
+            }
         }
     }
 
@@ -217,6 +261,15 @@ struct SettingsTabView: View {
                     }
 
                     Spacer()
+
+                    Button(action: { Task { await viewModel.deleteHomeLocation() } }) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 13, weight: .bold))
+                            .frame(width: 38, height: 38)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.errorRose)
+                    .disabled(viewModel.homeLocation == nil || viewModel.isSavingHomeLocation)
                 }
 
                 if let error = viewModel.homeLocationError {
@@ -234,14 +287,6 @@ struct SettingsTabView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.primaryMint)
                     .disabled(viewModel.isSavingHomeLocation)
-
-                    Button(action: { Task { await viewModel.deleteHomeLocation() } }) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 13, weight: .bold))
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.errorRose)
-                    .disabled(viewModel.homeLocation == nil || viewModel.isSavingHomeLocation)
                 }
             }
             .padding(16)
@@ -386,6 +431,8 @@ struct SettingsTabView: View {
         switch screen {
         case .root:
             break
+        case .account:
+            screen = .root
         case .weightsList:
             screen = .root
         case .weightsEditor:
@@ -399,6 +446,11 @@ struct SettingsTabView: View {
         draftWeights = viewModel.defaultRouteWeights()
         draftOffsets = [:]
         screen = .weightsEditor
+    }
+
+    private func presentAuth(_ mode: AuthView.AuthMode) {
+        authInitialMode = mode
+        isAuthSheetPresented = true
     }
 
     private func openEditor(_ profile: RouteTuningProfile) {
@@ -438,5 +490,16 @@ struct SettingsTabView: View {
             return "Home has not been set yet."
         }
         return String(format: "%.6f, %.6f", home.lat, home.lng)
+    }
+
+    private var accountSummaryText: String {
+        if viewModel.isUserLoggedIn {
+            return viewModel.currentUserEmail ?? "Signed in"
+        }
+        return "Sign in or sign up to enable account sync."
+    }
+
+    private var cloudSyncStatusText: String {
+        viewModel.isCloudSyncEnabled ? "Cloud Sync On" : "Cloud Sync Paused"
     }
 }

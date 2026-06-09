@@ -275,7 +275,23 @@ body {
     font-weight: 700;
 }
 
+.settings-nav-meta {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 12px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .weights-manager-view {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.account-settings-view {
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -322,6 +338,17 @@ body {
 .icon-btn.danger:hover {
     border-color: rgba(255, 92, 122, 0.35);
     background: rgba(255, 92, 122, 0.08);
+}
+
+.icon-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.icon-btn:disabled:hover {
+    color: var(--text-primary);
+    border-color: var(--border-color);
+    background: rgba(255, 255, 255, 0.04);
 }
 
 .route-profile-list {
@@ -1912,6 +1939,17 @@ input[type="range"]::-webkit-slider-thumb:hover {
     gap: 12px;
 }
 
+.account-status-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
 .auth-tabs {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -2086,6 +2124,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
     flex-direction: column;
     gap: 3px;
     min-width: 0;
+    flex: 1;
 }
 
 .home-location-label {
@@ -2100,6 +2139,10 @@ input[type="range"]::-webkit-slider-thumb:hover {
     font-size: 13px;
     color: var(--text-primary);
     overflow-wrap: anywhere;
+}
+
+.home-location-delete {
+    flex: 0 0 auto;
 }
 
 .home-map-editor {

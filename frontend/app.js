@@ -627,6 +627,12 @@ function initEventListeners() {
     const weightsBackBtn = document.getElementById("btn-weights-back");
     if (weightsBackBtn) weightsBackBtn.addEventListener("click", closeWeightsManagerView);
 
+    const accountSettingsBtn = document.getElementById("btn-account-settings");
+    if (accountSettingsBtn) accountSettingsBtn.addEventListener("click", openAccountSettingsView);
+
+    const accountBackBtn = document.getElementById("btn-account-back");
+    if (accountBackBtn) accountBackBtn.addEventListener("click", closeAccountSettingsView);
+
     const cancelProfileBtn = document.getElementById("btn-cancel-route-profile");
     if (cancelProfileBtn) cancelProfileBtn.addEventListener("click", cancelWeightsEditor);
 
@@ -1047,17 +1053,31 @@ function restoreWeightsEditorState() {
 }
 
 function setWeightsManagerMode(mode) {
-    const rootSections = ["sec-home", "sec-weights", "sec-layers", "sec-auth"];
+    const rootSections = ["sec-account", "sec-home", "sec-weights", "sec-layers"];
     const manager = document.getElementById("sec-weights-manager");
+    const accountManager = document.getElementById("sec-account-settings");
     rootSections.forEach(id => {
         const section = document.getElementById(id);
         if (section) section.classList.toggle("app-section-hidden", mode !== "root");
     });
     if (manager) manager.classList.toggle("app-section-hidden", mode === "root");
+    if (accountManager) accountManager.classList.add("app-section-hidden");
     const listView = document.getElementById("weights-list-view");
     const editorView = document.getElementById("weights-editor-view");
     if (listView) listView.classList.toggle("hidden", mode === "editor");
     if (editorView) editorView.classList.toggle("hidden", mode !== "editor");
+}
+
+function setAccountSettingsMode(isOpen) {
+    const rootSections = ["sec-account", "sec-home", "sec-weights", "sec-layers"];
+    const accountManager = document.getElementById("sec-account-settings");
+    const weightsManager = document.getElementById("sec-weights-manager");
+    rootSections.forEach(id => {
+        const section = document.getElementById(id);
+        if (section) section.classList.toggle("app-section-hidden", isOpen);
+    });
+    if (accountManager) accountManager.classList.toggle("app-section-hidden", !isOpen);
+    if (weightsManager) weightsManager.classList.add("app-section-hidden");
 }
 
 function openWeightsManagerView() {
@@ -1067,6 +1087,15 @@ function openWeightsManagerView() {
 
 function closeWeightsManagerView() {
     setWeightsManagerMode("root");
+}
+
+function openAccountSettingsView() {
+    setAccountSettingsMode(true);
+    updateAuthUI();
+}
+
+function closeAccountSettingsView() {
+    setAccountSettingsMode(false);
 }
 
 function openWeightsEditorForNew() {
@@ -2850,24 +2879,39 @@ function updateAuthUI() {
     const loggedOutDiv = document.getElementById("auth-logged-out");
     const loggedInDiv = document.getElementById("auth-logged-in");
     const userEmailSpan = document.getElementById("user-display-email");
+    const accountSummary = document.getElementById("account-settings-summary");
+    const accountTitle = document.getElementById("account-status-title");
+    const accountDetail = document.getElementById("account-status-detail");
+    const accountIcon = document.getElementById("account-status-icon");
+    const syncStatusLabel = document.getElementById("cloud-sync-status-label");
     
     if (!loggedOutDiv || !loggedInDiv) return;
     
     if (currentUser) {
+        const syncSetting = localStorage.getItem("cloud_sync_enabled");
+        const isSyncEnabled = syncSetting === null || syncSetting === "true";
+
         loggedOutDiv.classList.add("hidden");
         loggedInDiv.classList.remove("hidden");
         if (userEmailSpan) {
             userEmailSpan.textContent = currentUser.email;
         }
+        if (accountSummary) accountSummary.textContent = currentUser.email || "Signed in";
+        if (accountTitle) accountTitle.textContent = "Authenticated";
+        if (accountDetail) accountDetail.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${escapeHtml(currentUser.email || "Signed in")}`;
+        if (accountIcon) {
+            accountIcon.className = "fa-solid fa-circle-check";
+        }
+        if (syncStatusLabel) syncStatusLabel.textContent = isSyncEnabled ? "Cloud Sync On" : "Cloud Sync Paused";
         
         // Setup Cloud Sync Toggle checkbox state
         const syncToggle = document.getElementById("toggle-cloud-sync");
         if (syncToggle) {
-            const syncSetting = localStorage.getItem("cloud_sync_enabled");
-            syncToggle.checked = (syncSetting === null || syncSetting === "true");
+            syncToggle.checked = isSyncEnabled;
             
             syncToggle.onchange = function() {
                 localStorage.setItem("cloud_sync_enabled", this.checked ? "true" : "false");
+                if (syncStatusLabel) syncStatusLabel.textContent = this.checked ? "Cloud Sync On" : "Cloud Sync Paused";
                 if (this.checked) {
                     syncPendingRoutes();
                     syncPendingRouteTuningProfiles().then(loadRouteTuningProfiles);
@@ -2880,6 +2924,13 @@ function updateAuthUI() {
     } else {
         loggedInDiv.classList.add("hidden");
         loggedOutDiv.classList.remove("hidden");
+        if (accountSummary) accountSummary.textContent = "Not signed in";
+        if (accountTitle) accountTitle.textContent = "Not Signed In";
+        if (accountDetail) accountDetail.textContent = "Sign in or sign up to enable account sync.";
+        if (accountIcon) {
+            accountIcon.className = "fa-solid fa-user";
+        }
+        if (syncStatusLabel) syncStatusLabel.textContent = "Cloud Sync Off";
         if (userEmailSpan) {
             userEmailSpan.textContent = "-";
         }
@@ -3242,6 +3293,8 @@ function setControlPanelCollapsed(collapsed) {
 
 function openHomeSettingsView() {
     setControlPanelCollapsed(false);
+    setAccountSettingsMode(false);
+    setWeightsManagerMode("root");
     document.querySelectorAll(".collapsible-section").forEach(section => {
         section.open = section.id === "sec-home";
     });
@@ -3955,7 +4008,9 @@ async function loadHistory() {
 }
 
 async function showHistoryDetail(routeId) {
-    const route = currentHistoryItems.find(item => item.id === routeId || item.local_id === routeId);
+    const route = currentHistoryItems.find(item =>
+        item.id === routeId || item.local_id === routeId || item.server_id === routeId
+    );
     if (!route) return;
 
     currentHistoryRoute = route;
@@ -3965,6 +4020,25 @@ async function showHistoryDetail(routeId) {
     document.getElementById("history-detail")?.classList.remove("hidden");
     renderHistoryDetail(route);
     renderHistoryMapPreview(route);
+}
+
+async function openCompletedRouteHistory(routeId) {
+    if (!routeId) return;
+
+    if (typeof loadHistory === "function") {
+        await loadHistory();
+    }
+
+    switchAppSection("history");
+    const activeRoute = currentHistoryItems.find(item =>
+        item.id === routeId || item.local_id === routeId || item.server_id === routeId
+    );
+    const activeId = activeRoute?.id || routeId;
+    document.querySelectorAll(".history-item").forEach(item => {
+        const itemId = item.getAttribute("data-id");
+        item.classList.toggle("active", itemId === activeId);
+    });
+    showHistoryDetail(routeId);
 }
 
 function hideHistoryDetail() {

@@ -86,6 +86,20 @@ struct MainTabView: View {
                 selectTab(3)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TelemetryRouteEnded"))) { notification in
+            guard let routeId = notification.object as? String else { return }
+            Task {
+                await viewModel.loadHistory()
+                await MainActor.run {
+                    if let route = viewModel.pastRoutes.first(where: { $0.id == routeId }) {
+                        historyRouteToPresent = route
+                    }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        selectTab(2)
+                    }
+                }
+            }
+        }
     }
     
     // Custom styled Bottom Navigation Bar matching PRD specs

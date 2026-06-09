@@ -1099,8 +1099,10 @@ const Navigation = (() => {
             }
         }
         
-        if (window.loadHistory) {
-            window.loadHistory();
+        if (window.openCompletedRouteHistory) {
+            await window.openCompletedRouteHistory(routeId);
+        } else if (window.loadHistory) {
+            await window.loadHistory();
         }
         
         // Auto-trigger background sync if logged in

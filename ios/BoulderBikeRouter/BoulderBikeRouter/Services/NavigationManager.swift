@@ -301,11 +301,11 @@ class NavigationManager {
                 }
                 
                 await MainActor.run {
-                    NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: nil)
+                    NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: rId)
                 }
             }
         } else {
-            NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: nil)
+            NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: rId)
         }
         
         // Cleanup local states

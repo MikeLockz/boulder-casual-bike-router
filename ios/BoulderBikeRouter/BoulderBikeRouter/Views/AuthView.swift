@@ -2,9 +2,15 @@ import SwiftUI
 
 struct AuthView: View {
     var viewModel: MapViewModel
+    var initialMode: AuthMode = .signIn
     @Environment(\.dismiss) private var dismiss
     
-    @State private var isSignUpMode = false
+    enum AuthMode {
+        case signIn
+        case signUp
+    }
+
+    @State private var isSignUpMode: Bool
     @State private var email = ""
     @State private var password = ""
     @State private var passwordConfirm = ""
@@ -12,6 +18,12 @@ struct AuthView: View {
     @State private var isLoading = false
     @State private var errorMessage: String? = nil
     @State private var successMessage: String? = nil
+
+    init(viewModel: MapViewModel, initialMode: AuthMode = .signIn) {
+        self.viewModel = viewModel
+        self.initialMode = initialMode
+        _isSignUpMode = State(initialValue: initialMode == .signUp)
+    }
     
     private var isFormValid: Bool {
         let trimmedEmail = email.trimmingCharacters(in: .whitespaces)
