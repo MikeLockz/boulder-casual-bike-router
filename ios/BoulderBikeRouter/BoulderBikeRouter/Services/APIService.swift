@@ -47,6 +47,24 @@ class APIService {
         #endif
     }()
 
+    var analyticsSessionId: String {
+        if let existing = UserDefaults.standard.string(forKey: "analytics_session_id") {
+            return existing
+        }
+        let created = UUID().uuidString
+        UserDefaults.standard.set(created, forKey: "analytics_session_id")
+        return created
+    }
+
+    private func applyAnalyticsHeaders(_ request: inout URLRequest) {
+        request.setValue("ios", forHTTPHeaderField: "X-Client-Source")
+        request.setValue(analyticsSessionId, forHTTPHeaderField: "X-Client-Session-Id")
+        request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Client-Event-Id")
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+    }
+
     /// Set a custom base URL (e.g. localhost for simulator testing)
     func setBaseURL(_ urlString: String) {
         self.baseURLLabel = urlString
@@ -67,6 +85,7 @@ class APIService {
         var urlRequest = URLRequest(url: routeURL)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAnalyticsHeaders(&urlRequest)
 
         do {
             let encoder = JSONEncoder()
@@ -215,17 +234,22 @@ class APIService {
     }
 
     /// Fetch place autocomplete suggestions for route planning.
-    func fetchPlaceSuggestions(query: String, limit: Int = 8) async throws -> [PlaceSuggestion] {
+    func fetchPlaceSuggestions(query: String, target: String? = nil, limit: Int = 8) async throws -> [PlaceSuggestion] {
         guard let baseURL = URL(string: baseURLLabel),
               let autocompleteURL = URL(string: "/api/autocomplete", relativeTo: baseURL),
               var components = URLComponents(url: autocompleteURL, resolvingAgainstBaseURL: true) else {
             throw APIError.invalidURL
         }
 
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "limit", value: String(limit))
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "source", value: "ios")
         ]
+        if let target {
+            queryItems.append(URLQueryItem(name: "target", value: target))
+        }
+        components.queryItems = queryItems
 
         guard let url = components.url else {
             throw APIError.invalidURL
@@ -233,6 +257,7 @@ class APIService {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "GET"
+        applyAnalyticsHeaders(&urlRequest)
 
         let data: Data
         let response: URLResponse
@@ -253,6 +278,44 @@ class APIService {
             return try JSONDecoder().decode([PlaceSuggestion].self, from: data)
         } catch {
             throw APIError.decodingError(error)
+        }
+    }
+
+    func sendPlaceSearchAnalytics(_ request: PlaceSearchAnalyticsRequest) async {
+        guard let baseURL = URL(string: baseURLLabel),
+              let analyticsURL = URL(string: "/api/analytics/place-search", relativeTo: baseURL) else {
+            return
+        }
+
+        var urlRequest = URLRequest(url: analyticsURL)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAnalyticsHeaders(&urlRequest)
+
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(request)
+            _ = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            print("[Analytics] Failed to send place search event: \(error.localizedDescription)")
+        }
+    }
+
+    func sendRouteAnalyticsEvent(_ request: RouteAnalyticsEventRequest) async {
+        guard let baseURL = URL(string: baseURLLabel),
+              let analyticsURL = URL(string: "/api/analytics/route-event", relativeTo: baseURL) else {
+            return
+        }
+
+        var urlRequest = URLRequest(url: analyticsURL)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAnalyticsHeaders(&urlRequest)
+
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(request)
+            _ = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            print("[Analytics] Failed to send route event: \(error.localizedDescription)")
         }
     }
 
@@ -299,10 +362,7 @@ class APIService {
         var urlRequest = URLRequest(url: startURL)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        applyAnalyticsHeaders(&urlRequest)
 
         do {
             let encoder = JSONEncoder()
@@ -377,6 +437,7 @@ class APIService {
         var urlRequest = URLRequest(url: endURL)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        applyAnalyticsHeaders(&urlRequest)
 
         do {
             let encoder = JSONEncoder()

@@ -1001,7 +1001,8 @@ const Navigation = (() => {
                 total_length_meters: totalLength,
                 total_estimated_time_seconds: totalEstimatedTime,
                 device_type: "web",
-                weights: weights
+                weights: weights,
+                client_session_id: window.analyticsSessionId
             };
             
             try {
@@ -1023,6 +1024,26 @@ const Navigation = (() => {
             }
         } else {
             console.log("[Navigation] Guest or Sync Disabled: session running locally:", state.routeId);
+        }
+        if (window.sendAnalyticsEvent) {
+            window.sendAnalyticsEvent("/api/analytics/route-event", {
+                event_type: "navigation_started",
+                route_id: state.routeId,
+                route_type: "dynamic",
+                start_lat: startLat,
+                start_lon: startLon,
+                end_lat: endLat,
+                end_lon: endLon,
+                start_point_name: startName,
+                end_point_name: endName,
+                total_length_meters: totalLength,
+                segment_count: segments.length,
+                weights,
+                metadata: {
+                    sync_active: isSyncActive(),
+                    total_estimated_time_seconds: totalEstimatedTime
+                }
+            });
         }
     }
 
@@ -1155,7 +1176,8 @@ const Navigation = (() => {
                 ended_lat: finalLat,
                 ended_lon: finalLon,
                 ended_at: new Date().toISOString(),
-                ticks: state.localTicksCache
+                ticks: state.localTicksCache,
+                client_session_id: window.analyticsSessionId
             };
             
             try {
@@ -1172,6 +1194,30 @@ const Navigation = (() => {
             } catch (err) {
                 console.error("[Navigation] Failed to stop route recording remotely:", err);
             }
+        }
+        if (window.sendAnalyticsEvent) {
+            window.sendAnalyticsEvent("/api/analytics/route-event", {
+                event_type: "navigation_ended",
+                route_id: routeId,
+                route_type: "dynamic",
+                start_lat: startReq?.start_lat,
+                start_lon: startReq?.start_lon,
+                end_lat: startReq?.end_lat,
+                end_lon: startReq?.end_lon,
+                start_point_name: startReq?.start_point_name,
+                end_point_name: startReq?.end_point_name,
+                total_length_meters: startReq?.total_length_meters,
+                weights: startReq?.weights,
+                metadata: {
+                    status,
+                    ended_lat: finalLat,
+                    ended_lon: finalLon,
+                    actual_distance_meters: actualDistance,
+                    actual_duration_seconds: actualDuration,
+                    tick_count: state.localTicksCache.length,
+                    sync_active: isSyncActive()
+                }
+            });
         }
         
         if (window.openCompletedRouteHistory) {

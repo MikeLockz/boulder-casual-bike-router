@@ -272,7 +272,17 @@ class MapViewModel {
         }
 
         do {
-            let suggestions = try await apiService.fetchPlaceSuggestions(query: normalized)
+            let suggestions = try await apiService.fetchPlaceSuggestions(query: normalized, target: target)
+            await apiService.sendPlaceSearchAnalytics(PlaceSearchAnalyticsRequest(
+                query: normalized,
+                target: target,
+                limit: 8,
+                resultCount: suggestions.count,
+                selectedPlace: nil,
+                source: "ios",
+                clientSessionId: apiService.analyticsSessionId,
+                metadata: ["event": "place_search_completed"]
+            ))
             await MainActor.run {
                 if target == "start" {
                     self.startPlaceSuggestions = suggestions
@@ -308,6 +318,22 @@ class MapViewModel {
 
     @MainActor
     func selectPlaceSuggestion(_ suggestion: PlaceSuggestion, target: String) {
+        Task {
+            await apiService.sendPlaceSearchAnalytics(PlaceSearchAnalyticsRequest(
+                query: target == "start" ? startPlaceSearchQuery : endPlaceSearchQuery,
+                target: target,
+                limit: nil,
+                resultCount: nil,
+                selectedPlace: AnalyticsSelectedPlace(id: suggestion.id, name: suggestion.name),
+                source: "ios",
+                clientSessionId: apiService.analyticsSessionId,
+                metadata: [
+                    "event": "place_selected",
+                    "place_type": suggestion.type,
+                    "place_source": suggestion.source ?? ""
+                ]
+            ))
+        }
         if target == "start" {
             setStartLocation(suggestion.coordinate, startName: suggestion.name)
         } else {
@@ -651,7 +677,47 @@ class MapViewModel {
         if let routeType = presets.first(where: { $0.name == selectedPresetName })?.routeType,
            routeType == "b180" || routeType == "b360" {
             do {
+                await apiService.sendRouteAnalyticsEvent(RouteAnalyticsEventRequest(
+                    eventType: "official_route_selected",
+                    routeType: routeType,
+                    routeId: nil,
+                    startLat: start.latitude,
+                    startLon: start.longitude,
+                    endLat: end.latitude,
+                    endLon: end.longitude,
+                    waypointCount: waypoints.count,
+                    totalLengthMeters: nil,
+                    totalWeight: nil,
+                    segmentCount: nil,
+                    startPointName: nil,
+                    endPointName: selectedPresetName,
+                    weights: nil,
+                    offsets: nil,
+                    source: "ios",
+                    clientSessionId: apiService.analyticsSessionId,
+                    metadata: ["preset_name": selectedPresetName ?? ""]
+                ))
                 let response = try await apiService.fetchOfficialLoopRoute(routeType: routeType)
+                await apiService.sendRouteAnalyticsEvent(RouteAnalyticsEventRequest(
+                    eventType: "route_rendered",
+                    routeType: routeType,
+                    routeId: nil,
+                    startLat: start.latitude,
+                    startLon: start.longitude,
+                    endLat: end.latitude,
+                    endLon: end.longitude,
+                    waypointCount: waypoints.count,
+                    totalLengthMeters: response.totalLengthMeters,
+                    totalWeight: response.totalWeight,
+                    segmentCount: response.segments.count,
+                    startPointName: nil,
+                    endPointName: selectedPresetName,
+                    weights: nil,
+                    offsets: nil,
+                    source: "ios",
+                    clientSessionId: apiService.analyticsSessionId,
+                    metadata: ["render_source": "official_geojson"]
+                ))
                 await MainActor.run {
                     self.routeResponse = response
                     self.isLoadingRoute = false
@@ -680,6 +746,26 @@ class MapViewModel {
         
         do {
             let response = try await apiService.fetchRoute(request: request)
+            await apiService.sendRouteAnalyticsEvent(RouteAnalyticsEventRequest(
+                eventType: "route_rendered",
+                routeType: "dynamic",
+                routeId: nil,
+                startLat: start.latitude,
+                startLon: start.longitude,
+                endLat: end.latitude,
+                endLon: end.longitude,
+                waypointCount: wpsArray.count,
+                totalLengthMeters: response.totalLengthMeters,
+                totalWeight: response.totalWeight,
+                segmentCount: response.segments.count,
+                startPointName: nil,
+                endPointName: selectedDestinationName,
+                weights: weights,
+                offsets: routeOffsets,
+                source: "ios",
+                clientSessionId: apiService.analyticsSessionId,
+                metadata: ["selected_preset_name": selectedPresetName ?? ""]
+            ))
             await MainActor.run {
                 self.routeResponse = response
                 self.isLoadingRoute = false

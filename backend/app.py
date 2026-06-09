@@ -5,6 +5,7 @@ import sys
 import datetime
 import re
 import difflib
+import threading
 
 try:
     import requests
@@ -67,6 +68,73 @@ nodes_global = {}
 safe_crossing_nodes_global = set()
 four_lane_nodes_global = set()
 bike_routes_geojson_global = None
+graph_build_lock = threading.Lock()
+graph_build_status = {
+    "state": "not_started",
+    "started_at": None,
+    "finished_at": None,
+    "last_success_at": None,
+    "duration_seconds": None,
+    "error": None,
+    "nodes": 0,
+    "edges": 0,
+    "build_id": 0,
+}
+
+def utc_now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+def mark_graph_build_started():
+    with graph_build_lock:
+        graph_build_status.update({
+            "state": "building",
+            "started_at": utc_now_iso(),
+            "finished_at": None,
+            "duration_seconds": None,
+            "error": None,
+            "nodes": 0,
+            "edges": 0,
+            "build_id": graph_build_status["build_id"] + 1,
+        })
+
+def mark_graph_build_ready(graph):
+    started_at = parse_navigation_date(graph_build_status.get("started_at"))
+    finished_at = datetime.datetime.now(datetime.timezone.utc)
+    duration_seconds = None
+    if started_at:
+        duration_seconds = round((finished_at - started_at).total_seconds(), 3)
+    with graph_build_lock:
+        graph_build_status.update({
+            "state": "ready",
+            "finished_at": finished_at.isoformat().replace("+00:00", "Z"),
+            "last_success_at": finished_at.isoformat().replace("+00:00", "Z"),
+            "duration_seconds": duration_seconds,
+            "error": None,
+            "nodes": graph.number_of_nodes() if graph is not None else 0,
+            "edges": graph.number_of_edges() if graph is not None else 0,
+        })
+
+def mark_graph_build_error(error):
+    started_at = parse_navigation_date(graph_build_status.get("started_at"))
+    finished_at = datetime.datetime.now(datetime.timezone.utc)
+    duration_seconds = None
+    if started_at:
+        duration_seconds = round((finished_at - started_at).total_seconds(), 3)
+    with graph_build_lock:
+        graph_build_status.update({
+            "state": "error",
+            "finished_at": finished_at.isoformat().replace("+00:00", "Z"),
+            "duration_seconds": duration_seconds,
+            "error": str(error),
+            "nodes": 0,
+            "edges": 0,
+        })
+
+def get_graph_build_status():
+    with graph_build_lock:
+        status = dict(graph_build_status)
+    status["ready"] = G_connected is not None and status.get("state") == "ready"
+    return status
 
 def haversine_distance(coord1, coord2):
     """Calculate the great-circle distance between two points in meters."""
@@ -756,6 +824,7 @@ def _bike_edge_direction(tags, infra_type):
 def build_graph(weights=None):
     """Build the NetworkX routing graph from OSM JSON data."""
     global G_connected, nodes_global, safe_crossing_nodes_global, four_lane_nodes_global
+    mark_graph_build_started()
     if weights is None:
         weights = DEFAULT_WEIGHTS
 
@@ -764,6 +833,7 @@ def build_graph(weights=None):
     except Exception as e:
         print(f"CRITICAL ERROR: Failed to fetch OSM data: {e}")
         print(f"Graph will not be built. Routing will be unavailable.")
+        mark_graph_build_error(e)
         return None
 
     G = nx.DiGraph()
@@ -1110,6 +1180,7 @@ def build_graph(weights=None):
     # Pre-populate graph with default weights so CLI routing tools remain in sync
     print("Populating graph with default routing weights...")
     update_graph_weights(G_connected, weights)
+    mark_graph_build_ready(G_connected)
 
 def build_bike_routes_geojson():
     """Load, filter, and simplify official bike routes data into a lightweight FeatureCollection."""
@@ -1388,13 +1459,30 @@ def get_route():
                     "ebike_allowed": edge_data.get("ebike_allowed", "Yes")
                 })
                 
-        return jsonify({
+        response_payload = {
             "segments": segments,
             "total_length_meters": total_length,
             "total_weight": total_weight,
             "start_node_dist_meters": start_node_dist,
             "end_node_dist_meters": end_node_dist
-        })
+        }
+        record_route_analytics_event("route_created", {
+            "route_type": data.get("route_type") or "dynamic",
+            "start_lat": start_lat,
+            "start_lon": start_lon,
+            "end_lat": end_lat,
+            "end_lon": end_lon,
+            "waypoint_count": len(waypoints),
+            "total_length_meters": total_length,
+            "total_weight": total_weight,
+            "segment_count": len(segments),
+            "weights": custom_weights,
+            "offsets": clean_optional_json(data.get("offsets")),
+            "metadata": compact_route_metadata(segments),
+            "client_session_id": data.get("client_session_id"),
+            "client_event_id": data.get("client_event_id"),
+        }, source=get_request_source("backend"))
+        return jsonify(response_payload)
         
     except nx.NetworkXNoPath:
         return jsonify({"error": "No route exists between the selected points."}), 404
@@ -1786,7 +1874,7 @@ def get_bike_routes():
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Client-Source, X-Client-Session-Id, X-Client-Event-Id"
     response.headers["Access-Control-Allow-Methods"] = "POST, GET, PATCH, PUT, DELETE, OPTIONS"
     return response
 
@@ -1816,6 +1904,25 @@ def pocketbase_status():
             "error": str(e)
         }), 500
 
+@app.route("/api/graph-status", methods=["GET"])
+def graph_status():
+    """Report routing graph build state for polling/debugging."""
+    graph_status = get_graph_build_status()
+    return jsonify({
+        "status": graph_status["state"],
+        "graph": graph_status,
+    })
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """Report backend readiness and routing graph build state."""
+    graph_status = get_graph_build_status()
+    http_status = 200 if graph_status["ready"] else 503
+    return jsonify({
+        "status": "ok" if graph_status["ready"] else graph_status["state"],
+        "graph": graph_status,
+    }), http_status
+
 def get_auth_user_id(auth_header):
     if not auth_header:
         return None
@@ -1841,6 +1948,126 @@ def normalize_place_query(value):
 
 def escape_pocketbase_filter_value(value):
     return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+def get_request_source(default="backend"):
+    source = request.headers.get("X-Client-Source") or request.args.get("source") or default
+    source = str(source or default).strip().lower()
+    if source not in {"backend", "web", "ios"}:
+        return default
+    return source
+
+def request_auth_user_id():
+    return get_auth_user_id(request.headers.get("Authorization"))
+
+def client_analytics_fields(data=None):
+    data = data if isinstance(data, dict) else {}
+    return {
+        "client_session_id": request.headers.get("X-Client-Session-Id") or data.get("client_session_id"),
+        "client_event_id": request.headers.get("X-Client-Event-Id") or data.get("client_event_id"),
+    }
+
+def clean_optional_text(value, max_length=500):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_length]
+
+def clean_optional_number(value):
+    try:
+        if value is None or value == "":
+            return None
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+def clean_optional_json(value):
+    return value if isinstance(value, (dict, list)) else None
+
+def compact_route_metadata(segments):
+    type_counts = {}
+    names = []
+    for segment in segments[:500]:
+        seg_type = segment.get("type") or "unknown"
+        type_counts[seg_type] = type_counts.get(seg_type, 0) + 1
+        name = clean_optional_text(segment.get("name"), 120)
+        if name and name not in names and len(names) < 20:
+            names.append(name)
+    return {
+        "segment_type_counts": type_counts,
+        "sample_street_names": names,
+    }
+
+def write_pocketbase_analytics(collection, payload):
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    try:
+        resp = requests.post(
+            f"{pb_url}/api/collections/{collection}/records",
+            json=payload,
+            timeout=3
+        )
+        if resp.status_code >= 400:
+            print(f"[-] Analytics write failed for {collection}: {resp.status_code} {resp.text[:300]}")
+            return False
+        return True
+    except Exception as e:
+        print(f"[-] Analytics write failed for {collection}: {e}")
+        return False
+
+def record_place_search_event(query, limit=None, result_count=None, target=None, selected_place=None, metadata=None, source=None):
+    normalized_query = normalize_place_query(query)
+    if not normalized_query:
+        return False
+    selected_place = selected_place if isinstance(selected_place, dict) else {}
+    payload = {
+        "source": source or get_request_source("backend"),
+        "target": clean_optional_text(target, 40),
+        "query": clean_optional_text(query, 500) or normalized_query,
+        "normalized_query": normalized_query,
+        "limit": clean_optional_number(limit),
+        "result_count": clean_optional_number(result_count),
+        "selected_place_id": clean_optional_text(selected_place.get("id"), 120),
+        "selected_place_name": clean_optional_text(selected_place.get("name"), 300),
+        "metadata": clean_optional_json(metadata),
+        "occurred_at": utc_now_iso(),
+        **client_analytics_fields(metadata),
+    }
+    user_id = request_auth_user_id()
+    if user_id:
+        payload["user"] = user_id
+    return write_pocketbase_analytics("place_search_events", payload)
+
+def record_route_analytics_event(event_type, data=None, source=None):
+    data = data if isinstance(data, dict) else {}
+    payload = {
+        "source": source or get_request_source("backend"),
+        "event_type": clean_optional_text(event_type, 80) or "route_event",
+        "route_type": clean_optional_text(data.get("route_type"), 80),
+        "route_id": clean_optional_text(data.get("route_id"), 120),
+        "start_lat": clean_optional_number(data.get("start_lat")),
+        "start_lon": clean_optional_number(data.get("start_lon")),
+        "end_lat": clean_optional_number(data.get("end_lat")),
+        "end_lon": clean_optional_number(data.get("end_lon")),
+        "waypoint_count": clean_optional_number(data.get("waypoint_count")),
+        "total_length_meters": clean_optional_number(data.get("total_length_meters")),
+        "total_weight": clean_optional_number(data.get("total_weight")),
+        "segment_count": clean_optional_number(data.get("segment_count")),
+        "start_point_name": clean_optional_text(data.get("start_point_name"), 300),
+        "end_point_name": clean_optional_text(data.get("end_point_name"), 300),
+        "weights": clean_optional_json(data.get("weights")),
+        "offsets": clean_optional_json(data.get("offsets")),
+        "metadata": clean_optional_json(data.get("metadata")),
+        "occurred_at": clean_optional_text(data.get("occurred_at"), 80) or utc_now_iso(),
+        **client_analytics_fields(data),
+    }
+    user_id = request_auth_user_id()
+    if user_id:
+        payload["user"] = user_id
+    return write_pocketbase_analytics("route_analytics_events", payload)
 
 def place_record_to_api(record):
     return {
@@ -2022,9 +2249,63 @@ def autocomplete_places():
             records, fuzzy_resp = fetch_fuzzy_place_candidates(pb_url, query)
             if fuzzy_resp is not None:
                 return jsonify({"error": f"PocketBase returned {fuzzy_resp.status_code}: {fuzzy_resp.text}"}), fuzzy_resp.status_code
-        return jsonify(aggregate_place_records(records, query, int(limit))), 200
+        results = aggregate_place_records(records, query, int(limit))
+        record_place_search_event(
+            query,
+            limit=limit,
+            result_count=len(results),
+            target=request.args.get("target"),
+            metadata={"request_path": "/api/autocomplete"},
+            source=get_request_source("backend")
+        )
+        return jsonify(results), 200
     except Exception as e:
         return jsonify({"error": f"Failed to fetch autocomplete places: {e}"}), 500
+
+@app.route("/api/analytics/place-search", methods=["POST", "OPTIONS"])
+def analytics_place_search():
+    if request.method == "OPTIONS":
+        return "", 200
+
+    data = request.json or {}
+    query = data.get("query")
+    if not normalize_place_query(query):
+        return jsonify({"error": "Missing query"}), 400
+
+    selected_place = data.get("selected_place") if isinstance(data.get("selected_place"), dict) else None
+    record_place_search_event(
+        query,
+        limit=data.get("limit"),
+        result_count=data.get("result_count"),
+        target=data.get("target"),
+        selected_place=selected_place,
+        metadata=clean_optional_json(data.get("metadata")),
+        source=data.get("source") or get_request_source("web")
+    )
+    return jsonify({"ok": True}), 202
+
+@app.route("/api/analytics/route-event", methods=["POST", "OPTIONS"])
+def analytics_route_event():
+    if request.method == "OPTIONS":
+        return "", 200
+
+    data = request.json or {}
+    event_type = clean_optional_text(data.get("event_type"), 80)
+    if not event_type:
+        return jsonify({"error": "Missing event_type"}), 400
+
+    allowed_events = {
+        "route_rendered",
+        "official_route_selected",
+        "navigation_started",
+        "navigation_ended",
+        "route_previewed",
+    }
+    if event_type not in allowed_events:
+        return jsonify({"error": "Unsupported event_type"}), 400
+
+    record_route_analytics_event(event_type, data, source=data.get("source") or get_request_source("web"))
+    return jsonify({"ok": True}), 202
 
 def sanitize_route_tuning_payload(data, partial=False):
     """Validate and normalize route tuning profile payloads."""
@@ -2323,6 +2604,23 @@ def nav_start():
         resp = requests.post(f"{pb_url}/api/collections/navigation_routes/records", json=pb_payload, timeout=5)
         if resp.status_code in [200, 201]:
             record = resp.json()
+            record_route_analytics_event("navigation_started", {
+                "route_id": record.get("id"),
+                "start_lat": record.get("start_lat"),
+                "start_lon": record.get("start_lon"),
+                "end_lat": record.get("end_lat"),
+                "end_lon": record.get("end_lon"),
+                "start_point_name": record.get("start_point_name"),
+                "end_point_name": record.get("end_point_name"),
+                "total_length_meters": record.get("total_length_meters"),
+                "weights": record.get("weights"),
+                "metadata": {
+                    "device_type": record.get("device_type"),
+                    "status": record.get("status"),
+                },
+                "client_session_id": data.get("client_session_id"),
+                "client_event_id": data.get("client_event_id"),
+            }, source=data.get("device_type") or get_request_source("backend"))
             return jsonify({
                 "status": "success",
                 "route_id": record.get("id"),
@@ -2457,6 +2755,28 @@ def nav_end(route_id):
     try:
         resp = requests.patch(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", json=pb_update, timeout=5)
         if resp.status_code == 200:
+            updated_route = resp.json()
+            record_route_analytics_event("navigation_ended", {
+                "route_id": route_id,
+                "start_lat": route_record.get("start_lat") or updated_route.get("start_lat"),
+                "start_lon": route_record.get("start_lon") or updated_route.get("start_lon"),
+                "end_lat": route_record.get("end_lat") or updated_route.get("end_lat"),
+                "end_lon": route_record.get("end_lon") or updated_route.get("end_lon"),
+                "start_point_name": route_record.get("start_point_name") or updated_route.get("start_point_name"),
+                "end_point_name": route_record.get("end_point_name") or updated_route.get("end_point_name"),
+                "total_length_meters": updated_route.get("total_length_meters") or route_record.get("total_length_meters"),
+                "weights": route_record.get("weights") or updated_route.get("weights"),
+                "metadata": {
+                    "status": status,
+                    "ended_lat": data.get("ended_lat"),
+                    "ended_lon": data.get("ended_lon"),
+                    "actual_distance_meters": metrics.get("actual_distance_meters"),
+                    "actual_duration_seconds": metrics.get("actual_duration_seconds"),
+                    "tick_count": len(ticks),
+                },
+                "client_session_id": data.get("client_session_id"),
+                "client_event_id": data.get("client_event_id"),
+            }, source=(route_record.get("device_type") or updated_route.get("device_type") or get_request_source("backend")))
             return jsonify({
                 "status": "success",
                 **navigation_metrics_payload(metrics)

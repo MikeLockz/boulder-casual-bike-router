@@ -48,6 +48,75 @@ struct RouteRequest: Codable {
     }
 }
 
+struct AnalyticsSelectedPlace: Codable {
+    let id: String?
+    let name: String?
+}
+
+struct PlaceSearchAnalyticsRequest: Codable {
+    let query: String
+    let target: String?
+    let limit: Int?
+    let resultCount: Int?
+    let selectedPlace: AnalyticsSelectedPlace?
+    let source: String
+    let clientSessionId: String
+    let metadata: [String: String]?
+
+    enum CodingKeys: String, CodingKey {
+        case query
+        case target
+        case limit
+        case resultCount = "result_count"
+        case selectedPlace = "selected_place"
+        case source
+        case clientSessionId = "client_session_id"
+        case metadata
+    }
+}
+
+struct RouteAnalyticsEventRequest: Codable {
+    let eventType: String
+    let routeType: String?
+    let routeId: String?
+    let startLat: Double?
+    let startLon: Double?
+    let endLat: Double?
+    let endLon: Double?
+    let waypointCount: Int?
+    let totalLengthMeters: Double?
+    let totalWeight: Double?
+    let segmentCount: Int?
+    let startPointName: String?
+    let endPointName: String?
+    let weights: [String: Double]?
+    let offsets: [String: Double]?
+    let source: String
+    let clientSessionId: String
+    let metadata: [String: String]?
+
+    enum CodingKeys: String, CodingKey {
+        case eventType = "event_type"
+        case routeType = "route_type"
+        case routeId = "route_id"
+        case startLat = "start_lat"
+        case startLon = "start_lon"
+        case endLat = "end_lat"
+        case endLon = "end_lon"
+        case waypointCount = "waypoint_count"
+        case totalLengthMeters = "total_length_meters"
+        case totalWeight = "total_weight"
+        case segmentCount = "segment_count"
+        case startPointName = "start_point_name"
+        case endPointName = "end_point_name"
+        case weights
+        case offsets
+        case source
+        case clientSessionId = "client_session_id"
+        case metadata
+    }
+}
+
 /// Represents a single styled path segment on the map.
 struct RouteSegment: Codable, Identifiable, Equatable {
     var id: String {

@@ -21,6 +21,7 @@ struct NavigationOverlayView: View {
             // Bottom bar: Trip stats and controls
             bottomStatsBar
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .edgesIgnoringSafeArea(.all)
     }
 

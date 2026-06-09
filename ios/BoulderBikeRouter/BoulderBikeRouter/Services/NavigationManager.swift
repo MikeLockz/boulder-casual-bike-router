@@ -127,8 +127,6 @@ class NavigationManager {
         }
         let geojson = GeoJSONFeatureCollection(type: "FeatureCollection", features: features)
         
-        let weights = [String: Double]()
-        
         let resolvedDestinationName = destinationName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let endPointName: String
         if let resolvedDestinationName, !resolvedDestinationName.isEmpty {
@@ -184,6 +182,31 @@ class NavigationManager {
         } else {
             self.lastLoggedTime = Date()
             print("[NavigationManager] Navigation session starting locally (Cloud Sync is disabled or guest).")
+        }
+        Task {
+            await apiService.sendRouteAnalyticsEvent(RouteAnalyticsEventRequest(
+                eventType: "navigation_started",
+                routeType: "dynamic",
+                routeId: activeRouteId,
+                startLat: startLat,
+                startLon: startLon,
+                endLat: endLat,
+                endLon: endLon,
+                waypointCount: nil,
+                totalLengthMeters: totalLength,
+                totalWeight: nil,
+                segmentCount: segments.count,
+                startPointName: "Start Point",
+                endPointName: endPointName,
+                weights: weights,
+                offsets: offsets,
+                source: "ios",
+                clientSessionId: apiService.analyticsSessionId,
+                metadata: [
+                    "sync_active": String(isSyncActive),
+                    "total_estimated_time_seconds": String(estTime)
+                ]
+            ))
         }
     }
 
@@ -329,6 +352,37 @@ class NavigationManager {
             }
         } else {
             NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: rId)
+        }
+
+        if let startReq = localStartRequest {
+            Task {
+                await apiService.sendRouteAnalyticsEvent(RouteAnalyticsEventRequest(
+                    eventType: "navigation_ended",
+                    routeType: "dynamic",
+                    routeId: rId,
+                    startLat: startReq.startLat,
+                    startLon: startReq.startLon,
+                    endLat: startReq.endLat,
+                    endLon: startReq.endLon,
+                    waypointCount: nil,
+                    totalLengthMeters: startReq.totalLengthMeters,
+                    totalWeight: nil,
+                    segmentCount: segments.count,
+                    startPointName: startReq.startPointName,
+                    endPointName: startReq.endPointName,
+                    weights: startReq.weights,
+                    offsets: rerouteOffsets,
+                    source: "ios",
+                    clientSessionId: apiService.analyticsSessionId,
+                    metadata: [
+                        "status": status,
+                        "actual_distance_meters": String(actualDistance),
+                        "actual_duration_seconds": String(actualDuration),
+                        "tick_count": String(localTicksCache.count),
+                        "sync_active": String(isSyncActive)
+                    ]
+                ))
+            }
         }
 
         sendWatchSnapshot(

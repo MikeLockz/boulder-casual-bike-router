@@ -36,6 +36,49 @@ let activePlanMapSource = "planner";
 let playgroundPlaces = [];
 let playgroundLoadPromise = null;
 let currentRouteTitle = "Custom Route";
+const ANALYTICS_SESSION_KEY = "boulder_analytics_session_id";
+let analyticsSessionId = localStorage.getItem(ANALYTICS_SESSION_KEY);
+if (!analyticsSessionId) {
+    analyticsSessionId = (window.crypto?.randomUUID && window.crypto.randomUUID()) || `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(ANALYTICS_SESSION_KEY, analyticsSessionId);
+}
+
+function getAnalyticsHeaders() {
+    const headers = {
+        "Content-Type": "application/json",
+        "X-Client-Source": "web",
+        "X-Client-Session-Id": analyticsSessionId,
+        "X-Client-Event-Id": (window.crypto?.randomUUID && window.crypto.randomUUID()) || `evt-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    };
+    const token = getAuthToken();
+    if (token) {
+        headers.Authorization = `Bearer ${token}`;
+    }
+    return headers;
+}
+
+function sendAnalyticsEvent(path, payload) {
+    fetch(`${API_BASE}${path}`, {
+        method: "POST",
+        headers: getAnalyticsHeaders(),
+        body: JSON.stringify({
+            ...payload,
+            source: "web",
+            client_session_id: analyticsSessionId
+        })
+    }).catch(err => console.warn("[Analytics] Failed to send event:", err));
+}
+window.analyticsSessionId = analyticsSessionId;
+window.sendAnalyticsEvent = sendAnalyticsEvent;
+
+function summarizeRouteSegments(segments = []) {
+    const typeCounts = {};
+    segments.forEach(segment => {
+        const type = segment?.type || "unknown";
+        typeCounts[type] = (typeCounts[type] || 0) + 1;
+    });
+    return { segment_type_counts: typeCounts };
+}
 
 const OFFICIAL_ROUTE_COLORS = {
     "Multi-Use Path": "#00e676",
@@ -484,6 +527,19 @@ function renderAutocompleteSuggestions(target, places, query = "") {
         button.append(name, meta);
         button.addEventListener("mousedown", (event) => {
             event.preventDefault();
+            sendAnalyticsEvent("/api/analytics/place-search", {
+                query,
+                target,
+                selected_place: {
+                    id: place.id,
+                    name: place.name
+                },
+                metadata: {
+                    event: "place_selected",
+                    place_type: place.type,
+                    source: place.source
+                }
+            });
             setRoutePoint(target, [Number(place.lat), Number(place.lng)], {
                 popup: place.name,
                 label: place.name,
@@ -505,8 +561,12 @@ async function fetchAutocompleteSuggestions(target, query) {
     autocompleteAbortControllers[target] = controller;
 
     try {
-        const response = await fetch(`${API_BASE}/api/autocomplete?q=${encodeURIComponent(query)}&limit=8`, {
-            signal: controller.signal
+        const response = await fetch(`${API_BASE}/api/autocomplete?q=${encodeURIComponent(query)}&limit=8&target=${encodeURIComponent(target)}&source=web`, {
+            signal: controller.signal,
+            headers: {
+                "X-Client-Source": "web",
+                "X-Client-Session-Id": analyticsSessionId
+            }
         });
         if (!response.ok) {
             hideAutocompleteSuggestions(target);
@@ -876,6 +936,19 @@ function initEventListeners() {
             }
 
             if (routeType === "b180" || routeType === "b360") {
+                sendAnalyticsEvent("/api/analytics/route-event", {
+                    event_type: "official_route_selected",
+                    route_type: routeType,
+                    start_lat: startCoords[0],
+                    start_lon: startCoords[1],
+                    end_lat: endCoords[0],
+                    end_lon: endCoords[1],
+                    waypoint_count: waypoints.length,
+                    end_point_name: presetName,
+                    metadata: {
+                        preset_name: presetName
+                    }
+                });
                 switchAppSection("plan");
             }
             loadPresetRoute(startCoords, endCoords, waypoints, routeType, presetName);
@@ -1531,7 +1604,9 @@ async function calculateRoute() {
         const response = await fetch(`${API_BASE}/api/route`, {
             method: "POST",
             headers: {
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "X-Client-Source": "web",
+                "X-Client-Session-Id": analyticsSessionId
             },
             body: JSON.stringify(requestBody)
         });
@@ -1547,6 +1622,22 @@ async function calculateRoute() {
         // Draw path segments
         drawRoute(data.segments);
         activePlanMapSource = "planner";
+        sendAnalyticsEvent("/api/analytics/route-event", {
+            event_type: "route_rendered",
+            route_type: "dynamic",
+            start_lat: startLatLng.lat,
+            start_lon: startLatLng.lng,
+            end_lat: endLatLng.lat,
+            end_lon: endLatLng.lng,
+            waypoint_count: currentWaypoints.length,
+            total_length_meters: data.total_length_meters,
+            total_weight: data.total_weight,
+            segment_count: Array.isArray(data.segments) ? data.segments.length : 0,
+            end_point_name: currentRouteTitle,
+            weights,
+            offsets: getRouteOffsetsFromEditor(),
+            metadata: summarizeRouteSegments(data.segments)
+        });
 
         // Store segments for navigation module
         window.lastRouteSegments = data.segments;
@@ -1691,6 +1782,22 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
             document.getElementById("info-distance").textContent = `${distanceMiles} mi`;
             document.getElementById("info-cost").textContent = "N/A (Official Track)";
             setCurrentRouteTitle(routeType === "b180" ? "Boulder Loops B-180" : "Boulder Loops B-360");
+            sendAnalyticsEvent("/api/analytics/route-event", {
+                event_type: "route_rendered",
+                route_type: routeType,
+                start_lat: 40.030,
+                start_lon: -105.234,
+                end_lat: 40.030,
+                end_lon: -105.234,
+                waypoint_count: waypoints.length,
+                total_length_meters: distanceMiles * 1609.34,
+                segment_count: routeSegments.length,
+                end_point_name: currentRouteTitle,
+                metadata: {
+                    preset_name: currentRouteTitle,
+                    render_source: "official_geojson"
+                }
+            });
             document.getElementById("route-info").classList.remove("hidden");
             const startNavBtn = document.getElementById("btn-start-nav");
             if (startNavBtn) {
