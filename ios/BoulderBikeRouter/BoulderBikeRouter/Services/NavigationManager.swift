@@ -35,6 +35,10 @@ class NavigationManager {
 
     private var distanceToNextManeuverMeters: Double? = nil
     private var isOffRoute: Bool = false
+    private var offRouteCount: Int = 0
+    private var isRerouting: Bool = false
+    private var rerouteWeights: [String: Double] = [:]
+    private var rerouteOffsets: [String: Double]? = nil
     private var routeCoords: [CLLocationCoordinate2D] = []
     private var segments: [RouteSegment] = []
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -68,7 +72,7 @@ class NavigationManager {
         return hasToken && isSyncEnabled
     }
 
-    func start(segments: [RouteSegment], modelContext: ModelContext, destinationName: String? = nil) {
+    func start(segments: [RouteSegment], modelContext: ModelContext, destinationName: String? = nil, weights: [String: Double] = [:], offsets: [String: Double]? = nil) {
         guard !segments.isEmpty else { return }
         
         self.modelContext = modelContext
@@ -79,6 +83,10 @@ class NavigationManager {
         self.announcedPre.removeAll()
         self.announcedConfirm.removeAll()
         self.isActive = true
+        self.rerouteWeights = weights
+        self.rerouteOffsets = offsets
+        self.offRouteCount = 0
+        self.isRerouting = false
         
         let now = Date()
         let isoFormatter = ISO8601DateFormatter()
@@ -183,6 +191,8 @@ class NavigationManager {
         isActive = false
         distanceToNextManeuverMeters = nil
         isOffRoute = false
+        offRouteCount = 0
+        isRerouting = false
         currentBannerManeuver = nil
         
         // Re-enable screen sleep
@@ -359,10 +369,15 @@ class NavigationManager {
         let userCoord = location.coordinate
         let (closestIdx, minDistance) = findClosestPoint(userCoord)
 
-        // Off-route warning
+        // Off-route detection with debounce
         isOffRoute = minDistance > 50.0
-        if isOffRoute { // 50 meters off route
-            // Optionally speak warning
+        if isOffRoute {
+            offRouteCount += 1
+            if offRouteCount >= 4 && !isRerouting {
+                triggerReroute(from: location)
+            }
+        } else {
+            offRouteCount = 0
         }
 
         // Calculate progress along route
@@ -460,6 +475,53 @@ class NavigationManager {
         currentBannerManeuver = maneuvers.first
         distanceToNextManeuverMeters = nil
         distanceToNextManeuverString = ""
+    }
+
+    private func triggerReroute(from location: CLLocation) {
+        guard let destCoord = routeCoords.last else { return }
+        isRerouting = true
+        offRouteCount = 0
+        speak("Rerouting.")
+        sendWatchSnapshot(status: .offRoute, instruction: "Rerouting...", force: true)
+
+        let request = RouteRequest(
+            startLat: location.coordinate.latitude,
+            startLon: location.coordinate.longitude,
+            endLat: destCoord.latitude,
+            endLon: destCoord.longitude,
+            waypoints: [],
+            weights: rerouteWeights,
+            offsets: rerouteOffsets
+        )
+
+        Task {
+            do {
+                let response = try await apiService.fetchRoute(request: request)
+                await MainActor.run { self.applyReroute(response.segments) }
+            } catch {
+                await MainActor.run {
+                    self.isRerouting = false
+                    print("[NavigationManager] Reroute failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func applyReroute(_ newSegments: [RouteSegment]) {
+        guard !newSegments.isEmpty else { isRerouting = false; return }
+        segments = newSegments
+        routeCoords = flattenSegments(newSegments)
+        maneuvers = buildManeuvers(from: newSegments)
+        currentManeuverIndex = 0
+        announcedPre.removeAll()
+        announcedConfirm.removeAll()
+        isOffRoute = false
+        offRouteCount = 0
+        isRerouting = false
+        distanceToNextManeuverMeters = nil
+        updateOverlay(distanceFromStart: 0)
+        sendWatchSnapshot(force: true)
+        speak("Route updated.")
     }
 
     private func sendWatchSnapshot(

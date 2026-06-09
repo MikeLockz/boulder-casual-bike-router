@@ -22,7 +22,12 @@ const Navigation = (() => {
         routeId: null,
         lastLoggedPosition: null,
         lastLoggedTime: 0,
-        idleAnchorPosition: null
+        idleAnchorPosition: null,
+        destination: null,
+        rerouteWeights: {},
+        rerouteOffsets: null,
+        offRouteCount: 0,
+        isRerouting: false
     };
 
     // --- Constants ---
@@ -34,7 +39,7 @@ const Navigation = (() => {
     const ANNOUNCED_CONFIRM = new Set();
 
     // --- Public API ---
-    function start(segments, mapInstance) {
+    function start(segments, mapInstance, rerouteParams) {
         if (state.active) return;
 
         state.segments = segments;
@@ -43,6 +48,13 @@ const Navigation = (() => {
         state.currentManeuverIdx = 0;
         state.active = true;
         state.muted = false;
+        state.destination = state.routeCoords.length > 0
+            ? { lat: state.routeCoords[state.routeCoords.length - 1][0], lng: state.routeCoords[state.routeCoords.length - 1][1] }
+            : null;
+        state.rerouteWeights = rerouteParams?.weights ?? {};
+        state.rerouteOffsets = rerouteParams?.offsets ?? null;
+        state.offRouteCount = 0;
+        state.isRerouting = false;
         ANNOUNCED_PRE.clear();
         ANNOUNCED_CONFIRM.clear();
 
@@ -181,6 +193,9 @@ const Navigation = (() => {
         state.maneuvers = [];
         state.routeCoords = [];
         state.segments = [];
+        state.destination = null;
+        state.offRouteCount = 0;
+        state.isRerouting = false;
         ANNOUNCED_PRE.clear();
         ANNOUNCED_CONFIRM.clear();
     }
@@ -251,6 +266,17 @@ const Navigation = (() => {
 
         // Check maneuver proximity
         checkManeuvers();
+
+        // Off-route detection with debounce
+        const routeProgress = getRouteProgressMeters();
+        if (routeProgress && routeProgress.distanceFromRoute > 50) {
+            state.offRouteCount++;
+            if (state.offRouteCount >= 4 && !state.isRerouting && state.destination) {
+                triggerReroute(mapInstance);
+            }
+        } else {
+            state.offRouteCount = 0;
+        }
 
         // Update bottom bar
         updateBottomBar();
@@ -511,6 +537,55 @@ const Navigation = (() => {
                 speak(`${maneuver.instruction}`);
             }
         }
+    }
+
+    // --- Rerouting ---
+    async function triggerReroute(mapInstance) {
+        if (state.isRerouting || !state.destination || !state.position) return;
+        state.isRerouting = true;
+        state.offRouteCount = 0;
+        speak('Rerouting.');
+
+        const apiBase = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+            ? 'http://localhost:3001'
+            : '';
+
+        try {
+            const response = await fetch(`${apiBase}/api/route`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    start_lat: state.position.lat,
+                    start_lon: state.position.lng,
+                    end_lat: state.destination.lat,
+                    end_lon: state.destination.lng,
+                    waypoints: [],
+                    weights: state.rerouteWeights,
+                    offsets: state.rerouteOffsets
+                })
+            });
+            const data = await response.json();
+            if (data.error || !data.segments || data.segments.length === 0) {
+                throw new Error(data.error || 'Empty route response');
+            }
+            applyReroute(data.segments, mapInstance);
+        } catch (err) {
+            console.error('[Navigation] Reroute failed:', err);
+            state.isRerouting = false;
+        }
+    }
+
+    function applyReroute(newSegments, mapInstance) {
+        state.segments = newSegments;
+        state.routeCoords = flattenSegments(newSegments);
+        state.maneuvers = buildManeuvers(newSegments);
+        state.currentManeuverIdx = 0;
+        state.offRouteCount = 0;
+        state.isRerouting = false;
+        ANNOUNCED_PRE.clear();
+        ANNOUNCED_CONFIRM.clear();
+        if (window.drawRoute) window.drawRoute(newSegments);
+        speak('Route updated.');
     }
 
     // --- Voice ---

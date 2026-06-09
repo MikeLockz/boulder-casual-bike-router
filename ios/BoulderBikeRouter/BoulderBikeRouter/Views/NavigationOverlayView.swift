@@ -58,17 +58,6 @@ struct NavigationOverlayView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
             
-            // Progress Line matching mockups
-            ZStack(alignment: .leading) {
-                Rectangle()
-                    .fill(Color.white.opacity(0.05))
-                    .frame(height: 5)
-                
-                Rectangle()
-                    .fill(Color.primaryMint)
-                    .frame(width: 200, height: 5) // Mock progress width
-                    .shadow(color: Color.primaryMint.opacity(0.5), radius: 4, x: 0, y: 0)
-            }
         }
         .background(Color.forestDeep)
         .cornerRadius(12)

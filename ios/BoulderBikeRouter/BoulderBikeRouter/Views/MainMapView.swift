@@ -30,6 +30,18 @@ struct MainMapView: View {
     @State private var startAutocompleteTask: Task<Void, Never>? = nil
     @State private var endAutocompleteTask: Task<Void, Never>? = nil
     @State private var suppressNextEndAutocomplete: Bool = false
+    @State private var showPlaygroundList: Bool = false
+    @State private var keyboardHeight: CGFloat = 0
+    @State private var endRowBottomY: CGFloat = 0
+    @FocusState private var focusedField: SearchField?
+
+    private var listMaxHeight: CGFloat {
+        guard endRowBottomY > 0 else { return 260 }
+        let available = UIScreen.main.bounds.height - keyboardHeight - endRowBottomY - 16
+        return max(80, available)
+    }
+
+    private enum SearchField { case destination }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -51,6 +63,9 @@ struct MainMapView: View {
                         mapSelectionBanner
                     } else if isSearchExpanded {
                         routePlanningPanel
+                            .onPreferenceChange(EndRowBottomKey.self) { value in
+                                endRowBottomY = value
+                            }
                     } else {
                         collapsedSearchBar
                     }
@@ -218,6 +233,14 @@ struct MainMapView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notif in
+            if let frame = notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = frame.height }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = 0 }
+        }
     }
 
     // MARK: - Actions
@@ -316,7 +339,13 @@ struct MainMapView: View {
         #endif
         
         let navigationDestinationName = routeTitle == "Custom Route" ? nil : routeTitle
-        navigationManager.start(segments: route.segments, modelContext: modelContext, destinationName: navigationDestinationName)
+        navigationManager.start(
+            segments: route.segments,
+            modelContext: modelContext,
+            destinationName: navigationDestinationName,
+            weights: viewModel.weights,
+            offsets: viewModel.routeOffsets.isEmpty ? nil : viewModel.routeOffsets
+        )
         locationManager.startUpdating()
     }
 
@@ -382,6 +411,9 @@ struct MainMapView: View {
                 withAnimation(.spring()) {
                     isSearchExpanded = true
                 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    focusedField = .destination
+                }
             }) {
                 if viewModel.routeResponse != nil && viewModel.endLocation != nil {
                     Image(systemName: "magnifyingglass")
@@ -428,6 +460,7 @@ struct MainMapView: View {
                 Spacer()
                 
                 Button(action: {
+                    focusedField = nil
                     withAnimation(.spring()) {
                         isSearchExpanded = false
                     }
@@ -513,6 +546,7 @@ struct MainMapView: View {
                             viewModel.setEndLocation(coord)
                         }
                     })
+                    .focused($focusedField, equals: .destination)
                     .onChange(of: endLocationText) { _, newValue in
                         if suppressNextEndAutocomplete {
                             suppressNextEndAutocomplete = false
@@ -522,6 +556,7 @@ struct MainMapView: View {
                             }
                             return
                         }
+                        if showPlaygroundList { showPlaygroundList = false }
                         schedulePlaceAutocomplete(target: "end", query: newValue)
                     }
                     .textFieldStyle(PlainTextFieldStyle())
@@ -530,15 +565,13 @@ struct MainMapView: View {
                     
                     Spacer()
                     
-                    Menu {
-                        ForEach(viewModel.playgroundsList) { pg in
-                            Button(pg.name) {
-                                viewModel.selectPlayground(pg)
-                            }
+                    Button(action: {
+                        withAnimation {
+                            showPlaygroundList.toggle()
                         }
-                    } label: {
+                    }) {
                         Image(systemName: "figure.play")
-                            .foregroundColor(.primaryMint)
+                            .foregroundColor(showPlaygroundList ? .mintGlow : .primaryMint)
                     }
 
                     Button(action: {
@@ -563,13 +596,22 @@ struct MainMapView: View {
                 .background(Color.forestDeep.opacity(0.5))
                 .cornerRadius(8)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
-
-                placeSuggestionList(
-                    viewModel.endPlaceSuggestions,
-                    target: "end",
-                    searchCompleted: viewModel.endPlaceSearchCompleted,
-                    query: viewModel.endPlaceSearchQuery
+                .overlay(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: EndRowBottomKey.self, value: geo.frame(in: .global).maxY)
+                    }
                 )
+
+                if showPlaygroundList {
+                    playgroundSelectionList
+                } else {
+                    placeSuggestionList(
+                        viewModel.endPlaceSuggestions,
+                        target: "end",
+                        searchCompleted: viewModel.endPlaceSearchCompleted,
+                        query: viewModel.endPlaceSearchQuery
+                    )
+                }
             }
         }
         .padding(16)
@@ -583,27 +625,84 @@ struct MainMapView: View {
     @ViewBuilder
     private func placeSuggestionList(_ suggestions: [PlaceSuggestion], target: String, searchCompleted: Bool, query: String) -> some View {
         if !suggestions.isEmpty || searchCompleted {
+            ScrollView {
+                VStack(spacing: 0) {
+                    if suggestions.isEmpty {
+                        Text(query.isEmpty ? "0 results found" : "0 results found for \"\(query)\"")
+                            .font(.system(size: 13))
+                            .foregroundColor(.onSurfaceVariant)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                    } else {
+                        ForEach(suggestions) { suggestion in
+                            Button(action: {
+                                viewModel.selectPlaceSuggestion(suggestion, target: target)
+                            }) {
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(suggestion.name)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(.onSurface)
+                                            .lineLimit(1)
+
+                                        Text(suggestion.type)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.onSurfaceVariant)
+                                            .lineLimit(1)
+                                    }
+
+                                    Spacer()
+
+                                    Image(systemName: "mappin.circle")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.primaryMint)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                            }
+                            .buttonStyle(.plain)
+
+                            if suggestion.id != suggestions.last?.id {
+                                Divider()
+                                    .background(Color.onSurfaceVariant.opacity(0.15))
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: listMaxHeight)
+            .background(Color.forestDeep.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primaryMint.opacity(0.16), lineWidth: 1))
+        }
+    }
+
+    @ViewBuilder
+    private var playgroundSelectionList: some View {
+        ScrollView {
             VStack(spacing: 0) {
-                if suggestions.isEmpty {
-                    Text(query.isEmpty ? "0 results found" : "0 results found for \"\(query)\"")
+                if viewModel.playgroundsList.isEmpty {
+                    Text("No playgrounds available")
                         .font(.system(size: 13))
                         .foregroundColor(.onSurfaceVariant)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                 } else {
-                    ForEach(suggestions) { suggestion in
+                    ForEach(viewModel.playgroundsList) { pg in
                         Button(action: {
-                            viewModel.selectPlaceSuggestion(suggestion, target: target)
+                            viewModel.selectPlayground(pg)
+                            withAnimation { showPlaygroundList = false }
                         }) {
                             HStack(spacing: 10) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(suggestion.name)
+                                    Text(pg.name)
                                         .font(.system(size: 13, weight: .semibold))
                                         .foregroundColor(.onSurface)
                                         .lineLimit(1)
 
-                                    Text(suggestion.type)
+                                    Text("Playground")
                                         .font(.system(size: 11))
                                         .foregroundColor(.onSurfaceVariant)
                                         .lineLimit(1)
@@ -611,7 +710,7 @@ struct MainMapView: View {
 
                                 Spacer()
 
-                                Image(systemName: "mappin.circle")
+                                Image(systemName: "figure.play")
                                     .font(.system(size: 14))
                                     .foregroundColor(.primaryMint)
                             }
@@ -620,17 +719,18 @@ struct MainMapView: View {
                         }
                         .buttonStyle(.plain)
 
-                        if suggestion.id != suggestions.last?.id {
+                        if pg.id != viewModel.playgroundsList.last?.id {
                             Divider()
                                 .background(Color.onSurfaceVariant.opacity(0.15))
                         }
                     }
                 }
             }
-            .background(Color.forestDeep.opacity(0.92))
-            .cornerRadius(8)
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primaryMint.opacity(0.16), lineWidth: 1))
         }
+        .frame(maxHeight: listMaxHeight)
+        .background(Color.forestDeep.opacity(0.92))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primaryMint.opacity(0.16), lineWidth: 1))
     }
 
     private func schedulePlaceAutocomplete(target: String, query: String) {
@@ -973,6 +1073,13 @@ struct MainMapView: View {
         }
         return nil
     }
+}
+
+// MARK: - Preference Keys
+
+private struct EndRowBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 // MARK: - Subviews: User Location Marker

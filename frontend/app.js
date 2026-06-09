@@ -823,7 +823,10 @@ function initEventListeners() {
     if (navBtn) {
         navBtn.addEventListener("click", () => {
             if (window.lastRouteSegments && window.lastRouteSegments.length > 0) {
-                Navigation.start(window.lastRouteSegments, map);
+                Navigation.start(window.lastRouteSegments, map, {
+                    weights: getWeightsFromSliders(),
+                    offsets: getRouteOffsetsFromEditor()
+                });
             } else {
                 alert("No route to navigate. Compute a route first.");
             }
@@ -3880,6 +3883,7 @@ async function syncPendingRoutes() {
     }
 }
 window.syncPendingRoutes = syncPendingRoutes;
+window.drawRoute = drawRoute;
 
 async function loadHistory() {
     const historyListContainer = document.getElementById("history-list");
