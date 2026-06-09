@@ -24,6 +24,17 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
 # Scratch
 scratch_config.json
 *.log

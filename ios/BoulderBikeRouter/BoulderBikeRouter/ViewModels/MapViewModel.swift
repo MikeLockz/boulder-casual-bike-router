@@ -57,10 +57,13 @@ class MapViewModel {
     // SwiftData Context & Services
     var modelContext: ModelContext? = nil {
         didSet {
+            syncService = modelContext.map { SyncService(modelContext: $0) }
             if modelContext != nil {
-                Task {
+                Task(priority: .background) {
                     await syncService?.syncPendingRoutes()
                     await syncService?.syncPendingRouteTuningProfiles()
+                }
+                Task {
                     await loadRouteTuningProfiles()
                     await loadHomeLocation()
                     await loadHistory()
@@ -68,11 +71,8 @@ class MapViewModel {
             }
         }
     }
-    
-    var syncService: SyncService? {
-        guard let context = modelContext else { return nil }
-        return SyncService(modelContext: context)
-    }
+
+    private(set) var syncService: SyncService? = nil
     
     var isCloudSyncEnabled: Bool {
         get {
@@ -116,12 +116,18 @@ class MapViewModel {
     init() {
         // Populate local fallback configurations so the app works offline
         loadLocalFallbacks()
-        
-        // Load telemetry history asynchronously
-        Task {
-            await loadHistory()
+
+        // Apply cached config from last successful fetch so real presets appear before the network call completes
+        if let data = UserDefaults.standard.data(forKey: "cached_config_v1"),
+           let cached = try? JSONDecoder().decode(CachedConfig.self, from: data) {
+            presets = cached.presets
+            weightsMetadata = cached.weightsMetadata
+            playgroundsList = cached.playgrounds
+            var w: [String: Double] = [:]
+            for wm in cached.weightsMetadata { w[wm.key] = wm.default }
+            weights = w
         }
-        
+
         // Listen for updates when a route ends
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("TelemetryRouteEnded"),
@@ -172,8 +178,15 @@ class MapViewModel {
             let playgrounds = try await apiService.fetchPlaygrounds()
             await MainActor.run {
                 self.playgroundsList = playgrounds
+                // Cache for instant preset display on next launch
+                if let data = try? JSONEncoder().encode(CachedConfig(
+                    presets: self.presets,
+                    weightsMetadata: self.weightsMetadata,
+                    playgrounds: playgrounds
+                )) {
+                    UserDefaults.standard.set(data, forKey: "cached_config_v1")
+                }
             }
-            await loadRouteTuningProfiles()
         } catch {
             print("Failed to load configurations from API backend. Using local fallbacks. Error: \(error.localizedDescription)")
             await MainActor.run {
@@ -1017,4 +1030,10 @@ class MapViewModel {
             await loadHistory()
         }
     }
+}
+
+private struct CachedConfig: Codable {
+    let presets: [PresetConfig]
+    let weightsMetadata: [WeightConfig]
+    let playgrounds: [Playground]
 }

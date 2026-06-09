@@ -386,39 +386,43 @@ struct MainMapView: View {
     // MARK: - Route Planner Helpers
     
     private var collapsedSearchBar: some View {
-        Button(action: {
-            withAnimation(.spring()) {
-                isSearchExpanded = true
-            }
-        }) {
-            if viewModel.routeResponse != nil && viewModel.endLocation != nil {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.primaryMint)
-                    .frame(width: 48, height: 48)
-                    .background(Color.surfaceElevated.opacity(0.95))
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
-            } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.primaryMint)
-
-                    Text(viewModel.endLocation == nil ? "Where to?" : "Route Planned")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(viewModel.endLocation == nil ? .onSurfaceVariant : .onSurface)
-
-                    Spacer()
+        HStack {
+            Button(action: {
+                withAnimation(.spring()) {
+                    isSearchExpanded = true
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.surfaceElevated.opacity(0.95))
-                .cornerRadius(24)
-                .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+            }) {
+                if viewModel.routeResponse != nil && viewModel.endLocation != nil {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(.primaryMint)
+                        .frame(width: 48, height: 48)
+                        .background(Color.surfaceElevated.opacity(0.95))
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+                } else {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.primaryMint)
+
+                        Text(viewModel.endLocation == nil ? "Where to?" : "Route Planned")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(viewModel.endLocation == nil ? .onSurfaceVariant : .onSurface)
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.surfaceElevated.opacity(0.95))
+                    .cornerRadius(24)
+                    .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color.onSurfaceVariant.opacity(0.15), lineWidth: 1))
+                }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open route search")
+
+            Spacer()
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Open route search")
         .padding(.horizontal, 16)
         .padding(.top, 50)
     }
