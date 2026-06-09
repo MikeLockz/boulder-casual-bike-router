@@ -25,6 +25,7 @@ let inspectModeActive = false;
 let inspectHighlightLayer = null;
 let homeLocation = null;
 let homeSelectionActive = false;
+const HOME_PROXIMITY_METERS = 50;
 let pendingHomeLatLng = null;
 let pendingHomeMarker = null;
 let homeRouteMarker = null;
@@ -395,6 +396,20 @@ function formatCoordinateInput(latlng) {
     return `${latlng.lat.toFixed(6)}, ${latlng.lng.toFixed(6)}`;
 }
 
+function labelForLocation(latlng) {
+    if (homeLocation) {
+        const dist = getLatLngDistance(latlng.lat, latlng.lng, homeLocation.lat, homeLocation.lng);
+        if (dist <= HOME_PROXIMITY_METERS) return "Home";
+    }
+    return formatCoordinateInput(latlng);
+}
+
+function updateClearButton(target, hasValue) {
+    const btn = document.getElementById(target === "start" ? "btn-clear-start" : "btn-clear-end");
+    if (!btn) return;
+    btn.classList.toggle("hidden", !hasValue);
+}
+
 function parseCoordinateInput(value) {
     const parts = String(value || "").split(",").map(part => part.trim());
     if (parts.length !== 2) return null;
@@ -406,12 +421,16 @@ function parseCoordinateInput(value) {
 
 function updateRouteInput(target, latlng) {
     const input = document.getElementById(target === "start" ? "route-start-input" : "route-end-input");
-    if (input) input.value = formatCoordinateInput(latlng);
+    if (!input) return;
+    input.value = labelForLocation(latlng);
+    updateClearButton(target, Boolean(input.value));
 }
 
 function updateRouteInputValue(target, value) {
     const input = document.getElementById(target === "start" ? "route-start-input" : "route-end-input");
-    if (input) input.value = value;
+    if (!input) return;
+    input.value = value;
+    updateClearButton(target, Boolean(value));
 }
 
 function setCurrentRouteTitle(title) {
@@ -428,10 +447,17 @@ function hideAutocompleteSuggestions(target) {
     suggestions.classList.add("hidden");
 }
 
+function setNavBtnHiddenForSearch(hidden) {
+    const navBtn = document.getElementById("btn-start-nav");
+    if (!navBtn) return;
+    navBtn.classList.toggle("nav-btn-search-hidden", hidden);
+}
+
 function renderAutocompleteSuggestions(target, places, query = "") {
     const suggestions = document.getElementById(target === "start" ? "route-start-suggestions" : "route-end-suggestions");
     if (!suggestions) return;
 
+    setNavBtnHiddenForSearch(true);
     suggestions.innerHTML = "";
     if (!places.length) {
         const empty = document.createElement("div");
@@ -453,7 +479,8 @@ function renderAutocompleteSuggestions(target, places, query = "") {
         name.textContent = place.name;
         const meta = document.createElement("span");
         meta.className = "route-place-meta";
-        meta.textContent = place.type || "place";
+        const rawType = place.type || "place";
+        meta.textContent = rawType.replace(/_/g, " ").replace(/^\w/, c => c.toUpperCase());
         button.append(name, meta);
         button.addEventListener("mousedown", (event) => {
             event.preventDefault();
@@ -540,7 +567,7 @@ function setRoutePoint(target, latlngLike, options = {}) {
         setCurrentRouteTitle(options.routeTitle || options.label);
     }
 
-    updateRouteInputValue(target, options.label || formatCoordinateInput(latlng));
+    updateRouteInputValue(target, options.label || labelForLocation(latlng));
     if (startMarker && endMarker) {
         calculateRoute();
     }
@@ -700,11 +727,16 @@ function initEventListeners() {
     const saveHomePinBtn = document.getElementById("btn-save-home-pin");
 
     if (startInput) {
+        startInput.addEventListener("focus", () => setNavBtnHiddenForSearch(true));
         startInput.addEventListener("input", () => {
+            updateClearButton("start", Boolean(startInput.value));
             handleAutocompleteInput("start", startInput.value);
         });
         startInput.addEventListener("blur", () => {
-            setTimeout(() => hideAutocompleteSuggestions("start"), 120);
+            setTimeout(() => {
+                hideAutocompleteSuggestions("start");
+                if (document.activeElement !== endInput) setNavBtnHiddenForSearch(false);
+            }, 120);
         });
         startInput.addEventListener("change", () => {
             const latlng = parseCoordinateInput(startInput.value);
@@ -713,15 +745,47 @@ function initEventListeners() {
     }
 
     if (endInput) {
+        endInput.addEventListener("focus", () => setNavBtnHiddenForSearch(true));
         endInput.addEventListener("input", () => {
+            updateClearButton("end", Boolean(endInput.value));
             handleAutocompleteInput("end", endInput.value);
         });
         endInput.addEventListener("blur", () => {
-            setTimeout(() => hideAutocompleteSuggestions("end"), 120);
+            setTimeout(() => {
+                hideAutocompleteSuggestions("end");
+                if (document.activeElement !== startInput) setNavBtnHiddenForSearch(false);
+            }, 120);
         });
         endInput.addEventListener("change", () => {
             const latlng = parseCoordinateInput(endInput.value);
             if (latlng) setRoutePoint("end", latlng, { popup: "Destination" });
+        });
+    }
+
+    const clearStartBtn = document.getElementById("btn-clear-start");
+    if (clearStartBtn) {
+        clearStartBtn.addEventListener("click", () => {
+            if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+            if (startInput) startInput.value = "";
+            updateClearButton("start", false);
+            hideAutocompleteSuggestions("start");
+            if (!endMarker) {
+                clearPolylines();
+                document.getElementById("route-info").classList.add("hidden");
+            }
+        });
+    }
+
+    const clearEndBtn = document.getElementById("btn-clear-end");
+    if (clearEndBtn) {
+        clearEndBtn.addEventListener("click", () => {
+            if (endMarker) { map.removeLayer(endMarker); endMarker = null; }
+            if (endInput) endInput.value = "";
+            updateClearButton("end", false);
+            hideAutocompleteSuggestions("end");
+            setCurrentRouteTitle();
+            clearPolylines();
+            document.getElementById("route-info").classList.add("hidden");
         });
     }
 
@@ -1393,6 +1457,8 @@ function clearRoute() {
     const endInput = document.getElementById("route-end-input");
     if (startInput) startInput.value = "";
     if (endInput) endInput.value = "";
+    updateClearButton("start", false);
+    updateClearButton("end", false);
     hideAutocompleteSuggestions("start");
     hideAutocompleteSuggestions("end");
     setCurrentRouteTitle();
@@ -3483,7 +3549,9 @@ function setHomeAsRoutePoint(target) {
     setRoutePoint(target, [homeLocation.lat, homeLocation.lng], {
         popup: "Home",
         icon: createCustomIcon("home"),
-        startLabel: target === "start" ? "Home" : undefined
+        label: "Home",
+        startLabel: target === "start" ? "Home" : undefined,
+        routeTitle: target === "end" ? "Home" : undefined
     });
     showToast(target === "start" ? "Home set as start." : "Home set as destination.");
 }

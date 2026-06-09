@@ -71,7 +71,8 @@
                         <div class="route-planner-inputs" aria-label="Route planner coordinates">
                             <div class="route-planner-row">
                                 <i class="fa-solid fa-circle route-point-dot start"></i>
-                                <input type="text" id="route-start-input" class="route-coordinate-input" placeholder="Start Location (lat, lng)">
+                                <input type="text" id="route-start-input" class="route-coordinate-input" placeholder="Start Location">
+                                <button type="button" id="btn-clear-start" class="route-input-clear hidden" title="Clear start"><i class="fa-solid fa-xmark"></i></button>
                                 <div class="route-planner-actions">
                                     <button type="button" id="btn-start-current" class="route-planner-action" title="Use current location for start">
                                         <i class="fa-solid fa-location-crosshairs"></i>
@@ -87,7 +88,8 @@
                             </div>
                             <div class="route-planner-row">
                                 <i class="fa-solid fa-square route-point-dot end"></i>
-                                <input type="text" id="route-end-input" class="route-coordinate-input" placeholder="Destination (lat, lng)">
+                                <input type="text" id="route-end-input" class="route-coordinate-input" placeholder="Destination">
+                                <button type="button" id="btn-clear-end" class="route-input-clear hidden" title="Clear destination"><i class="fa-solid fa-xmark"></i></button>
                                 <div class="route-planner-actions">
                                     <button type="button" id="btn-end-playground" class="route-planner-action" title="Choose a playground destination">
                                         <i class="fa-solid fa-child-reaching"></i>

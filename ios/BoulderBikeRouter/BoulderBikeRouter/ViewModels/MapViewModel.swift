@@ -37,6 +37,7 @@ class MapViewModel {
     // Selection states
     var selectedPresetName: String?
     var selectedPlayground: Playground?
+    var selectedStartName: String?
     var selectedDestinationName: String?
     var playgroundsList: [Playground] = []
     var showOfficialRoutesLayer: Bool = false
@@ -241,8 +242,9 @@ class MapViewModel {
         }
     }
 
-    func setStartLocation(_ coordinate: CLLocationCoordinate2D) {
+    func setStartLocation(_ coordinate: CLLocationCoordinate2D, startName: String? = nil) {
         startLocation = coordinate
+        selectedStartName = startName
         selectedPresetName = nil
         Task {
             await fetchRoute()
@@ -307,7 +309,7 @@ class MapViewModel {
     @MainActor
     func selectPlaceSuggestion(_ suggestion: PlaceSuggestion, target: String) {
         if target == "start" {
-            setStartLocation(suggestion.coordinate)
+            setStartLocation(suggestion.coordinate, startName: suggestion.name)
         } else {
             setEndLocation(suggestion.coordinate, destinationName: suggestion.name)
         }

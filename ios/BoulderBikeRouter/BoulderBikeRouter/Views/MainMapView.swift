@@ -10,6 +10,7 @@ enum MapSelectionTarget {
 struct MainMapView: View {
     var viewModel: MapViewModel
     @Binding var isDrawerOpen: Bool
+    @Binding var isNavigationActive: Bool
     @State private var locationManager = LocationManager()
     @State private var navigationManager = NavigationManager()
     @Environment(\.modelContext) private var modelContext
@@ -29,6 +30,7 @@ struct MainMapView: View {
     @State private var endLocationText: String = ""
     @State private var startAutocompleteTask: Task<Void, Never>? = nil
     @State private var endAutocompleteTask: Task<Void, Never>? = nil
+    @State private var suppressNextStartAutocomplete: Bool = false
     @State private var suppressNextEndAutocomplete: Bool = false
     @State private var showPlaygroundList: Bool = false
     @State private var keyboardHeight: CGFloat = 0
@@ -41,7 +43,11 @@ struct MainMapView: View {
         return max(80, available)
     }
 
-    private enum SearchField { case destination }
+    private enum SearchField { case start, destination }
+
+    private var shouldHideRouteOverviewForSearch: Bool {
+        keyboardHeight > 0 && focusedField != nil
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -64,6 +70,7 @@ struct MainMapView: View {
                     } else if isSearchExpanded {
                         routePlanningPanel
                             .onPreferenceChange(EndRowBottomKey.self) { value in
+                                guard abs(endRowBottomY - value) > 0.5 else { return }
                                 endRowBottomY = value
                             }
                     } else {
@@ -98,7 +105,9 @@ struct MainMapView: View {
                 if viewModel.isSelectingHomeLocation {
                     homeSaveCard
                 } else {
-                    routeOverviewCard
+                    if !shouldHideRouteOverviewForSearch {
+                        routeOverviewCard
+                    }
                 }
             } else {
                 // 3. Navigation HUD Overlay
@@ -137,10 +146,24 @@ struct MainMapView: View {
                 locationManager.startUpdating()
             }
             if let start = viewModel.startLocation {
-                startLocationText = String(format: "%.4f, %.4f", start.latitude, start.longitude)
+                if let name = viewModel.selectedStartName, !name.isEmpty {
+                    startLocationText = name
+                } else if let home = viewModel.homeLocation,
+                          coordinateDistance(start, to: home.coordinate) <= 20 {
+                    startLocationText = "Home"
+                } else {
+                    startLocationText = String(format: "%.4f, %.4f", start.latitude, start.longitude)
+                }
             }
             if let end = viewModel.endLocation {
-                endLocationText = String(format: "%.4f, %.4f", end.latitude, end.longitude)
+                if let name = viewModel.selectedDestinationName, !name.isEmpty {
+                    endLocationText = name
+                } else if let home = viewModel.homeLocation,
+                          coordinateDistance(end, to: home.coordinate) <= 50 {
+                    endLocationText = "Home"
+                } else {
+                    endLocationText = String(format: "%.4f, %.4f", end.latitude, end.longitude)
+                }
             }
             seedHomeSelectionFromCurrentLocation()
             // MainMapView is recreated on every tab switch, so onChange won't fire for
@@ -190,16 +213,39 @@ struct MainMapView: View {
         .onChange(of: viewModel.startLocation) { _, newLoc in
             DispatchQueue.main.async {
                 if let loc = newLoc {
-                    startLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
+                    if let name = viewModel.selectedStartName, !name.isEmpty {
+                        suppressNextStartAutocomplete = true
+                        startLocationText = name
+                    } else if let home = viewModel.homeLocation,
+                              coordinateDistance(loc, to: home.coordinate) <= 20 {
+                        startLocationText = "Home"
+                    } else {
+                        startLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
+                    }
                 } else {
                     startLocationText = ""
                 }
             }
         }
+        .onChange(of: viewModel.homeLocation) { _, newHome in
+            // Home may load after startLocation is already set; re-evaluate the label.
+            guard let home = newHome,
+                  let startLoc = viewModel.startLocation,
+                  viewModel.selectedStartName == nil || viewModel.selectedStartName!.isEmpty else { return }
+            if coordinateDistance(startLoc, to: home.coordinate) <= 20 {
+                suppressNextStartAutocomplete = true
+                startLocationText = "Home"
+            }
+        }
         .onChange(of: viewModel.endLocation) { _, newLoc in
             DispatchQueue.main.async {
                 if let loc = newLoc {
-                    endLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
+                    if let home = viewModel.homeLocation,
+                       coordinateDistance(loc, to: home.coordinate) <= 50 {
+                        endLocationText = "Home"
+                    } else {
+                        endLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
+                    }
                 } else {
                     endLocationText = ""
                 }
@@ -239,7 +285,11 @@ struct MainMapView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            focusedField = nil
             withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = 0 }
+        }
+        .onChange(of: navigationManager.isActive) { _, isActive in
+            isNavigationActive = isActive
         }
     }
 
@@ -346,6 +396,7 @@ struct MainMapView: View {
             weights: viewModel.weights,
             offsets: viewModel.routeOffsets.isEmpty ? nil : viewModel.routeOffsets
         )
+        isNavigationActive = navigationManager.isActive
         locationManager.startUpdating()
     }
 
@@ -354,6 +405,7 @@ struct MainMapView: View {
         viewModel.recordCompletedRoute()
         
         navigationManager.stop()
+        isNavigationActive = navigationManager.isActive
         locationManager.stopUpdating()
         locationManager.isSimulating = false
         
@@ -479,23 +531,49 @@ struct MainMapView: View {
                     Image(systemName: "circle.fill")
                         .font(.system(size: 8))
                         .foregroundColor(.primaryMint)
-                    
-                    TextField("Start Location (lat, lon)", text: $startLocationText, onCommit: {
+
+                    TextField("Start Location", text: $startLocationText, onCommit: {
                         if let coord = parseCoordinate(from: startLocationText) {
+                            focusedField = nil
                             viewModel.setStartLocation(coord)
                         }
                     })
+                    .focused($focusedField, equals: .start)
                     .onChange(of: startLocationText) { _, newValue in
+                        if suppressNextStartAutocomplete {
+                            suppressNextStartAutocomplete = false
+                            startAutocompleteTask?.cancel()
+                            Task { @MainActor in
+                                viewModel.clearPlaceSuggestions(target: "start")
+                            }
+                            return
+                        }
                         schedulePlaceAutocomplete(target: "start", query: newValue)
                     }
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 14))
                     .foregroundColor(.onSurface)
-                    
+
+                    if !startLocationText.isEmpty {
+                        Button(action: {
+                            startLocationText = ""
+                            viewModel.startLocation = nil
+                            viewModel.selectedStartName = nil
+                            startAutocompleteTask?.cancel()
+                            Task { @MainActor in viewModel.clearPlaceSuggestions(target: "start") }
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.onSurfaceVariant)
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     Spacer()
-                    
+
                     Button(action: {
                         if let userLoc = locationManager.currentLocation {
+                            focusedField = nil
                             viewModel.setStartLocation(userLoc.coordinate)
                         }
                     }) {
@@ -505,7 +583,8 @@ struct MainMapView: View {
 
                     Button(action: {
                         if let home = viewModel.homeLocation {
-                            viewModel.setStartLocation(home.coordinate)
+                            focusedField = nil
+                            viewModel.setStartLocation(home.coordinate, startName: "Home")
                         }
                     }) {
                         Image(systemName: "house.fill")
@@ -514,6 +593,7 @@ struct MainMapView: View {
                     .disabled(viewModel.homeLocation == nil)
 
                     Button(action: {
+                        focusedField = nil
                         withAnimation {
                             mapSelectionMode = .start
                         }
@@ -540,9 +620,10 @@ struct MainMapView: View {
                     Image(systemName: "square.fill")
                         .font(.system(size: 8))
                         .foregroundColor(.errorRose)
-                    
-                    TextField("Destination (lat, lon)", text: $endLocationText, onCommit: {
+
+                    TextField("Destination", text: $endLocationText, onCommit: {
                         if let coord = parseCoordinate(from: endLocationText) {
+                            focusedField = nil
                             viewModel.setEndLocation(coord)
                         }
                     })
@@ -562,10 +643,27 @@ struct MainMapView: View {
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 14))
                     .foregroundColor(.onSurface)
-                    
+
+                    if !endLocationText.isEmpty {
+                        Button(action: {
+                            endLocationText = ""
+                            viewModel.endLocation = nil
+                            viewModel.selectedDestinationName = nil
+                            endAutocompleteTask?.cancel()
+                            Task { @MainActor in viewModel.clearPlaceSuggestions(target: "end") }
+                            showPlaygroundList = false
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.onSurfaceVariant)
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     Spacer()
-                    
+
                     Button(action: {
+                        focusedField = nil
                         withAnimation {
                             showPlaygroundList.toggle()
                         }
@@ -575,14 +673,16 @@ struct MainMapView: View {
                     }
 
                     Button(action: {
+                        focusedField = nil
                         viewModel.routeToHome(from: currentStartCoordinate())
                     }) {
                         Image(systemName: "house.fill")
                             .foregroundColor(viewModel.homeLocation == nil ? .onSurfaceVariant : .primaryMint)
                     }
                     .disabled(viewModel.homeLocation == nil)
-                    
+
                     Button(action: {
+                        focusedField = nil
                         withAnimation {
                             mapSelectionMode = .end
                         }
@@ -637,6 +737,7 @@ struct MainMapView: View {
                     } else {
                         ForEach(suggestions) { suggestion in
                             Button(action: {
+                                focusedField = nil
                                 viewModel.selectPlaceSuggestion(suggestion, target: target)
                             }) {
                                 HStack(spacing: 10) {
@@ -646,7 +747,7 @@ struct MainMapView: View {
                                             .foregroundColor(.onSurface)
                                             .lineLimit(1)
 
-                                        Text(suggestion.type)
+                                        Text(suggestion.type.replacingOccurrences(of: "_", with: " ").prefix(1).uppercased() + suggestion.type.replacingOccurrences(of: "_", with: " ").dropFirst())
                                             .font(.system(size: 11))
                                             .foregroundColor(.onSurfaceVariant)
                                             .lineLimit(1)
@@ -660,6 +761,7 @@ struct MainMapView: View {
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 9)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
 
@@ -693,7 +795,11 @@ struct MainMapView: View {
                     ForEach(viewModel.playgroundsList) { pg in
                         Button(action: {
                             viewModel.selectPlayground(pg)
-                            withAnimation { showPlaygroundList = false }
+                            viewModel.clearPlaceSuggestions(target: "end")
+                            withAnimation(.spring()) {
+                                showPlaygroundList = false
+                                isSearchExpanded = false
+                            }
                         }) {
                             HStack(spacing: 10) {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -716,6 +822,7 @@ struct MainMapView: View {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
 
@@ -1027,6 +1134,16 @@ struct MainMapView: View {
                 }
             }
 
+            // User Location Dot — placed as an Annotation so MapKit moves it with the map canvas.
+            // UserLocationMarker observes locationManager directly (at leaf-view level) so heading
+            // updates fire inside the annotation's own hosted SwiftUI view, bypassing MapKit's
+            // annotation-view cache which would otherwise suppress content-only re-renders.
+            if let userLoc = locationManager.currentLocation {
+                Annotation("User Location", coordinate: userLoc.coordinate) {
+                    UserLocationMarker(locationManager: locationManager)
+                }
+            }
+
             if let pendingHome = viewModel.pendingHomeCoordinate {
                 Annotation("Home", coordinate: pendingHome, anchor: .bottom) {
                     markerView(color: .mintGlow)
@@ -1043,14 +1160,6 @@ struct MainMapView: View {
         }
         .coordinateSpace(name: "mapCanvas")
         .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
-        .overlay(alignment: .topLeading) {
-            if let userLoc = locationManager.currentLocation,
-               let screenPoint = proxy.convert(userLoc.coordinate, to: .local) {
-                UserLocationMarker(heading: locationManager.currentHeading)
-                    .position(screenPoint)
-                    .allowsHitTesting(false)
-            }
-        }
         .onTapGesture { screenPoint in
             if viewModel.isSelectingHomeLocation {
                 if let coordinate = proxy.convert(screenPoint, from: .local) {
@@ -1073,21 +1182,31 @@ struct MainMapView: View {
         }
         return nil
     }
+
+    private func coordinateDistance(_ a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> CLLocationDistance {
+        CLLocation(latitude: a.latitude, longitude: a.longitude)
+            .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+    }
 }
 
 // MARK: - Preference Keys
 
 private struct EndRowBottomKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 // MARK: - Subviews: User Location Marker
 
 struct UserLocationMarker: View {
-    let heading: Double
+    /// Holds a direct reference to the @Observable LocationManager so that SwiftUI sets up
+    /// observation tracking here, inside the annotation's own hosted SwiftUI view.  This
+    /// guarantees heading changes re-render the arrow even when MapKit reuses a cached
+    /// MKAnnotationView and skips propagating parent-level content updates.
+    var locationManager: LocationManager
 
     var body: some View {
+        let heading = locationManager.currentHeading
         ZStack {
             Image(systemName: "triangle.fill")
                 .resizable()
@@ -1098,12 +1217,12 @@ struct UserLocationMarker: View {
                 .offset(y: -12)
                 .rotationEffect(.degrees(heading))
                 .animation(.easeInOut(duration: 0.2), value: heading)
-            
+
             Circle()
                 .fill(Color.white)
                 .frame(width: 16, height: 16)
                 .shadow(radius: 3)
-            
+
             Circle()
                 .fill(Color.primaryMint)
                 .frame(width: 10, height: 10)

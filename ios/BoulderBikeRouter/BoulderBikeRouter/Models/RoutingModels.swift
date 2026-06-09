@@ -569,18 +569,25 @@ struct DetailedRouteResponse: Codable {
 }
 
 private func mergeRoutePaths(_ paths: [[CLLocationCoordinate2D]]) -> [[CLLocationCoordinate2D]] {
-    paths.reduce(into: []) { mergedPaths, path in
+    // Join adjacent segments at their shared endpoints first
+    let merged = paths.reduce(into: [[CLLocationCoordinate2D]]()) { mergedPaths, path in
         guard path.count >= 2 else { return }
-        guard !mergedPaths.isEmpty else {
-            mergedPaths.append(path)
-            return
-        }
-
+        guard !mergedPaths.isEmpty else { mergedPaths.append(path); return }
         if mergedPaths[mergedPaths.count - 1].last?.isSameRoutePoint(as: path[0]) == true {
             mergedPaths[mergedPaths.count - 1].append(contentsOf: path.dropFirst())
         } else {
             mergedPaths.append(path)
         }
+    }
+    // Remove points within ~1 m of each other to prevent MapKit stroke triangulation failures
+    return merged.compactMap { path in
+        let deduped = path.reduce(into: [CLLocationCoordinate2D]()) { result, coord in
+            guard let last = result.last else { result.append(coord); return }
+            if abs(last.latitude - coord.latitude) > 0.00001 || abs(last.longitude - coord.longitude) > 0.00001 {
+                result.append(coord)
+            }
+        }
+        return deduped.count >= 2 ? deduped : nil
     }
 }
 

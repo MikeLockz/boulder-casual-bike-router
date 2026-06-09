@@ -733,6 +733,26 @@ def match_offstreet_for_edge(u, v, nodes, spatial_index):
     return "None", "Yes", "Yes"
 
 
+def _bike_edge_direction(tags, infra_type):
+    """
+    Determines valid travel direction(s) for a bike on this OSM way.
+    Returns: "both" | "forward" | "reverse"
+    """
+    oneway = tags.get("oneway", "")
+    bike_oneway = tags.get("oneway:bicycle", "")
+
+    # Dedicated bike infrastructure is bidirectional unless explicitly one-way for bikes.
+    if infra_type == "separated_path":
+        return "forward" if bike_oneway == "yes" else "both"
+
+    if oneway == "yes":
+        return "both" if bike_oneway == "no" else "forward"
+    if oneway == "-1":
+        return "both" if bike_oneway == "no" else "reverse"
+
+    return "both"
+
+
 def build_graph(weights=None):
     """Build the NetworkX routing graph from OSM JSON data."""
     global G_connected, nodes_global, safe_crossing_nodes_global, four_lane_nodes_global
@@ -746,7 +766,7 @@ def build_graph(weights=None):
         print(f"Graph will not be built. Routing will be unavailable.")
         return None
 
-    G = nx.Graph()
+    G = nx.DiGraph()
 
     # Load stress data and build spatial index
     try:
@@ -931,33 +951,28 @@ def build_graph(weights=None):
                             if facility_type in FACILITY_BONUS:
                                 edge_multiplier = multiplier * FACILITY_BONUS[facility_type]
                             weight = dist * edge_multiplier
-                            
-                            G.add_edge(u_side1, v_side1,
-                                       weight=weight,
-                                       length=dist,
-                                       type=infra_type,
-                                       multiplier=edge_multiplier,
-                                       name=way_name,
-                                       bikestress=stress_level,
-                                       facility_type=facility_type,
-                                       offstreet_type=offstreet_type,
-                                       bicycles_allowed=bicycles_allowed,
-                                       ebike_allowed=ebike_allowed,
-                                       way_id=way_id,
-                                       tags=tags)
-                            G.add_edge(u_side2, v_side2,
-                                       weight=weight,
-                                       length=dist,
-                                       type=infra_type,
-                                       multiplier=edge_multiplier,
-                                       name=way_name,
-                                       bikestress=stress_level,
-                                       facility_type=facility_type,
-                                       offstreet_type=offstreet_type,
-                                       bicycles_allowed=bicycles_allowed,
-                                       ebike_allowed=ebike_allowed,
-                                       way_id=way_id,
-                                       tags=tags)
+
+                            direction = _bike_edge_direction(tags, infra_type)
+                            edge_attrs = dict(
+                                weight=weight,
+                                length=dist,
+                                type=infra_type,
+                                multiplier=edge_multiplier,
+                                name=way_name,
+                                bikestress=stress_level,
+                                facility_type=facility_type,
+                                offstreet_type=offstreet_type,
+                                bicycles_allowed=bicycles_allowed,
+                                ebike_allowed=ebike_allowed,
+                                way_id=way_id,
+                                tags=tags,
+                            )
+                            if direction in ("both", "forward"):
+                                G.add_edge(u_side1, v_side1, **edge_attrs)
+                                G.add_edge(u_side2, v_side2, **edge_attrs)
+                            if direction in ("both", "reverse"):
+                                G.add_edge(v_side1, u_side1, **edge_attrs)
+                                G.add_edge(v_side2, u_side2, **edge_attrs)
                 
                 # Connect side1 and side2 at each node on this way
                 for nid in way_nodes:
@@ -980,6 +995,14 @@ def build_graph(weights=None):
                             G.add_node(nid_side1, lat=nodes[nid]["lat"], lon=nodes[nid]["lon"])
                             G.add_node(nid_side2, lat=nodes[nid]["lat"], lon=nodes[nid]["lon"])
                             G.add_edge(nid_side1, nid_side2,
+                                       weight=weight_crossing,
+                                       length=length_crossing,
+                                       type=crossing_type,
+                                       multiplier=crossing_multiplier,
+                                       name=crossing_name,
+                                       way_id=None,
+                                       tags=nodes[nid].get("tags", {}))
+                            G.add_edge(nid_side2, nid_side1,
                                        weight=weight_crossing,
                                        length=length_crossing,
                                        type=crossing_type,
@@ -1046,24 +1069,30 @@ def build_graph(weights=None):
                             G.add_node(u_name, lat=nodes[u]["lat"], lon=nodes[u]["lon"])
                         if not G.has_node(v_name):
                             G.add_node(v_name, lat=nodes[v]["lat"], lon=nodes[v]["lon"])
-                            
-                        G.add_edge(u_name, v_name,
-                                   weight=weight,
-                                   length=dist,
-                                   type=infra_type,
-                                   multiplier=edge_multiplier,
-                                   name=way_name,
-                                   bikestress=stress_level,
-                                   facility_type=facility_type,
-                                   offstreet_type=offstreet_type,
-                                   bicycles_allowed=bicycles_allowed,
-                                   ebike_allowed=ebike_allowed,
-                                   way_id=way_id,
-                                   tags=tags)
+
+                        direction = _bike_edge_direction(tags, infra_type)
+                        edge_attrs = dict(
+                            weight=weight,
+                            length=dist,
+                            type=infra_type,
+                            multiplier=edge_multiplier,
+                            name=way_name,
+                            bikestress=stress_level,
+                            facility_type=facility_type,
+                            offstreet_type=offstreet_type,
+                            bicycles_allowed=bicycles_allowed,
+                            ebike_allowed=ebike_allowed,
+                            way_id=way_id,
+                            tags=tags,
+                        )
+                        if direction in ("both", "forward"):
+                            G.add_edge(u_name, v_name, **edge_attrs)
+                        if direction in ("both", "reverse"):
+                            G.add_edge(v_name, u_name, **edge_attrs)
 
     # Get largest connected component to ensure routes are reachable
     if len(G) > 0:
-        largest_cc = max(nx.connected_components(G), key=len)
+        largest_cc = max(nx.weakly_connected_components(G), key=len)
         G_connected = G.subgraph(largest_cc).copy()
         print(f"Graph loaded successfully: {G_connected.number_of_nodes()} nodes, {G_connected.number_of_edges()} edges.")
     else:
@@ -1396,17 +1425,18 @@ def inspect_edge():
     best_edge = None
     min_dist = float("inf")
     
-    # Check edges connected to nearest_node to find the closest segment line
-    for neighbor in G_connected.neighbors(nearest_node):
-        node_u_data = G_connected.nodes[nearest_node]
-        node_v_data = G_connected.nodes[neighbor]
+    # Check incoming and outgoing edges connected to nearest_node to find the closest segment line.
+    connected_edges = set(G_connected.out_edges(nearest_node)) | set(G_connected.in_edges(nearest_node))
+    for u, v in connected_edges:
+        node_u_data = G_connected.nodes[u]
+        node_v_data = G_connected.nodes[v]
         pt_u = (node_u_data["lat"], node_u_data["lon"])
         pt_v = (node_v_data["lat"], node_v_data["lon"])
         
         dist = point_to_segment_distance(click_coord, pt_u, pt_v)
         if dist < min_dist:
             min_dist = dist
-            best_edge = (nearest_node, neighbor)
+            best_edge = (u, v)
             
     if best_edge is None:
         return jsonify({"error": "Could not identify an edge."}), 404

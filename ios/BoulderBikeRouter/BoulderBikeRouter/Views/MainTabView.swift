@@ -5,36 +5,35 @@ struct MainTabView: View {
     @State private var viewModel = MapViewModel()
     @State private var selectedTab: Int = 0
     @State private var isDrawerOpen: Bool = false
+    @State private var isNavigationActive: Bool = false
     @State private var historyRouteToPresent: PastRoute?
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         ZStack(alignment: .leading) {
             // Tab View contents
-            VStack(spacing: 0) {
-                ZStack {
-                    switch selectedTab {
-                    case 0:
-                        MainMapView(viewModel: viewModel, isDrawerOpen: $isDrawerOpen)
-                    case 1:
-                        RoutesTabView(viewModel: viewModel) {
-                            selectTab(0)
-                        }
-                    case 2:
-                        HistoryTabView(pastRoutes: viewModel.pastRoutes, routeToPresent: $historyRouteToPresent)
-                    case 3:
-                        SettingsTabView(viewModel: viewModel)
-                    default:
-                        EmptyView()
+            ZStack {
+                switch selectedTab {
+                case 0:
+                    MainMapView(
+                        viewModel: viewModel,
+                        isDrawerOpen: $isDrawerOpen,
+                        isNavigationActive: $isNavigationActive
+                    )
+                case 1:
+                    RoutesTabView(viewModel: viewModel) {
+                        selectTab(0)
                     }
+                case 2:
+                    HistoryTabView(pastRoutes: viewModel.pastRoutes, routeToPresent: $historyRouteToPresent)
+                case 3:
+                    SettingsTabView(viewModel: viewModel)
+                default:
+                    EmptyView()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                
-                // Custom Bottom Tab Bar
-                customTabBar
             }
-            .ignoresSafeArea(edges: .bottom)
-            
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
             // Drawer Shim (Background Dim)
             if isDrawerOpen {
                 Color.black.opacity(0.6)
@@ -46,12 +45,17 @@ struct MainTabView: View {
                     }
                     .transition(.opacity)
             }
-            
+
             // Drawer Side Menu
             if isDrawerOpen {
                 DrawerMenuView(isDrawerOpen: $isDrawerOpen, selectedTab: $selectedTab)
                     .transition(.move(edge: .leading))
                     .zIndex(1)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !isNavigationActive {
+                customTabBar
             }
         }
         .environment(viewModel)
@@ -114,10 +118,12 @@ struct MainTabView: View {
             tabBarItem(title: "Settings", icon: "gearshape.fill", index: 3)
         }
         .padding(.vertical, 8)
-        .padding(.bottom, safeAreaBottomPadding)
-        .background(Color.surfaceContainer)
-        .cornerRadius(12, corners: [.topLeft, .topRight])
-        .shadow(color: Color.black.opacity(0.4), radius: 12, x: 0, y: -4)
+        .background(
+            Color.surfaceContainer
+                .cornerRadius(12, corners: [.topLeft, .topRight])
+                .shadow(color: Color.black.opacity(0.4), radius: 12, x: 0, y: -4)
+                .ignoresSafeArea(edges: .bottom)
+        )
     }
     
     private func tabBarItem(title: String, icon: String, index: Int) -> some View {
@@ -150,12 +156,4 @@ struct MainTabView: View {
         selectedTab = index
     }
     
-    // Helper to calculate safe area bottom inset
-    private var safeAreaBottomPadding: CGFloat {
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let safeAreaInsets = windowScene.windows.first?.safeAreaInsets {
-            return safeAreaInsets.bottom > 0 ? safeAreaInsets.bottom - 8 : 12
-        }
-        return 12
-    }
 }
