@@ -1,14 +1,14 @@
 //
-//  BoulderBikeRouterTests.swift
-//  BoulderBikeRouterTests
+//  BoulderBikeRouter_Watch_App_Watch_AppTests.swift
+//  BoulderBikeRouter Watch App Watch AppTests
 //
-//  Created by MBP on 6/5/26.
+//  Created by MBP on 6/8/26.
 //
 
 import Testing
-@testable import BoulderBikeRouter
+@testable import BoulderBikeRouter_Watch_App_Watch_App
 
-struct BoulderBikeRouterTests {
+struct BoulderBikeRouter_Watch_App_Watch_AppTests {
 
     @Test func example() async throws {
         // Write your test here and use APIs like `#expect(...)` to check expected conditions.

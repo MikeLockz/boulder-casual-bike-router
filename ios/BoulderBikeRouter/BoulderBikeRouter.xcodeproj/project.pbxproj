@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		10DD835E2FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 10DD833E2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		107CE87E2FD3372D004D1566 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -21,12 +25,50 @@
 			remoteGlobalIDString = 107CE86F2FD3372C004D1566;
 			remoteInfo = BoulderBikeRouter;
 		};
+		10DD834B2FD7BC6C00AFBA1A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 107CE8682FD3372C004D1566 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 10DD833D2FD7BC6A00AFBA1A;
+			remoteInfo = "BoulderBikeRouter Watch App Watch App";
+		};
+		10DD83552FD7BC6C00AFBA1A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 107CE8682FD3372C004D1566 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 10DD833D2FD7BC6A00AFBA1A;
+			remoteInfo = "BoulderBikeRouter Watch App Watch App";
+		};
+		10DD835C2FD7BC6C00AFBA1A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 107CE8682FD3372C004D1566 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 10DD833D2FD7BC6A00AFBA1A;
+			remoteInfo = "BoulderBikeRouter Watch App Watch App";
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		10DD83622FD7BC6C00AFBA1A /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				10DD835E2FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		107CE8702FD3372C004D1566 /* BoulderBikeRouter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BoulderBikeRouter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		107CE87D2FD3372D004D1566 /* BoulderBikeRouterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BoulderBikeRouterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		107CE8872FD3372D004D1566 /* BoulderBikeRouterUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BoulderBikeRouterUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		10DD833E2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "BoulderBikeRouter Watch App Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		10DD834A2FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "BoulderBikeRouter Watch App Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		10DD83542FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "BoulderBikeRouter Watch App Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -43,6 +85,21 @@
 		107CE88A2FD3372D004D1566 /* BoulderBikeRouterUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = BoulderBikeRouterUITests;
+			sourceTree = "<group>";
+		};
+		10DD833F2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "BoulderBikeRouter Watch App Watch App";
+			sourceTree = "<group>";
+		};
+		10DD834D2FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "BoulderBikeRouter Watch App Watch AppTests";
+			sourceTree = "<group>";
+		};
+		10DD83572FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "BoulderBikeRouter Watch App Watch AppUITests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -69,6 +126,27 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		10DD833B2FD7BC6A00AFBA1A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10DD83472FD7BC6C00AFBA1A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10DD83512FD7BC6C00AFBA1A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -78,6 +156,9 @@
 				107CE8722FD3372C004D1566 /* BoulderBikeRouter */,
 				107CE8802FD3372D004D1566 /* BoulderBikeRouterTests */,
 				107CE88A2FD3372D004D1566 /* BoulderBikeRouterUITests */,
+				10DD833F2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App */,
+				10DD834D2FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppTests */,
+				10DD83572FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppUITests */,
 				107CE8712FD3372C004D1566 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,6 +169,9 @@
 				107CE8702FD3372C004D1566 /* BoulderBikeRouter.app */,
 				107CE87D2FD3372D004D1566 /* BoulderBikeRouterTests.xctest */,
 				107CE8872FD3372D004D1566 /* BoulderBikeRouterUITests.xctest */,
+				10DD833E2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App.app */,
+				10DD834A2FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppTests.xctest */,
+				10DD83542FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -102,10 +186,12 @@
 				107CE86C2FD3372C004D1566 /* Sources */,
 				107CE86D2FD3372C004D1566 /* Frameworks */,
 				107CE86E2FD3372C004D1566 /* Resources */,
+				10DD83622FD7BC6C00AFBA1A /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				10DD835D2FD7BC6C00AFBA1A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				107CE8722FD3372C004D1566 /* BoulderBikeRouter */,
@@ -163,6 +249,74 @@
 			productReference = 107CE8872FD3372D004D1566 /* BoulderBikeRouterUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		10DD833D2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 10DD835F2FD7BC6C00AFBA1A /* Build configuration list for PBXNativeTarget "BoulderBikeRouter Watch App Watch App" */;
+			buildPhases = (
+				10DD833A2FD7BC6A00AFBA1A /* Sources */,
+				10DD833B2FD7BC6A00AFBA1A /* Frameworks */,
+				10DD833C2FD7BC6A00AFBA1A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				10DD833F2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App */,
+			);
+			name = "BoulderBikeRouter Watch App Watch App";
+			packageProductDependencies = (
+			);
+			productName = "BoulderBikeRouter Watch App Watch App";
+			productReference = 10DD833E2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		10DD83492FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 10DD83632FD7BC6C00AFBA1A /* Build configuration list for PBXNativeTarget "BoulderBikeRouter Watch App Watch AppTests" */;
+			buildPhases = (
+				10DD83462FD7BC6C00AFBA1A /* Sources */,
+				10DD83472FD7BC6C00AFBA1A /* Frameworks */,
+				10DD83482FD7BC6C00AFBA1A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				10DD834C2FD7BC6C00AFBA1A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				10DD834D2FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppTests */,
+			);
+			name = "BoulderBikeRouter Watch App Watch AppTests";
+			packageProductDependencies = (
+			);
+			productName = "BoulderBikeRouter Watch App Watch AppTests";
+			productReference = 10DD834A2FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		10DD83532FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 10DD83662FD7BC6C00AFBA1A /* Build configuration list for PBXNativeTarget "BoulderBikeRouter Watch App Watch AppUITests" */;
+			buildPhases = (
+				10DD83502FD7BC6C00AFBA1A /* Sources */,
+				10DD83512FD7BC6C00AFBA1A /* Frameworks */,
+				10DD83522FD7BC6C00AFBA1A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				10DD83562FD7BC6C00AFBA1A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				10DD83572FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppUITests */,
+			);
+			name = "BoulderBikeRouter Watch App Watch AppUITests";
+			packageProductDependencies = (
+			);
+			productName = "BoulderBikeRouter Watch App Watch AppUITests";
+			productReference = 10DD83542FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -184,6 +338,17 @@
 						CreatedOnToolsVersion = 26.5;
 						TestTargetID = 107CE86F2FD3372C004D1566;
 					};
+					10DD833D2FD7BC6A00AFBA1A = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					10DD83492FD7BC6C00AFBA1A = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 10DD833D2FD7BC6A00AFBA1A;
+					};
+					10DD83532FD7BC6C00AFBA1A = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 10DD833D2FD7BC6A00AFBA1A;
+					};
 				};
 			};
 			buildConfigurationList = 107CE86B2FD3372C004D1566 /* Build configuration list for PBXProject "BoulderBikeRouter" */;
@@ -203,6 +368,9 @@
 				107CE86F2FD3372C004D1566 /* BoulderBikeRouter */,
 				107CE87C2FD3372D004D1566 /* BoulderBikeRouterTests */,
 				107CE8862FD3372D004D1566 /* BoulderBikeRouterUITests */,
+				10DD833D2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App */,
+				10DD83492FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppTests */,
+				10DD83532FD7BC6C00AFBA1A /* BoulderBikeRouter Watch App Watch AppUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -223,6 +391,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		107CE8852FD3372D004D1566 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10DD833C2FD7BC6A00AFBA1A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10DD83482FD7BC6C00AFBA1A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10DD83522FD7BC6C00AFBA1A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -253,6 +442,27 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		10DD833A2FD7BC6A00AFBA1A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10DD83462FD7BC6C00AFBA1A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		10DD83502FD7BC6C00AFBA1A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -265,6 +475,21 @@
 			isa = PBXTargetDependency;
 			target = 107CE86F2FD3372C004D1566 /* BoulderBikeRouter */;
 			targetProxy = 107CE8882FD3372D004D1566 /* PBXContainerItemProxy */;
+		};
+		10DD834C2FD7BC6C00AFBA1A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 10DD833D2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App */;
+			targetProxy = 10DD834B2FD7BC6C00AFBA1A /* PBXContainerItemProxy */;
+		};
+		10DD83562FD7BC6C00AFBA1A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 10DD833D2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App */;
+			targetProxy = 10DD83552FD7BC6C00AFBA1A /* PBXContainerItemProxy */;
+		};
+		10DD835D2FD7BC6C00AFBA1A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 10DD833D2FD7BC6A00AFBA1A /* BoulderBikeRouter Watch App Watch App */;
+			targetProxy = 10DD835C2FD7BC6C00AFBA1A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -534,6 +759,158 @@
 			};
 			name = Release;
 		};
+		10DD83602FD7BC6C00AFBA1A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MEXSN8LTHY;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "BoulderBikeRouter Watch App";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bikingboulder.BoulderBikeRouter;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bikingboulder.BoulderBikeRouter.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		10DD83612FD7BC6C00AFBA1A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MEXSN8LTHY;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "BoulderBikeRouter Watch App";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bikingboulder.BoulderBikeRouter;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bikingboulder.BoulderBikeRouter.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
+		10DD83642FD7BC6C00AFBA1A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.bikingboulder.BoulderBikeRouter-Watch-App-Watch-AppTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BoulderBikeRouter Watch App Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BoulderBikeRouter Watch App Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		10DD83652FD7BC6C00AFBA1A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.bikingboulder.BoulderBikeRouter-Watch-App-Watch-AppTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BoulderBikeRouter Watch App Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/BoulderBikeRouter Watch App Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
+		10DD83672FD7BC6C00AFBA1A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.bikingboulder.BoulderBikeRouter-Watch-App-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "BoulderBikeRouter Watch App Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		10DD83682FD7BC6C00AFBA1A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.bikingboulder.BoulderBikeRouter-Watch-App-Watch-AppUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = "BoulderBikeRouter Watch App Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -569,6 +946,33 @@
 			buildConfigurations = (
 				107CE8982FD3372D004D1566 /* Debug */,
 				107CE8992FD3372D004D1566 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		10DD835F2FD7BC6C00AFBA1A /* Build configuration list for PBXNativeTarget "BoulderBikeRouter Watch App Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				10DD83602FD7BC6C00AFBA1A /* Debug */,
+				10DD83612FD7BC6C00AFBA1A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		10DD83632FD7BC6C00AFBA1A /* Build configuration list for PBXNativeTarget "BoulderBikeRouter Watch App Watch AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				10DD83642FD7BC6C00AFBA1A /* Debug */,
+				10DD83652FD7BC6C00AFBA1A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		10DD83662FD7BC6C00AFBA1A /* Build configuration list for PBXNativeTarget "BoulderBikeRouter Watch App Watch AppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				10DD83672FD7BC6C00AFBA1A /* Debug */,
+				10DD83682FD7BC6C00AFBA1A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

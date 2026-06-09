@@ -75,6 +75,9 @@ struct MainTabView: View {
             if let route = notification.object as? PastRoute {
                 historyRouteToPresent = route
             }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                selectTab(2)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HistoryRouteSelected"))) { _ in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {

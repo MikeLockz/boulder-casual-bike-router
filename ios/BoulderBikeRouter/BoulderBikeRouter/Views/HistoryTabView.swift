@@ -318,22 +318,14 @@ struct RouteHistoryDetailView: View {
     }
 
     private var previewRegion: MKCoordinateRegion {
-        let coordinates = previewRouteCoordinates.flatMap { $0 } + [startCoordinate, endCoordinate]
-        let minLat = coordinates.map(\.latitude).min() ?? route.startLat
-        let maxLat = coordinates.map(\.latitude).max() ?? route.endLat
-        let minLon = coordinates.map(\.longitude).min() ?? route.startLon
-        let maxLon = coordinates.map(\.longitude).max() ?? route.endLon
-        let center = CLLocationCoordinate2D(
-            latitude: (minLat + maxLat) / 2,
-            longitude: (minLon + maxLon) / 2
-        )
-
-        return MKCoordinateRegion(
-            center: center,
-            span: MKCoordinateSpan(
-                latitudeDelta: max((maxLat - minLat) * 1.7, 0.008),
-                longitudeDelta: max((maxLon - minLon) * 1.7, 0.008)
-            )
+        let coords = previewRouteCoordinates.flatMap { $0 } + [startCoordinate, endCoordinate]
+        return RouteMapCamera.region(
+            for: coords,
+            screenSize: CGSize(width: UIScreen.main.bounds.width - 32, height: 170),
+            insets: .previewCard
+        ) ?? MKCoordinateRegion(
+            center: startCoordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.006, longitudeDelta: 0.006)
         )
     }
 

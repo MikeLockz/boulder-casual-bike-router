@@ -128,6 +128,18 @@ struct MainMapView: View {
                 endLocationText = String(format: "%.4f, %.4f", end.latitude, end.longitude)
             }
             seedHomeSelectionFromCurrentLocation()
+            // MainMapView is recreated on every tab switch, so onChange won't fire for
+            // state that was already set before this view appeared (e.g. navigating from
+            // History > View on Map). Fit the camera here to cover that case.
+            DispatchQueue.main.async {
+                if let route = viewModel.selectedHistoryRoute {
+                    let startCoord = CLLocationCoordinate2D(latitude: route.startLat, longitude: route.startLon)
+                    let endCoord = CLLocationCoordinate2D(latitude: route.endLat, longitude: route.endLon)
+                    fitMap(to: historyFitCoordinates(start: startCoord, end: endCoord), insets: .historyBanner)
+                } else if viewModel.routeResponse != nil {
+                    fitMap(to: routeFitCoordinates(for: viewModel.routeResponse), insets: .routeCard)
+                }
+            }
         }
         .onChange(of: locationManager.currentLocation) { _, newLocation in
             if let loc = newLocation {
@@ -192,7 +204,7 @@ struct MainMapView: View {
                     withAnimation {
                         isSearchExpanded = false
                     }
-                    fitMap(to: routeFitCoordinates(for: newResponse), verticalPaddingFactor: 1.75)
+                    fitMap(to: routeFitCoordinates(for: newResponse), insets: .routeCard)
                 }
             }
         }
@@ -202,7 +214,7 @@ struct MainMapView: View {
                 let endCoord = CLLocationCoordinate2D(latitude: route.endLat, longitude: route.endLon)
 
                 DispatchQueue.main.async {
-                    fitMap(to: historyFitCoordinates(start: startCoord, end: endCoord))
+                    fitMap(to: historyFitCoordinates(start: startCoord, end: endCoord), insets: .historyBanner)
                 }
             }
         }
@@ -254,34 +266,13 @@ struct MainMapView: View {
         }
     }
 
-    private func fitMap(
-        to coordinates: [CLLocationCoordinate2D],
-        minSpan: CLLocationDegrees = 0.004,
-        horizontalPaddingFactor: Double = 1.18,
-        verticalPaddingFactor: Double = 1.18
-    ) {
-        guard !coordinates.isEmpty else { return }
-
-        let minLat = coordinates.map(\.latitude).min() ?? coordinates[0].latitude
-        let maxLat = coordinates.map(\.latitude).max() ?? coordinates[0].latitude
-        let minLon = coordinates.map(\.longitude).min() ?? coordinates[0].longitude
-        let maxLon = coordinates.map(\.longitude).max() ?? coordinates[0].longitude
-
-        let center = CLLocationCoordinate2D(
-            latitude: (minLat + maxLat) / 2,
-            longitude: (minLon + maxLon) / 2
-        )
-        let latDelta = max(minSpan, (maxLat - minLat) * verticalPaddingFactor)
-        let lonDelta = max(minSpan, (maxLon - minLon) * horizontalPaddingFactor)
-
-        withAnimation {
-            cameraPosition = .region(
-                MKCoordinateRegion(
-                    center: center,
-                    span: MKCoordinateSpan(latitudeDelta: latDelta, longitudeDelta: lonDelta)
-                )
-            )
-        }
+    private func fitMap(to coordinates: [CLLocationCoordinate2D], insets: MapFitInsets) {
+        guard let region = RouteMapCamera.region(
+            for: coordinates,
+            screenSize: UIScreen.main.bounds.size,
+            insets: insets
+        ) else { return }
+        withAnimation { cameraPosition = .region(region) }
     }
 
     private func routeFitCoordinates(for route: RouteResponse?) -> [CLLocationCoordinate2D] {
@@ -936,13 +927,6 @@ struct MainMapView: View {
                 }
             }
 
-            // User Location Dot
-            if let userLoc = locationManager.currentLocation {
-                Annotation("User Location", coordinate: userLoc.coordinate) {
-                    UserLocationMarker(heading: locationManager.currentHeading)
-                }
-            }
-
             if let pendingHome = viewModel.pendingHomeCoordinate {
                 Annotation("Home", coordinate: pendingHome, anchor: .bottom) {
                     markerView(color: .mintGlow)
@@ -959,6 +943,14 @@ struct MainMapView: View {
         }
         .coordinateSpace(name: "mapCanvas")
         .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
+        .overlay(alignment: .topLeading) {
+            if let userLoc = locationManager.currentLocation,
+               let screenPoint = proxy.convert(userLoc.coordinate, to: .local) {
+                UserLocationMarker(heading: locationManager.currentHeading)
+                    .position(screenPoint)
+                    .allowsHitTesting(false)
+            }
+        }
         .onTapGesture { screenPoint in
             if viewModel.isSelectingHomeLocation {
                 if let coordinate = proxy.convert(screenPoint, from: .local) {
@@ -998,6 +990,7 @@ struct UserLocationMarker: View {
                 .opacity(0.7)
                 .offset(y: -12)
                 .rotationEffect(.degrees(heading))
+                .animation(.easeInOut(duration: 0.2), value: heading)
             
             Circle()
                 .fill(Color.white)

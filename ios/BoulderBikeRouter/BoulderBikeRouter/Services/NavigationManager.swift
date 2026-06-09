@@ -33,6 +33,8 @@ class NavigationManager {
     var currentBannerManeuver: Maneuver?
     var distanceToNextManeuverString: String = ""
 
+    private var distanceToNextManeuverMeters: Double? = nil
+    private var isOffRoute: Bool = false
     private var routeCoords: [CLLocationCoordinate2D] = []
     private var segments: [RouteSegment] = []
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -88,6 +90,7 @@ class NavigationManager {
         
         speak("Starting navigation to destination. Stay safe.")
         updateOverlay(distanceFromStart: 0)
+        sendWatchSnapshot(force: true)
         
         // Setup battery monitoring
         UIDevice.current.isBatteryMonitoringEnabled = true
@@ -178,6 +181,8 @@ class NavigationManager {
 
     func stop() {
         isActive = false
+        distanceToNextManeuverMeters = nil
+        isOffRoute = false
         currentBannerManeuver = nil
         
         // Re-enable screen sleep
@@ -185,7 +190,15 @@ class NavigationManager {
         
         speak("Navigation ended.")
         
-        guard let rId = activeRouteId else { return }
+        guard let rId = activeRouteId else {
+            sendWatchSnapshot(
+                status: .ended,
+                instruction: "Navigation ended",
+                iconName: "xmark.circle",
+                force: true
+            )
+            return
+        }
         
         let now = Date()
         let isoFormatter = ISO8601DateFormatter()
@@ -307,6 +320,13 @@ class NavigationManager {
         } else {
             NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: rId)
         }
+
+        sendWatchSnapshot(
+            status: status == "completed" ? .arrived : .ended,
+            instruction: status == "completed" ? "Arrived at destination" : "Navigation ended",
+            iconName: status == "completed" ? "mappin.and.ellipse" : "xmark.circle",
+            force: true
+        )
         
         // Cleanup local states
         activeRouteId = nil
@@ -320,6 +340,8 @@ class NavigationManager {
         maneuvers.removeAll()
         routeCoords.removeAll()
         segments.removeAll()
+        distanceToNextManeuverMeters = nil
+        isOffRoute = false
     }
 
     func toggleMute() {
@@ -338,7 +360,8 @@ class NavigationManager {
         let (closestIdx, minDistance) = findClosestPoint(userCoord)
 
         // Off-route warning
-        if minDistance > 50.0 { // 50 meters off route
+        isOffRoute = minDistance > 50.0
+        if isOffRoute { // 50 meters off route
             // Optionally speak warning
         }
 
@@ -356,6 +379,7 @@ class NavigationManager {
 
         // Check route progress to maneuvers
         checkManeuversProgress(traversedMeters: traversedMeters)
+        sendWatchSnapshot()
 
         if shouldEndForIdle(location) {
             speak("Navigation ended after a long idle stop.")
@@ -398,6 +422,7 @@ class NavigationManager {
         let currentManeuver = maneuvers[currentManeuverIndex]
         let distanceToTrigger = max(0.0, currentManeuver.distanceFromStart - traversedMeters)
         currentBannerManeuver = currentManeuver
+        distanceToNextManeuverMeters = currentManeuverIndex == 0 ? nil : distanceToTrigger
         distanceToNextManeuverString = currentManeuverIndex == 0 ? "" : formatDistanceShort(distanceToTrigger)
 
         guard currentManeuverIndex > 0 else { return }
@@ -433,7 +458,50 @@ class NavigationManager {
     private func updateOverlay(distanceFromStart: Double) {
         if maneuvers.isEmpty { return }
         currentBannerManeuver = maneuvers.first
+        distanceToNextManeuverMeters = nil
         distanceToNextManeuverString = ""
+    }
+
+    private func sendWatchSnapshot(
+        status overrideStatus: WatchNavigationStatus? = nil,
+        instruction overrideInstruction: String? = nil,
+        iconName overrideIconName: String? = nil,
+        force: Bool = false
+    ) {
+        let maneuver = currentBannerManeuver
+        let status: WatchNavigationStatus
+        if let overrideStatus {
+            status = overrideStatus
+        } else if !isActive {
+            status = .inactive
+        } else if isOffRoute {
+            status = .offRoute
+        } else {
+            status = .navigating
+        }
+
+        let instruction: String
+        switch status {
+        case .inactive:
+            instruction = "Start navigation on iPhone"
+        case .offRoute:
+            instruction = "Off route. Check iPhone."
+        default:
+            instruction = overrideInstruction ?? maneuver?.instruction ?? "Preparing navigation..."
+        }
+
+        let snapshot = WatchNavigationSnapshot(
+            routeId: activeRouteId,
+            status: status,
+            instruction: instruction,
+            maneuverIconName: overrideIconName ?? maneuver?.iconName ?? "location.fill",
+            distanceToManeuverMeters: status == .navigating ? distanceToNextManeuverMeters : nil,
+            remainingDistanceText: isActive ? remainingDistanceString : nil,
+            etaText: isActive ? etaString : nil,
+            updatedAt: Date()
+        )
+
+        WatchNavigationBridge.shared.send(snapshot, force: force)
     }
 
     // MARK: - Helpers
