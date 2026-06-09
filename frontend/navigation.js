@@ -29,6 +29,7 @@ const Navigation = (() => {
     const CASUAL_SPEED_MPS = 4.47;  // 10 mph in m/s
     const PRE_ANNOUNCE_DIST = 200;  // meters — "In 600 feet..."
     const CONFIRM_DIST = 30;        // meters — "Turn left now"
+    const PASSED_MANEUVER_DIST = 20; // meters beyond a maneuver before advancing
     const ANNOUNCED_PRE = new Set();
     const ANNOUNCED_CONFIRM = new Set();
 
@@ -477,41 +478,37 @@ const Navigation = (() => {
     function checkManeuvers() {
         if (!state.position || state.maneuvers.length === 0) return;
 
-        const pos = state.position;
+        const progress = getRouteProgressMeters();
+        if (!progress) return;
 
-        for (let i = state.currentManeuverIdx; i < state.maneuvers.length; i++) {
-            const m = state.maneuvers[i];
-            if (!m.triggerCoord) continue;
+        const lastIdx = state.maneuvers.length - 1;
+        let activeIdx = state.currentManeuverIdx;
+        while (
+            activeIdx < lastIdx &&
+            state.maneuvers[activeIdx].distanceFromStart <= progress.traversed + PASSED_MANEUVER_DIST
+        ) {
+            activeIdx++;
+        }
+        state.currentManeuverIdx = activeIdx;
 
-            const dist = getDistance(pos.lat, pos.lng, m.triggerCoord[0], m.triggerCoord[1]);
+        const maneuver = state.maneuvers[activeIdx];
+        const distanceAlongRoute = Math.max(0, maneuver.distanceFromStart - progress.traversed);
+        updateManeuverBanner(maneuver, activeIdx === 0 ? null : distanceAlongRoute);
 
-            // Pre-announce
-            if (dist <= PRE_ANNOUNCE_DIST && dist > CONFIRM_DIST && !ANNOUNCED_PRE.has(i)) {
-                ANNOUNCED_PRE.add(i);
-                const distStr = formatDistanceVoice(dist);
-                speak(`In ${distStr}, ${m.instruction}`);
-                updateManeuverBanner(m, dist);
-            }
+        if (activeIdx === 0) return;
 
-            // Confirm
-            if (dist <= CONFIRM_DIST && !ANNOUNCED_CONFIRM.has(i)) {
-                ANNOUNCED_CONFIRM.add(i);
-                if (m.icon === 'fa-flag-checkered') {
-                    speak('You have arrived at your destination.');
-                } else {
-                    speak(`${m.instruction}`);
-                }
-                state.currentManeuverIdx = Math.min(i + 1, state.maneuvers.length - 1);
-                updateManeuverBanner(state.maneuvers[state.currentManeuverIdx], null);
-            }
+        if (distanceAlongRoute <= PRE_ANNOUNCE_DIST && distanceAlongRoute > CONFIRM_DIST && !ANNOUNCED_PRE.has(activeIdx)) {
+            ANNOUNCED_PRE.add(activeIdx);
+            const distStr = formatDistanceVoice(distanceAlongRoute);
+            speak(`In ${distStr}, ${maneuver.instruction}`);
         }
 
-        // Update banner with current distance to next maneuver
-        if (state.currentManeuverIdx < state.maneuvers.length) {
-            const next = state.maneuvers[state.currentManeuverIdx];
-            if (next.triggerCoord) {
-                const dist = getDistance(pos.lat, pos.lng, next.triggerCoord[0], next.triggerCoord[1]);
-                updateManeuverBanner(next, dist);
+        if (distanceAlongRoute <= CONFIRM_DIST && !ANNOUNCED_CONFIRM.has(activeIdx)) {
+            ANNOUNCED_CONFIRM.add(activeIdx);
+            if (maneuver.icon === 'fa-flag-checkered') {
+                speak('You have arrived at your destination.');
+            } else {
+                speak(`${maneuver.instruction}`);
             }
         }
     }
@@ -683,21 +680,12 @@ const Navigation = (() => {
 
         if (!state.position || state.routeCoords.length === 0) return;
 
-        // Find closest point on route to current position
-        let minDist = Infinity;
-        let closestIdx = 0;
-        for (let i = 0; i < state.routeCoords.length; i++) {
-            const d = getDistance(state.position.lat, state.position.lng,
-                state.routeCoords[i][0], state.routeCoords[i][1]);
-            if (d < minDist) {
-                minDist = d;
-                closestIdx = i;
-            }
-        }
+        const progress = getRouteProgressMeters();
+        if (!progress) return;
 
         // Sum remaining distance from closest point to end
         let remaining = 0;
-        for (let i = closestIdx; i < state.routeCoords.length - 1; i++) {
+        for (let i = progress.closestIdx; i < state.routeCoords.length - 1; i++) {
             remaining += getDistance(
                 state.routeCoords[i][0], state.routeCoords[i][1],
                 state.routeCoords[i + 1][0], state.routeCoords[i + 1][1]
@@ -709,6 +697,35 @@ const Navigation = (() => {
 
         if (distEl) distEl.textContent = `${remainingMiles} mi`;
         if (etaEl) etaEl.textContent = `${etaMinutes} min`;
+    }
+
+    function getRouteProgressMeters() {
+        if (!state.position || state.routeCoords.length === 0) return null;
+
+        let minDist = Infinity;
+        let closestIdx = 0;
+        for (let i = 0; i < state.routeCoords.length; i++) {
+            const d = getDistance(
+                state.position.lat,
+                state.position.lng,
+                state.routeCoords[i][0],
+                state.routeCoords[i][1]
+            );
+            if (d < minDist) {
+                minDist = d;
+                closestIdx = i;
+            }
+        }
+
+        let traversed = 0;
+        for (let i = 0; i < closestIdx; i++) {
+            traversed += getDistance(
+                state.routeCoords[i][0], state.routeCoords[i][1],
+                state.routeCoords[i + 1][0], state.routeCoords[i + 1][1]
+            );
+        }
+
+        return { closestIdx, traversed, distanceFromRoute: minDist };
     }
 
     function showToast(message) {

@@ -739,7 +739,13 @@ def build_graph(weights=None):
     if weights is None:
         weights = DEFAULT_WEIGHTS
 
-    data = fetch_osm_data()
+    try:
+        data = fetch_osm_data()
+    except Exception as e:
+        print(f"CRITICAL ERROR: Failed to fetch OSM data: {e}")
+        print(f"Graph will not be built. Routing will be unavailable.")
+        return None
+
     G = nx.Graph()
 
     # Load stress data and build spatial index
@@ -1268,18 +1274,22 @@ def get_route():
     """API endpoint to request a route between two points with custom weights."""
     if request.method == "OPTIONS":
         return "", 200
-        
+
     global G_connected
     data = request.json or {}
-    
+
     start_lat = data.get("start_lat")
     start_lon = data.get("start_lon")
     end_lat = data.get("end_lat")
     end_lon = data.get("end_lon")
     custom_weights = data.get("weights") or DEFAULT_WEIGHTS
-    
+
     if not all([start_lat, start_lon, end_lat, end_lon]):
         return jsonify({"error": "Missing coordinates"}), 400
+
+    # Check if graph has been initialized
+    if G_connected is None:
+        return jsonify({"error": "Routing graph not initialized. Server may still be starting up."}), 503
 
     # Recalculate weights on the graph dynamically using client weights
     update_graph_weights(G_connected, custom_weights)
@@ -2901,8 +2911,16 @@ def nav_sync():
 
 if __name__ == "__main__":
     # Pre-build graph on startup
+    print("[*] Starting Boulder Bike Router backend...")
+    print("[*] Building routing graph...")
     build_graph()
-    
+
+    if G_connected is None:
+        print("[!] CRITICAL: Routing graph failed to initialize!")
+        print("[!] Routing endpoints will return 503 errors")
+    else:
+        print(f"[+] Routing graph ready: {G_connected.number_of_nodes()} nodes, {G_connected.number_of_edges()} edges")
+
     # Verify PocketBase connection
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
     print(f"[*] PocketBase connection check: pinging {pb_url}...")
@@ -2915,4 +2933,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[-] PocketBase connection failed: {e}")
 
+    print("[*] Starting Flask server on 0.0.0.0:3001")
     app.run(host="0.0.0.0", port=3001, debug=True, use_reloader=False)

@@ -57,6 +57,7 @@ class NavigationManager {
     
     private let preAnnounceDistance: Double = 200.0 // meters (~650 ft)
     private let confirmDistance: Double = 30.0     // meters (~100 ft)
+    private let passedManeuverDistance: Double = 20.0
     private let casualSpeedMps = 4.47              // 10 mph in meters/second
 
     private var isSyncActive: Bool {
@@ -353,8 +354,8 @@ class NavigationManager {
         let remainingMinutes = Int(ceil(remainingMeters / casualSpeedMps / 60.0))
         etaString = "\(remainingMinutes) min"
 
-        // Check proximity to maneuvers
-        checkManeuversProximity(userLocation: location, closestRouteIdx: closestIdx)
+        // Check route progress to maneuvers
+        checkManeuversProgress(traversedMeters: traversedMeters)
 
         if shouldEndForIdle(location) {
             speak("Navigation ended after a long idle stop.")
@@ -384,18 +385,22 @@ class NavigationManager {
         return NavigationMetricFilter.shouldAutoEndForIdle(anchor: anchor, current: location)
     }
 
-    private func checkManeuversProximity(userLocation: CLLocation, closestRouteIdx: Int) {
+    private func checkManeuversProgress(traversedMeters: Double) {
         guard currentManeuverIndex < maneuvers.count else { return }
 
-        let currentManeuver = maneuvers[currentManeuverIndex]
-        guard let triggerCoord = currentManeuver.triggerCoordinate else { return }
-        
-        let triggerLoc = CLLocation(latitude: triggerCoord.latitude, longitude: triggerCoord.longitude)
-        let distanceToTrigger = userLocation.distance(from: triggerLoc)
+        let lastIndex = maneuvers.count - 1
+        while currentManeuverIndex < lastIndex,
+              maneuvers[currentManeuverIndex].distanceFromStart <= traversedMeters + passedManeuverDistance {
+            currentManeuverIndex += 1
+        }
 
         // Update banner text & distance label
+        let currentManeuver = maneuvers[currentManeuverIndex]
+        let distanceToTrigger = max(0.0, currentManeuver.distanceFromStart - traversedMeters)
         currentBannerManeuver = currentManeuver
-        distanceToNextManeuverString = formatDistanceShort(distanceToTrigger)
+        distanceToNextManeuverString = currentManeuverIndex == 0 ? "" : formatDistanceShort(distanceToTrigger)
+
+        guard currentManeuverIndex > 0 else { return }
 
         // Trigger announcements
         let idx = currentManeuverIndex
@@ -408,14 +413,6 @@ class NavigationManager {
         if distanceToTrigger <= confirmDistance, !announcedConfirm.contains(idx) {
             announcedConfirm.insert(idx)
             speak("\(currentManeuver.instruction) now.")
-            
-            // Advance to next instruction after trigger zone
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-                guard let self = self else { return }
-                if self.currentManeuverIndex == idx {
-                    self.currentManeuverIndex += 1
-                }
-            }
         }
     }
 
