@@ -30,6 +30,19 @@ class CoreLocationProvider: NSObject, LocationProvider, CLLocationManagerDelegat
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter = 2.0 // Update every 2 meters
+        locationManager.headingFilter = 2.0 // Ignore tiny heading jitter
+        
+        // Prevent crashes in test environments or builds lacking location background mode
+        let env = ProcessInfo.processInfo.environment
+        let isTesting = env.keys.contains { $0.contains("XCTest") || $0.contains("XCInject") } || NSClassFromString("XCTestCase") != nil
+        
+        if !isTesting {
+            if let backgroundModes = Bundle.main.infoDictionary?["UIBackgroundModes"] as? [String],
+               backgroundModes.contains("location") {
+                locationManager.allowsBackgroundLocationUpdates = true
+                locationManager.showsBackgroundLocationIndicator = true
+            }
+        }
     }
 
     var authorizationStatus: CLAuthorizationStatus {
@@ -261,6 +274,12 @@ class LocationManager: LocationProviderDelegate {
     var currentHeading: Double = 0.0
     var authorizationStatus: CLAuthorizationStatus = .notDetermined
     
+    // Low-pass filter variables for heading stabilization
+    private var headingX: Double = 0.0
+    private var headingY: Double = 0.0
+    private var hasInitializedHeading: Bool = false
+    private let headingAlpha: Double = 0.20 // Smoothing factor (lower = smoother, higher = more responsive)
+    
     var isSimulating: Bool = false {
         didSet {
             setupProvider()
@@ -317,8 +336,30 @@ class LocationManager: LocationProviderDelegate {
     }
 
     func locationProvider(_ provider: LocationProvider, didUpdateHeading heading: CLHeading) {
+        let rawHeading = heading.trueHeading >= 0 ? heading.trueHeading : heading.magneticHeading
+        guard rawHeading >= 0 else { return }
+        
         Task { @MainActor in
-            self.currentHeading = heading.trueHeading >= 0 ? heading.trueHeading : heading.magneticHeading
+            let rad = rawHeading * .pi / 180.0
+            let x = cos(rad)
+            let y = sin(rad)
+            
+            if !self.hasInitializedHeading {
+                self.headingX = x
+                self.headingY = y
+                self.hasInitializedHeading = true
+                self.currentHeading = rawHeading
+            } else {
+                // Vector-based low-pass filter
+                self.headingX = (1.0 - self.headingAlpha) * self.headingX + self.headingAlpha * x
+                self.headingY = (1.0 - self.headingAlpha) * self.headingY + self.headingAlpha * y
+                
+                var blendedRad = atan2(self.headingY, self.headingX) * 180.0 / .pi
+                if blendedRad < 0 {
+                    blendedRad += 360.0
+                }
+                self.currentHeading = blendedRad
+            }
         }
     }
 

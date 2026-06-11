@@ -185,7 +185,7 @@ struct MainMapView: View {
                     viewModel.currentLocation = loc.coordinate
                     // Auto-initialize starting point to current location if not set yet
                     if viewModel.startLocation == nil {
-                        viewModel.startLocation = loc.coordinate
+                        viewModel.setStartLocation(loc.coordinate, startName: nil)
                     }
 
                     if !hasCenteredInitialLocation && viewModel.routeResponse == nil && viewModel.selectedHistoryRoute == nil && !viewModel.isSelectingHomeLocation && mapSelectionMode == nil {
@@ -228,20 +228,26 @@ struct MainMapView: View {
             }
         }
         .onChange(of: viewModel.homeLocation) { _, newHome in
-            // Home may load after startLocation is already set; re-evaluate the label.
-            guard let home = newHome,
-                  let startLoc = viewModel.startLocation,
-                  viewModel.selectedStartName == nil || viewModel.selectedStartName!.isEmpty else { return }
-            if coordinateDistance(startLoc, to: home.coordinate) <= 20 {
-                suppressNextStartAutocomplete = true
-                startLocationText = "Home"
+            guard let home = newHome else { return }
+            DispatchQueue.main.async {
+                if let startLoc = viewModel.startLocation,
+                   coordinateDistance(startLoc, to: home.coordinate) <= 20 {
+                    viewModel.selectedStartName = "Home"
+                }
+                if let endLoc = viewModel.endLocation,
+                   coordinateDistance(endLoc, to: home.coordinate) <= 50 {
+                    viewModel.selectedDestinationName = "Home"
+                }
             }
         }
         .onChange(of: viewModel.endLocation) { _, newLoc in
             DispatchQueue.main.async {
                 if let loc = newLoc {
-                    if let home = viewModel.homeLocation,
-                       coordinateDistance(loc, to: home.coordinate) <= 50 {
+                    if let name = viewModel.selectedDestinationName, !name.isEmpty {
+                        suppressNextEndAutocomplete = true
+                        endLocationText = name
+                    } else if let home = viewModel.homeLocation,
+                               coordinateDistance(loc, to: home.coordinate) <= 50 {
                         endLocationText = "Home"
                     } else {
                         endLocationText = String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
@@ -256,6 +262,14 @@ struct MainMapView: View {
                 DispatchQueue.main.async {
                     suppressNextEndAutocomplete = true
                     endLocationText = newName
+                }
+            }
+        }
+        .onChange(of: viewModel.selectedStartName) { _, newName in
+            if let newName, !newName.isEmpty {
+                DispatchQueue.main.async {
+                    suppressNextStartAutocomplete = true
+                    startLocationText = newName
                 }
             }
         }
@@ -290,6 +304,14 @@ struct MainMapView: View {
         }
         .onChange(of: navigationManager.isActive) { _, isActive in
             isNavigationActive = isActive
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RouteRerouted"))) { notification in
+            if let newRoute = notification.object as? RouteResponse {
+                if locationManager.isSimulating {
+                    let routeCoords = newRoute.continuousCoordinates
+                    locationManager.setSimulationRoute(routeCoords)
+                }
+            }
         }
     }
 
@@ -433,15 +455,55 @@ struct MainMapView: View {
     }
 
     private func updateCameraHeading(_ location: CLLocation) {
+        let computedHeading = calculateCameraHeading(for: location)
         withAnimation(.easeInOut) {
             cameraPosition = .camera(
                 MapCamera(
                     centerCoordinate: location.coordinate,
                     distance: 300,
-                    heading: location.course >= 0 ? location.course : 0,
+                    heading: computedHeading,
                     pitch: 60.0
                 )
             )
+        }
+    }
+
+    private func calculateCameraHeading(for location: CLLocation) -> CLLocationDirection {
+        let speed = location.speed >= 0 ? location.speed : 0.0
+        let gpsCourse = location.course
+        let compassHeading = locationManager.currentHeading
+        
+        // If GPS course is invalid/negative, default to compass heading
+        guard gpsCourse >= 0 else {
+            return compassHeading
+        }
+        
+        // Define thresholds (in meters per second):
+        // 1.5 m/s is ~3.3 MPH
+        // 3.5 m/s is ~7.8 MPH
+        let minSpeedForGps: Double = 1.5
+        let maxSpeedForGps: Double = 3.5
+        
+        if speed < minSpeedForGps {
+            return compassHeading
+        } else if speed > maxSpeedForGps {
+            return gpsCourse
+        } else {
+            // Linear blend using unit vectors to avoid 0/360 wrap issues
+            let gpsWeight = (speed - minSpeedForGps) / (maxSpeedForGps - minSpeedForGps)
+            let compassWeight = 1.0 - gpsWeight
+            
+            let gpsRad = gpsCourse * .pi / 180.0
+            let compassRad = compassHeading * .pi / 180.0
+            
+            let x = cos(gpsRad) * gpsWeight + cos(compassRad) * compassWeight
+            let y = sin(gpsRad) * gpsWeight + sin(compassRad) * compassWeight
+            
+            var blended = atan2(y, x) * 180.0 / .pi
+            if blended < 0 {
+                blended += 360.0
+            }
+            return blended
         }
     }
 
@@ -1078,6 +1140,19 @@ struct MainMapView: View {
                 if let start = viewModel.startLocation {
                     Annotation("Start", coordinate: start, anchor: .bottom) {
                         markerView(color: .primaryMint)
+                            .gesture(
+                                DragGesture(coordinateSpace: .named("mapCanvas"))
+                                    .onChanged { value in
+                                        if let coordinate = proxy.convert(value.location, from: .local) {
+                                            viewModel.dragStartLocation(to: coordinate)
+                                        }
+                                    }
+                                    .onEnded { value in
+                                        if let coordinate = proxy.convert(value.location, from: .local) {
+                                            viewModel.setStartLocation(coordinate, startName: nil)
+                                        }
+                                    }
+                            )
                     }
                 } else if let historyRoute = viewModel.selectedHistoryRoute {
                     Annotation("Start", coordinate: CLLocationCoordinate2D(latitude: historyRoute.startLat, longitude: historyRoute.startLon), anchor: .bottom) {
@@ -1089,6 +1164,19 @@ struct MainMapView: View {
                 if let end = viewModel.endLocation {
                     Annotation("Destination", coordinate: end, anchor: .bottom) {
                         markerView(color: .errorRose)
+                            .gesture(
+                                DragGesture(coordinateSpace: .named("mapCanvas"))
+                                    .onChanged { value in
+                                        if let coordinate = proxy.convert(value.location, from: .local) {
+                                            viewModel.dragEndLocation(to: coordinate)
+                                        }
+                                    }
+                                    .onEnded { value in
+                                        if let coordinate = proxy.convert(value.location, from: .local) {
+                                            viewModel.setEndLocation(coordinate, destinationName: nil)
+                                        }
+                                    }
+                            )
                     }
                 } else if let historyRoute = viewModel.selectedHistoryRoute {
                     Annotation("Destination", coordinate: CLLocationCoordinate2D(latitude: historyRoute.endLat, longitude: historyRoute.endLon), anchor: .bottom) {

@@ -236,8 +236,8 @@ class APIService {
     /// Fetch place autocomplete suggestions for route planning.
     func fetchPlaceSuggestions(query: String, target: String? = nil, limit: Int = 8) async throws -> [PlaceSuggestion] {
         guard let baseURL = URL(string: baseURLLabel),
-              let autocompleteURL = URL(string: "/api/autocomplete", relativeTo: baseURL),
-              var components = URLComponents(url: autocompleteURL, resolvingAgainstBaseURL: true) else {
+              let autocompleteURL = URL(string: "/api/autocomplete", relativeTo: baseURL)?.absoluteURL,
+              var components = URLComponents(url: autocompleteURL, resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL
         }
 
@@ -812,6 +812,49 @@ class APIService {
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+    }
+
+    /// Fetch the nearest recognizable landmark/place for a coordinate.
+    func fetchNearestPlace(coordinate: CLLocationCoordinate2D) async throws -> NearestPlaceResponse {
+        guard let baseURL = URL(string: baseURLLabel),
+              let nearestURL = URL(string: "/api/nearest-place", relativeTo: baseURL)?.absoluteURL,
+              var components = URLComponents(url: nearestURL, resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "lat", value: String(coordinate.latitude)),
+            URLQueryItem(name: "lng", value: String(coordinate.longitude))
+        ]
+
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "GET"
+        applyAnalyticsHeaders(&urlRequest)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode(NearestPlaceResponse.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
         }
     }
 

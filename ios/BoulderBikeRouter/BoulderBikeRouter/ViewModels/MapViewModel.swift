@@ -25,6 +25,9 @@ class MapViewModel {
     var endPlaceSearchQuery: String = ""
     var placeAutocompleteError: String?
 
+    private var startGeocodeTask: Task<Void, Never>?
+    private var endGeocodeTask: Task<Void, Never>?
+
     // Map markers and route state
     var startLocation: CLLocationCoordinate2D?
     var endLocation: CLLocationCoordinate2D?
@@ -140,6 +143,16 @@ class MapViewModel {
             }
         }
         
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("RouteRerouted"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            if let newRoute = notification.object as? RouteResponse {
+                self?.routeResponse = newRoute
+            }
+        }
+        
         // Listen for app foregrounding to trigger auto-sync
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
@@ -216,8 +229,14 @@ class MapViewModel {
         // Lock/unlock sliders based on preset type (like official routes B180/B360)
         if preset.routeType != nil {
             isWeightsLocked = true
+            selectedStartName = "Valmont Bike Park"
+            selectedDestinationName = "Valmont Bike Park"
         } else {
             isWeightsLocked = false
+            // Geocode dynamically and trigger route calculation
+            setStartLocation(preset.startCoordinate, startName: nil)
+            setEndLocation(preset.endCoordinate, destinationName: nil)
+            return
         }
         
         // Trigger routing
@@ -242,25 +261,177 @@ class MapViewModel {
         }
     }
 
-    func setStartLocation(_ coordinate: CLLocationCoordinate2D, startName: String? = nil) {
-        startLocation = coordinate
-        selectedStartName = startName
+    private func coordinateDistance(_ a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
+        CLLocation(latitude: a.latitude, longitude: a.longitude)
+            .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+    }
+
+    func dragStartLocation(to coordinate: CLLocationCoordinate2D) {
+        startGeocodeTask?.cancel()
+        
+        if let home = homeLocation,
+           coordinateDistance(coordinate, to: home.coordinate) <= 20 {
+            selectedStartName = "Home"
+            startLocation = coordinate
+        } else {
+            selectedStartName = String(format: "near %.6f, %.6f", coordinate.latitude, coordinate.longitude)
+            startLocation = coordinate
+            
+            startGeocodeTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else { return }
+                var resolvedName = selectedStartName ?? ""
+                do {
+                    let response = try await apiService.fetchNearestPlace(coordinate: coordinate)
+                    resolvedName = response.displayName
+                } catch {
+                    print("Geocoding failed: \(error.localizedDescription)")
+                }
+                
+                if let home = self.homeLocation,
+                   self.coordinateDistance(coordinate, to: home.coordinate) <= 20 {
+                    resolvedName = "Home"
+                }
+                
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        self.selectedStartName = resolvedName
+                    }
+                }
+            }
+        }
+    }
+
+    func dragEndLocation(to coordinate: CLLocationCoordinate2D) {
+        endGeocodeTask?.cancel()
         selectedPresetName = nil
-        Task {
-            await fetchRoute()
+        selectedPlayground = nil
+        
+        if let home = homeLocation,
+           coordinateDistance(coordinate, to: home.coordinate) <= 50 {
+            selectedDestinationName = "Home"
+            endLocation = coordinate
+        } else {
+            selectedDestinationName = String(format: "near %.6f, %.6f", coordinate.latitude, coordinate.longitude)
+            endLocation = coordinate
+            
+            endGeocodeTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else { return }
+                var resolvedName = selectedDestinationName ?? ""
+                do {
+                    let response = try await apiService.fetchNearestPlace(coordinate: coordinate)
+                    resolvedName = response.displayName
+                } catch {
+                    print("Geocoding failed: \(error.localizedDescription)")
+                }
+                
+                if let home = self.homeLocation,
+                   self.coordinateDistance(coordinate, to: home.coordinate) <= 50 {
+                    resolvedName = "Home"
+                }
+                
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        self.selectedDestinationName = resolvedName
+                    }
+                }
+            }
+        }
+    }
+
+    func setStartLocation(_ coordinate: CLLocationCoordinate2D, startName: String? = nil) {
+        startGeocodeTask?.cancel()
+        selectedPresetName = nil
+        
+        if let startName {
+            selectedStartName = startName
+            startLocation = coordinate
+            Task {
+                await fetchRoute()
+            }
+        } else if let home = homeLocation,
+                  coordinateDistance(coordinate, to: home.coordinate) <= 20 {
+            selectedStartName = "Home"
+            startLocation = coordinate
+            Task {
+                await fetchRoute()
+            }
+        } else {
+            selectedStartName = String(format: "near %.6f, %.6f", coordinate.latitude, coordinate.longitude)
+            startLocation = coordinate
+            
+            startGeocodeTask = Task {
+                var resolvedName = selectedStartName ?? ""
+                do {
+                    let response = try await apiService.fetchNearestPlace(coordinate: coordinate)
+                    resolvedName = response.displayName
+                } catch {
+                    print("Geocoding failed: \(error.localizedDescription)")
+                }
+                
+                if let home = self.homeLocation,
+                   self.coordinateDistance(coordinate, to: home.coordinate) <= 20 {
+                    resolvedName = "Home"
+                }
+                
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        self.selectedStartName = resolvedName
+                    }
+                }
+                await fetchRoute()
+            }
         }
     }
 
     func setEndLocation(_ coordinate: CLLocationCoordinate2D, destinationName: String? = nil) {
-        endLocation = coordinate
+        endGeocodeTask?.cancel()
         selectedPresetName = nil
         selectedPlayground = nil
+        
         let trimmedName = destinationName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        selectedDestinationName = (trimmedName?.isEmpty == false) ? trimmedName : nil
-        Task {
-            await fetchRoute()
+        if let trimmedName, !trimmedName.isEmpty {
+            selectedDestinationName = trimmedName
+            endLocation = coordinate
+            Task {
+                await fetchRoute()
+            }
+        } else if let home = homeLocation,
+                  coordinateDistance(coordinate, to: home.coordinate) <= 50 {
+            selectedDestinationName = "Home"
+            endLocation = coordinate
+            Task {
+                await fetchRoute()
+            }
+        } else {
+            selectedDestinationName = String(format: "near %.6f, %.6f", coordinate.latitude, coordinate.longitude)
+            endLocation = coordinate
+            
+            endGeocodeTask = Task {
+                var resolvedName = selectedDestinationName ?? ""
+                do {
+                    let response = try await apiService.fetchNearestPlace(coordinate: coordinate)
+                    resolvedName = response.displayName
+                } catch {
+                    print("Geocoding failed: \(error.localizedDescription)")
+                }
+                
+                if let home = self.homeLocation,
+                   self.coordinateDistance(coordinate, to: home.coordinate) <= 50 {
+                    resolvedName = "Home"
+                }
+                
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        self.selectedDestinationName = resolvedName
+                    }
+                }
+                await fetchRoute()
+            }
         }
     }
+
 
     func searchPlaces(query: String, target: String) async {
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -351,7 +522,7 @@ class MapViewModel {
             homeLocationError = "Current location is unavailable. Allow location access to route home."
             return
         }
-        startLocation = routeStart
+        setStartLocation(routeStart, startName: nil)
         setEndLocation(homeLocation.coordinate, destinationName: "Home")
     }
 

@@ -39,8 +39,8 @@ class NavigationManager {
     private var isRerouting: Bool = false
     private var rerouteWeights: [String: Double] = [:]
     private var rerouteOffsets: [String: Double]? = nil
-    private var routeCoords: [CLLocationCoordinate2D] = []
-    private var segments: [RouteSegment] = []
+    var routeCoords: [CLLocationCoordinate2D] = []
+    var segments: [RouteSegment] = []
     private let speechSynthesizer = AVSpeechSynthesizer()
     
     // Telemetry properties
@@ -94,14 +94,18 @@ class NavigationManager {
         self.activeRouteId = UUID().uuidString
         
         // Prevent screen sleep during navigation
-        UIApplication.shared.isIdleTimerDisabled = true
+        Task { @MainActor in
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
         
         speak("Starting navigation to destination. Stay safe.")
         updateOverlay(distanceFromStart: 0)
         sendWatchSnapshot(force: true)
         
         // Setup battery monitoring
-        UIDevice.current.isBatteryMonitoringEnabled = true
+        Task { @MainActor in
+            UIDevice.current.isBatteryMonitoringEnabled = true
+        }
         
         // Prepare start request
         let startLat = segments.first?.coords.first?.first ?? 0.0
@@ -219,7 +223,9 @@ class NavigationManager {
         currentBannerManeuver = nil
         
         // Re-enable screen sleep
-        UIApplication.shared.isIdleTimerDisabled = false
+        Task { @MainActor in
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
         
         speak("Navigation ended.")
         
@@ -483,7 +489,7 @@ class NavigationManager {
 
         let lastIndex = maneuvers.count - 1
         while currentManeuverIndex < lastIndex,
-              maneuvers[currentManeuverIndex].distanceFromStart <= traversedMeters + passedManeuverDistance {
+              traversedMeters >= maneuvers[currentManeuverIndex].distanceFromStart + passedManeuverDistance {
             currentManeuverIndex += 1
         }
 
@@ -512,6 +518,11 @@ class NavigationManager {
 
     private func speak(_ text: String) {
         guard !isMuted else { return }
+        
+        // Prevent speech synthesis hangs in simulator unit/UI test environments
+        let env = ProcessInfo.processInfo.environment
+        let isTesting = env.keys.contains { $0.contains("XCTest") || $0.contains("XCInject") } || NSClassFromString("XCTestCase") != nil
+        guard !isTesting else { return }
         
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
@@ -551,7 +562,7 @@ class NavigationManager {
         Task {
             do {
                 let response = try await apiService.fetchRoute(request: request)
-                await MainActor.run { self.applyReroute(response.segments) }
+                await MainActor.run { self.applyReroute(response) }
             } catch {
                 await MainActor.run {
                     self.isRerouting = false
@@ -561,7 +572,8 @@ class NavigationManager {
         }
     }
 
-    private func applyReroute(_ newSegments: [RouteSegment]) {
+    private func applyReroute(_ response: RouteResponse) {
+        let newSegments = response.segments
         guard !newSegments.isEmpty else { isRerouting = false; return }
         segments = newSegments
         routeCoords = flattenSegments(newSegments)
@@ -576,6 +588,7 @@ class NavigationManager {
         updateOverlay(distanceFromStart: 0)
         sendWatchSnapshot(force: true)
         speak("Route updated.")
+        NotificationCenter.default.post(name: NSNotification.Name("RouteRerouted"), object: response)
     }
 
     private func sendWatchSnapshot(

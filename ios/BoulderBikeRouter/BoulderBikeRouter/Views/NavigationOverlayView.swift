@@ -154,7 +154,11 @@ struct NavigationOverlayView: View {
     // Help helper for duration estimation formatting from string
     private func formatDuration(_ text: String) -> String {
         // Simple extraction: e.g. "2.4 miles" -> 12 mins
-        let val = text.replacingOccurrences(of: " miles", with: "").replacingOccurrences(of: " mile", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let val = text
+            .replacingOccurrences(of: " miles", with: "")
+            .replacingOccurrences(of: " mile", with: "")
+            .replacingOccurrences(of: " mi", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if let d = Double(val) {
             return String(Int(d * 5))
         }

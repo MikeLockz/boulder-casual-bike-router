@@ -705,3 +705,30 @@ struct PocketBaseErrorDetail: Codable {
     let code: String
     let message: String
 }
+
+// MARK: - Geocoding Models
+
+struct ResolvedPlace: Codable, Equatable, Hashable {
+    let id: String?
+    let name: String
+    let type: String?
+    let lat: Double
+    let lng: Double
+    let distanceMeters: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, type, lat, lng
+        case distanceMeters = "distance_meters"
+    }
+}
+
+struct NearestPlaceResponse: Codable, Equatable, Hashable {
+    let place: ResolvedPlace?
+    let displayName: String
+
+    enum CodingKeys: String, CodingKey {
+        case place
+        case displayName = "display_name"
+    }
+}
+

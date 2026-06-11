@@ -2262,6 +2262,137 @@ def autocomplete_places():
     except Exception as e:
         return jsonify({"error": f"Failed to fetch autocomplete places: {e}"}), 500
 
+# Landmark priorities for coordinates-to-place resolving (lower = higher priority / more recognizable)
+LANDMARK_PRIORITIES = {
+    "park": 1.0,
+    "playground": 1.0,
+    "trailhead": 1.0,
+    "peak": 1.1,
+    "viewpoint": 1.2,
+    "cafe": 1.2,
+    "pub": 1.2,
+    "bar": 1.2,
+    "restaurant": 1.3,
+    "fast_food": 1.3,
+    "library": 1.3,
+    "university": 1.4,
+    "school": 1.4,
+    "community_centre": 1.4,
+    "place_of_worship": 1.5,
+    "bus_stop": 1.8,
+    "bicycle_rental": 2.0,
+    "fuel": 2.0,
+    "parking": 2.5,
+    "drinking_water": 3.0,
+    "toilets": 4.0,
+    "shelter": 4.0,
+    "bench": 5.0,
+    "bicycle_parking": 5.0,
+}
+
+@app.route("/api/nearest-place", methods=["GET"])
+def get_nearest_place():
+    try:
+        lat_val = request.args.get("lat")
+        lng_val = request.args.get("lng") or request.args.get("lon")
+        
+        if not lat_val or not lng_val:
+            return jsonify({"error": "Missing lat or lng query parameters"}), 400
+            
+        lat = float(lat_val)
+        lng = float(lng_val)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid lat or lng values"}), 400
+
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    
+    # Try query bounding boxes of increasing sizes: 500m (~0.005), 1.5km (~0.015), 5km (~0.05)
+    deltas = [0.005, 0.015, 0.05]
+    records = []
+    
+    for delta in deltas:
+        min_lat = lat - delta
+        max_lat = lat + delta
+        min_lng = lng - delta
+        max_lng = lng + delta
+        
+        try:
+            resp = requests.get(
+                f"{pb_url}/api/collections/places/records",
+                params={
+                    "filter": f"lat >= {min_lat} && lat <= {max_lat} && lng >= {min_lng} && lng <= {max_lng}",
+                    "perPage": 200
+                },
+                timeout=5
+            )
+            if resp.status_code == 200:
+                records = resp.json().get("items", [])
+                if records:
+                    break
+        except Exception as e:
+            print(f"[-] Error querying PocketBase for nearest place (delta={delta}): {e}")
+            
+    # If still no records, query a small sample of the database as fallback
+    if not records:
+        try:
+            resp = requests.get(
+                f"{pb_url}/api/collections/places/records",
+                params={"perPage": 50},
+                timeout=5
+            )
+            if resp.status_code == 200:
+                records = resp.json().get("items", [])
+        except Exception as e:
+            print(f"[-] Error querying PocketBase fallback: {e}")
+            
+    if not records:
+        return jsonify({
+            "place": None,
+            "display_name": f"near {lat:.6f}, {lng:.6f}"
+        }), 200
+        
+    closest_place = None
+    min_score = float("inf")
+    closest_distance = float("inf")
+    
+    for record in records:
+        try:
+            p_lat = float(record.get("lat"))
+            p_lng = float(record.get("lng"))
+        except (ValueError, TypeError):
+            continue
+            
+        dist = haversine_distance((lat, lng), (p_lat, p_lng))
+        p_type = str(record.get("type") or "").lower()
+        
+        # Apply score penalty for less descriptive places
+        multiplier = LANDMARK_PRIORITIES.get(p_type, 1.5)
+        score = dist * multiplier
+        
+        if score < min_score:
+            min_score = score
+            closest_place = record
+            closest_distance = dist
+            
+    if closest_place and closest_distance <= 5000:
+        name = closest_place.get("name") or "Unknown Landmark"
+        return jsonify({
+            "place": {
+                "id": closest_place.get("id"),
+                "name": name,
+                "type": closest_place.get("type"),
+                "lat": closest_place.get("lat"),
+                "lng": closest_place.get("lng"),
+                "distance_meters": closest_distance
+            },
+            "display_name": f"near {name}"
+        }), 200
+    else:
+        return jsonify({
+            "place": None,
+            "display_name": f"near {lat:.6f}, {lng:.6f}"
+        }), 200
+
 @app.route("/api/analytics/place-search", methods=["POST", "OPTIONS"])
 def analytics_place_search():
     if request.method == "OPTIONS":

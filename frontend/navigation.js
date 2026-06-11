@@ -511,7 +511,7 @@ const Navigation = (() => {
         let activeIdx = state.currentManeuverIdx;
         while (
             activeIdx < lastIdx &&
-            state.maneuvers[activeIdx].distanceFromStart <= progress.traversed + PASSED_MANEUVER_DIST
+            progress.traversed >= state.maneuvers[activeIdx].distanceFromStart + PASSED_MANEUVER_DIST
         ) {
             activeIdx++;
         }

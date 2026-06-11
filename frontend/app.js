@@ -595,6 +595,67 @@ function handleAutocompleteInput(target, value) {
     }, 220);
 }
 
+let nearestPlaceDebounceTimers = { start: null, end: null };
+let nearestPlaceAbortControllers = { start: null, end: null };
+
+async function fetchNearestPlaceImmediately(target, latlng) {
+    clearTimeout(nearestPlaceDebounceTimers[target]);
+    if (nearestPlaceAbortControllers[target]) {
+        nearestPlaceAbortControllers[target].abort();
+    }
+    const controller = new AbortController();
+    nearestPlaceAbortControllers[target] = controller;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/nearest-place?lat=${latlng.lat}&lng=${latlng.lng}`, {
+            signal: controller.signal,
+            headers: {
+                "X-Client-Source": "web",
+                "X-Client-Session-Id": analyticsSessionId
+            }
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data.display_name) {
+            updateRouteInputValue(target, data.display_name);
+            if (target === "start") {
+                updatePlaygroundStartText(data.place ? data.place.name : "Custom Start");
+            } else if (target === "end") {
+                setCurrentRouteTitle(data.place ? data.place.name : "Custom Route");
+            }
+        }
+    } catch (error) {
+        if (error.name !== "AbortError") {
+            console.warn("[Geocode] Failed to fetch nearest place:", error);
+        }
+    }
+}
+
+function fetchNearestPlaceDebounced(target, latlng) {
+    clearTimeout(nearestPlaceDebounceTimers[target]);
+    
+    // While dragging/moving, temporarily show the coordinate representation
+    updateRouteInputValue(target, labelForLocation(latlng));
+    
+    nearestPlaceDebounceTimers[target] = setTimeout(() => {
+        fetchNearestPlaceImmediately(target, latlng);
+    }, 300);
+}
+
+function setupMarkerEvents(target, marker) {
+    marker.on("drag", () => {
+        fetchNearestPlaceDebounced(target, marker.getLatLng());
+    });
+    
+    marker.on("dragend", () => {
+        if (target === "end") {
+            setCurrentRouteTitle();
+        }
+        fetchNearestPlaceImmediately(target, marker.getLatLng());
+        calculateRoute();
+    });
+}
+
 function setRoutePoint(target, latlngLike, options = {}) {
     if (activePlanMapSource === "history") {
         clearHistoryMapLayers();
@@ -611,11 +672,7 @@ function setRoutePoint(target, latlngLike, options = {}) {
 
     const popupTitle = options.popup || (isStart ? "Start Point" : "Destination");
     marker.bindPopup(`<strong>${popupTitle}</strong><br>Drag to move`).openPopup();
-    marker.on("dragend", () => {
-        if (!isStart) setCurrentRouteTitle();
-        updateRouteInput(target, marker.getLatLng());
-        calculateRoute();
-    });
+    setupMarkerEvents(target, marker);
 
     if (isStart) {
         if (startMarker) map.removeLayer(startMarker);
@@ -627,7 +684,12 @@ function setRoutePoint(target, latlngLike, options = {}) {
         setCurrentRouteTitle(options.routeTitle || options.label);
     }
 
-    updateRouteInputValue(target, options.label || labelForLocation(latlng));
+    if (options.label) {
+        updateRouteInputValue(target, options.label);
+    } else {
+        updateRouteInputValue(target, labelForLocation(latlng));
+        fetchNearestPlaceImmediately(target, latlng);
+    }
     if (startMarker && endMarker) {
         calculateRoute();
     }
@@ -1766,6 +1828,7 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
                 icon: createCustomIcon("green")
             }).addTo(map);
             startMarker.bindPopup("<strong>Valmont Bike Park</strong><br>Start of Official Tour");
+            updateRouteInputValue("start", "Valmont Bike Park");
             
             // Set Destination marker statically (non-draggable)
             endMarker = L.marker([40.030, -105.234], {
@@ -1773,6 +1836,7 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
                 icon: createCustomIcon("red")
             }).addTo(map);
             endMarker.bindPopup("<strong>Valmont Bike Park</strong><br>End of Official Tour");
+            updateRouteInputValue("end", "Valmont Bike Park");
             
             // Render turn-by-turn directions
             renderTurnByTurn(routeType);
@@ -1825,11 +1889,8 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
         icon: createCustomIcon("green")
     }).addTo(map);
     startMarker.bindPopup("<strong>Start Point</strong><br>Drag to move");
-    startMarker.on("dragend", () => {
-        updateRouteInput("start", startMarker.getLatLng());
-        calculateRoute();
-    });
-    updateRouteInput("start", startLatLng);
+    setupMarkerEvents("start", startMarker);
+    fetchNearestPlaceImmediately("start", startLatLng);
 
     // Set Destination
     endMarker = L.marker(endLatLng, {
@@ -1837,12 +1898,8 @@ async function loadPresetRoute(startCoords, endCoords, waypoints = [], routeType
         icon: createCustomIcon("red")
     }).addTo(map);
     endMarker.bindPopup("<strong>Destination</strong><br>Drag to move");
-    endMarker.on("dragend", () => {
-        setCurrentRouteTitle();
-        updateRouteInput("end", endMarker.getLatLng());
-        calculateRoute();
-    });
-    updateRouteInput("end", endLatLng);
+    setupMarkerEvents("end", endMarker);
+    fetchNearestPlaceImmediately("end", endLatLng);
 
     // Draw waypoints as small, semi-transparent circles
     waypoints.forEach((wp, index) => {
@@ -2224,11 +2281,8 @@ function autoLocateUser() {
                     }).addTo(map);
                     
                     startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
-                    startMarker.on("dragend", () => {
-                        updateRouteInput("start", startMarker.getLatLng());
-                        calculateRoute();
-                    });
-                    updateRouteInput("start", startMarker.getLatLng());
+                    setupMarkerEvents("start", startMarker);
+                    fetchNearestPlaceImmediately("start", startMarker.getLatLng());
 
                     showUserGPSDot(lat, lon);
                     updatePlaygroundStartText("Current Location");
@@ -2295,11 +2349,8 @@ function requestLocation() {
                     }).addTo(map);
                     
                     startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
-                    startMarker.on("dragend", () => {
-                        updateRouteInput("start", startMarker.getLatLng());
-                        calculateRoute();
-                    });
-                    updateRouteInput("start", startMarker.getLatLng());
+                    setupMarkerEvents("start", startMarker);
+                    fetchNearestPlaceImmediately("start", startMarker.getLatLng());
 
                     showUserGPSDot(lat, lon);
                     updatePlaygroundStartText("Current Location");
@@ -2410,11 +2461,8 @@ function onDemandLocate(isRetry = false) {
                     }).addTo(map);
                     
                     startMarker.bindPopup("<strong>Start Point (Your Location)</strong><br>Drag to adjust starting position").openPopup();
-                    startMarker.on("dragend", () => {
-                        updateRouteInput("start", startMarker.getLatLng());
-                        calculateRoute();
-                    });
-                    updateRouteInput("start", startMarker.getLatLng());
+                    setupMarkerEvents("start", startMarker);
+                    fetchNearestPlaceImmediately("start", startMarker.getLatLng());
 
                     showUserGPSDot(lat, lon);
                     updatePlaygroundStartText("Current Location");

@@ -166,6 +166,44 @@ Use this file as the first stop in fresh chats. It captures durable context from
   - `./venv/bin/python3 tools/test_loops.py`
 - If routing behavior is odd, inspect the segment classification first: OSM tags, `facility_type`, `bikestress`, `offstreet_type`, and final multiplier.
 
+## Checking Server Readiness & Graph Status
+
+During backend startup or rebuilds, the server takes time to initialize and construct the routing graph from OSM and GIS datasets. During this window, routing calls like `/api/route` will fail or return incomplete data. Use the following endpoints to check readiness:
+
+- **Health Check (`/api/health`)**:
+  - Returns **`503 Service Unavailable`** when the graph is building, has encountered an error, or is uninitialized. The payload includes the status and graph details (e.g., `{"status": "building", "graph": {...}}`).
+  - Returns **`200 OK`** once the graph is fully constructed and ready for routing queries (e.g., `{"status": "ok", "graph": {...}}`).
+  - *Best Use*: In `docker-compose` healthchecks or simple polling scripts.
+  - *Bash Polling Example*:
+    ```bash
+    echo "Waiting for routing graph to be ready..."
+    until curl -s -f http://localhost:8081/api/health > /dev/null; do
+        echo -n "."
+        sleep 2
+    done
+    echo " Ready!"
+    ```
+
+- **Graph Status (`/api/graph-status`)**:
+  - Always returns **`200 OK`**, but the JSON response body contains the state in the `"status"` field (`"building"`, `"ready"`, or `"error"`).
+  - *Best Use*: Polling loops that need to handle graph build failures (state `"error"`) explicitly without dealing with HTTP 503 response codes.
+  - *Bash Polling Example*:
+    ```bash
+    while true; do
+        status=$(curl -s http://localhost:8081/api/graph-status | grep -o '"status":"[^"]*"' | head -n 1 | cut -d'"' -f4)
+        if [ "$status" = "ready" ]; then
+            echo "Routing graph is ready!"
+            break
+        elif [ "$status" = "error" ]; then
+            echo "Graph build failed! Please check backend logs."
+            exit 1
+        else
+            echo "Graph status: $status. Waiting..."
+            sleep 2
+        fi
+    done
+    ```
+
 ## Editing Guardrails
 
 - There may be local uncommitted Swift/Xcode changes from the user. Check `git status` before edits and do not revert unrelated files.
