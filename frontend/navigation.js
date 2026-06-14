@@ -869,7 +869,8 @@ const Navigation = (() => {
     // --- Telemetry Logging API Gateway Calls ---
     function getAuthHeaders() {
         const headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            ...(window.getGuestHeaders ? window.getGuestHeaders() : {})
         };
         const storedAuth = localStorage.getItem("pocketbase_auth");
         if (storedAuth) {
@@ -1184,7 +1185,7 @@ const Navigation = (() => {
                 const base = typeof API_BASE !== "undefined" ? API_BASE : "";
                 const response = await fetch(`${base}/api/navigation/${routeId}/end`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify(endPayload)
                 });
                 

@@ -7,6 +7,8 @@ struct MainTabView: View {
     @State private var isDrawerOpen: Bool = false
     @State private var isNavigationActive: Bool = false
     @State private var historyRouteToPresent: PastRoute?
+    @State private var isSessionAuthPresented = false
+    @State private var showSessionExpiredAlert = false
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
@@ -25,7 +27,7 @@ struct MainTabView: View {
                         selectTab(0)
                     }
                 case 2:
-                    HistoryTabView(pastRoutes: viewModel.pastRoutes, routeToPresent: $historyRouteToPresent)
+                    HistoryTabView(routeToPresent: $historyRouteToPresent)
                 case 3:
                     SettingsTabView(viewModel: viewModel)
                 default:
@@ -59,8 +61,25 @@ struct MainTabView: View {
             }
         }
         .environment(viewModel)
+        .sheet(isPresented: $isSessionAuthPresented) {
+            AuthView(viewModel: viewModel, initialMode: .signIn)
+        }
+        .alert("Session Expired", isPresented: $showSessionExpiredAlert) {
+            Button("Sign In") {
+                isSessionAuthPresented = true
+            }
+            Button("Later", role: .cancel) {}
+        } message: {
+            Text("Sign in again to sync your saved routes and pending changes. Your routes remain saved on this iPhone.")
+        }
+        .onChange(of: viewModel.isSessionExpired) { _, isExpired in
+            if isExpired {
+                showSessionExpiredAlert = true
+            }
+        }
         .onAppear {
             viewModel.modelContext = modelContext
+            showSessionExpiredAlert = viewModel.isSessionExpired
             Task {
                 await viewModel.loadConfiguration()
             }
@@ -92,6 +111,9 @@ struct MainTabView: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 selectTab(3)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AuthenticationExpired"))) { _ in
+            viewModel.handleAuthenticationExpired()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TelemetryRouteEnded"))) { notification in
             guard let routeId = notification.object as? String else { return }

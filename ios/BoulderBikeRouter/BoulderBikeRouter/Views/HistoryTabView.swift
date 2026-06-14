@@ -2,10 +2,13 @@ import SwiftUI
 import MapKit
 
 struct HistoryTabView: View {
-    let pastRoutes: [PastRoute]
     @Binding var routeToPresent: PastRoute?
     @Environment(MapViewModel.self) private var viewModel
     @State private var selectedDetailRoute: PastRoute?
+    
+    private var pastRoutes: [PastRoute] {
+        viewModel.pastRoutes
+    }
     
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()

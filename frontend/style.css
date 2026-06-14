@@ -2800,3 +2800,49 @@ input[type="range"]::-webkit-slider-thumb:hover {
     background: #ff1744;
     box-shadow: 0 0 10px #ff1744;
 }
+
+/* Region Selector dropdown styling */
+.region-selector {
+    position: relative;
+    margin-left: auto;
+    margin-right: 12px;
+    display: flex;
+    align-items: center;
+}
+
+.region-selector select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--accent-color);
+    padding: 6px 24px 6px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    transition: all 0.2s;
+}
+
+.region-selector select:hover {
+    background: rgba(100, 255, 218, 0.08);
+    border-color: rgba(100, 255, 218, 0.3);
+    box-shadow: 0 0 8px rgba(100, 255, 218, 0.15);
+}
+
+.region-selector select:focus {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 10px rgba(100, 255, 218, 0.25);
+}
+
+.region-select-arrow {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    color: var(--accent-color);
+    font-size: 8px;
+    pointer-events: none;
+}

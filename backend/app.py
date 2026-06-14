@@ -6,6 +6,8 @@ import datetime
 import re
 import difflib
 import threading
+import hashlib
+import hmac
 
 try:
     import requests
@@ -24,12 +26,31 @@ except ImportError as e:
 
 app = Flask(__name__)
 
-# Bounding box for Boulder, CO: [South, West, North, East]
-BOULDER_BBOX = (39.96, -105.30, 40.09, -105.18)
-CACHE_FILE = os.path.join(os.path.dirname(__file__), "boulder_osm_data.json")
-PLAYGROUNDS_CACHE_FILE = os.path.join(os.path.dirname(__file__), "boulder_playground_data.json")
-STRESS_CACHE_FILE = os.path.join(os.path.dirname(__file__), "boulder_bike_stress_data.json")
-OFFSTREET_CACHE_FILE = os.path.join(os.path.dirname(__file__), "boulder_bike_offstreet_data.json")
+# Multi-Region Configuration
+REGIONS = {
+    "boulder": {
+        "name": "Boulder",
+        "bbox": (39.96, -105.30, 40.09, -105.18),
+        "osm_cache_file": os.path.join(os.path.dirname(__file__), "boulder_osm_data.json"),
+        "playgrounds_cache_file": os.path.join(os.path.dirname(__file__), "boulder_playground_data.json"),
+        "stress_cache_file": os.path.join(os.path.dirname(__file__), "boulder_bike_stress_data.json"),
+        "offstreet_cache_file": os.path.join(os.path.dirname(__file__), "boulder_bike_offstreet_data.json"),
+        "playground_url": "https://opendata.arcgis.com/datasets/b1297c2328b343528f70dfd78c6de459_1.geojson",
+        "stress_url": "https://opendata.arcgis.com/datasets/e20bc9b72c3b4d0fac167d722a7cf1b7_0.geojson",
+        "offstreet_url": "https://opendata.arcgis.com/datasets/8cae0bbbd3154abe8264fa349b8f245f_0.geojson",
+    },
+    "broomfield": {
+        "name": "Broomfield",
+        "bbox": (39.88, -105.16, 40.01, -104.99),
+        "osm_cache_file": os.path.join(os.path.dirname(__file__), "broomfield_osm_data.json"),
+        "playgrounds_cache_file": None,
+        "stress_cache_file": None,
+        "offstreet_cache_file": None,
+        "playground_url": None,
+        "stress_url": None,
+        "offstreet_url": None,
+    }
+}
 
 DEFAULT_WEIGHTS = {
     "separated_path": 0.5,
@@ -62,31 +83,38 @@ NAV_METRIC_FILTER = {
     "max_step_speed_mps": 15.0,
 }
 
-# In-memory graph storage
-G_connected = None
-nodes_global = {}
-safe_crossing_nodes_global = set()
-four_lane_nodes_global = set()
-bike_routes_geojson_global = None
+# In-memory graph storage per region
+graphs_by_region = {}
+nodes_by_region = {}
+safe_crossings_by_region = {}
+four_lane_nodes_by_region = {}
+bike_routes_geojson_by_region = {}
+
+# Build statuses per region
+graph_build_statuses = {}
 graph_build_lock = threading.Lock()
-graph_build_status = {
-    "state": "not_started",
-    "started_at": None,
-    "finished_at": None,
-    "last_success_at": None,
-    "duration_seconds": None,
-    "error": None,
-    "nodes": 0,
-    "edges": 0,
-    "build_id": 0,
-}
 
 def utc_now_iso():
     return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
-def mark_graph_build_started():
+def get_default_build_status():
+    return {
+        "state": "not_started",
+        "started_at": None,
+        "finished_at": None,
+        "last_success_at": None,
+        "duration_seconds": None,
+        "error": None,
+        "nodes": 0,
+        "edges": 0,
+        "build_id": 0,
+    }
+
+def mark_graph_build_started(region_id):
     with graph_build_lock:
-        graph_build_status.update({
+        if region_id not in graph_build_statuses:
+            graph_build_statuses[region_id] = get_default_build_status()
+        graph_build_statuses[region_id].update({
             "state": "building",
             "started_at": utc_now_iso(),
             "finished_at": None,
@@ -94,17 +122,19 @@ def mark_graph_build_started():
             "error": None,
             "nodes": 0,
             "edges": 0,
-            "build_id": graph_build_status["build_id"] + 1,
+            "build_id": graph_build_statuses[region_id]["build_id"] + 1,
         })
 
-def mark_graph_build_ready(graph):
-    started_at = parse_navigation_date(graph_build_status.get("started_at"))
+def mark_graph_build_ready(region_id, graph):
+    started_at = parse_navigation_date(graph_build_statuses.get(region_id, {}).get("started_at"))
     finished_at = datetime.datetime.now(datetime.timezone.utc)
     duration_seconds = None
     if started_at:
         duration_seconds = round((finished_at - started_at).total_seconds(), 3)
     with graph_build_lock:
-        graph_build_status.update({
+        if region_id not in graph_build_statuses:
+            graph_build_statuses[region_id] = get_default_build_status()
+        graph_build_statuses[region_id].update({
             "state": "ready",
             "finished_at": finished_at.isoformat().replace("+00:00", "Z"),
             "last_success_at": finished_at.isoformat().replace("+00:00", "Z"),
@@ -114,14 +144,16 @@ def mark_graph_build_ready(graph):
             "edges": graph.number_of_edges() if graph is not None else 0,
         })
 
-def mark_graph_build_error(error):
-    started_at = parse_navigation_date(graph_build_status.get("started_at"))
+def mark_graph_build_error(region_id, error):
+    started_at = parse_navigation_date(graph_build_statuses.get(region_id, {}).get("started_at"))
     finished_at = datetime.datetime.now(datetime.timezone.utc)
     duration_seconds = None
     if started_at:
         duration_seconds = round((finished_at - started_at).total_seconds(), 3)
     with graph_build_lock:
-        graph_build_status.update({
+        if region_id not in graph_build_statuses:
+            graph_build_statuses[region_id] = get_default_build_status()
+        graph_build_statuses[region_id].update({
             "state": "error",
             "finished_at": finished_at.isoformat().replace("+00:00", "Z"),
             "duration_seconds": duration_seconds,
@@ -130,10 +162,10 @@ def mark_graph_build_error(error):
             "edges": 0,
         })
 
-def get_graph_build_status():
+def get_graph_build_status(region_id):
     with graph_build_lock:
-        status = dict(graph_build_status)
-    status["ready"] = G_connected is not None and status.get("state") == "ready"
+        status = dict(graph_build_statuses.get(region_id, get_default_build_status()))
+    status["ready"] = graphs_by_region.get(region_id) is not None and status.get("state") == "ready"
     return status
 
 def haversine_distance(coord1, coord2):
@@ -320,6 +352,7 @@ def navigation_metrics_payload(metrics):
 
 def route_with_display_metrics(route):
     route_copy = dict(route)
+    route_copy.pop("guest_owner_hash", None)
     display_distance = route_copy.get("display_distance_meters")
     if not display_distance or float(display_distance or 0) <= 0:
         display_distance = route_copy.get("actual_distance_meters") or route_copy.get("total_length_meters") or 0.0
@@ -349,15 +382,17 @@ def route_with_display_metrics(route):
     route_copy["display_average_speed"] = display_average_speed
     return route_copy
 
-def fetch_osm_data():
-    """Fetch OpenStreetMap data for Boulder from Overpass API or load from cache."""
-    if os.path.exists(CACHE_FILE):
-        print("Loading OSM data from cache...")
-        with open(CACHE_FILE, "r") as f:
+def fetch_osm_data(region_id):
+    """Fetch OpenStreetMap data for specified region from Overpass API or load from cache."""
+    config = REGIONS[region_id]
+    cache_file = config["osm_cache_file"]
+    if os.path.exists(cache_file):
+        print(f"Loading {region_id} OSM data from cache...")
+        with open(cache_file, "r") as f:
             return json.load(f)
             
-    print("Fetching OSM data from Overpass API (this may take a few seconds)...")
-    s, w, n, e = BOULDER_BBOX
+    print(f"Fetching {region_id} OSM data from Overpass API (this may take a few seconds)...")
+    s, w, n, e = config["bbox"]
     overpass_url = "https://overpass-api.de/api/interpreter"
     overpass_query = f"""
     [out:json][timeout:180];
@@ -377,22 +412,28 @@ def fetch_osm_data():
     data = response.json()
     
     # Save cache
-    with open(CACHE_FILE, "w") as f:
+    with open(cache_file, "w") as f:
         json.dump(data, f)
         
     return data
 
-def fetch_playground_data():
-    """Fetch playground locations data for Boulder from Open Data portal or load from cache."""
-    if os.path.exists(PLAYGROUNDS_CACHE_FILE):
+def fetch_playground_data(region_id):
+    """Fetch playground locations data for specified region or load from cache."""
+    config = REGIONS[region_id]
+    cache_file = config["playgrounds_cache_file"]
+    url = config["playground_url"]
+    
+    if not cache_file or not url:
+        return {"type": "FeatureCollection", "features": []}
+
+    if os.path.exists(cache_file):
         try:
-            with open(PLAYGROUNDS_CACHE_FILE, "r") as f:
+            with open(cache_file, "r") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Error reading playgrounds cache: {e}")
+            print(f"Error reading playgrounds cache for {region_id}: {e}")
             
-    print("Fetching playground data from Boulder Open Data portal...")
-    url = "https://opendata.arcgis.com/datasets/b1297c2328b343528f70dfd78c6de459_1.geojson"
+    print(f"Fetching playground data from Open Data portal for {region_id}...")
     headers = {
         "User-Agent": "BoulderCasualBikeRouter/1.0 (contact: support@bouldercasualrouter.local)"
     }
@@ -402,28 +443,34 @@ def fetch_playground_data():
         data = response.json()
         
         # Save cache
-        with open(PLAYGROUNDS_CACHE_FILE, "w") as f:
+        with open(cache_file, "w") as f:
             json.dump(data, f)
         return data
     except Exception as e:
-        print(f"Error fetching playground data: {e}")
+        print(f"Error fetching playground data for {region_id}: {e}")
         # Return cache if available as a fallback
-        if os.path.exists(PLAYGROUNDS_CACHE_FILE):
-            with open(PLAYGROUNDS_CACHE_FILE, "r") as f:
+        if os.path.exists(cache_file):
+            with open(cache_file, "r") as f:
                 return json.load(f)
         raise e
 
-def fetch_stress_data():
-    """Fetch bike stress data for Boulder from Open Data portal or load from cache."""
-    if os.path.exists(STRESS_CACHE_FILE):
+def fetch_stress_data(region_id):
+    """Fetch bike stress data for specified region or load from cache."""
+    config = REGIONS[region_id]
+    cache_file = config["stress_cache_file"]
+    url = config["stress_url"]
+    
+    if not cache_file or not url:
+        return {"type": "FeatureCollection", "features": []}
+
+    if os.path.exists(cache_file):
         try:
-            with open(STRESS_CACHE_FILE, "r") as f:
+            with open(cache_file, "r") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Error reading stress cache: {e}")
+            print(f"Error reading stress cache for {region_id}: {e}")
             
-    print("Fetching bike stress data from Boulder Open Data portal...")
-    url = "https://opendata.arcgis.com/datasets/e20bc9b72c3b4d0fac167d722a7cf1b7_0.geojson"
+    print(f"Fetching bike stress data from Open Data portal for {region_id}...")
     headers = {
         "User-Agent": "BoulderCasualBikeRouter/1.0 (contact: support@bouldercasualrouter.local)"
     }
@@ -431,27 +478,33 @@ def fetch_stress_data():
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
-        with open(STRESS_CACHE_FILE, "w") as f:
+        with open(cache_file, "w") as f:
             json.dump(data, f)
         return data
     except Exception as e:
-        print(f"Error fetching bike stress data: {e}")
-        if os.path.exists(STRESS_CACHE_FILE):
-            with open(STRESS_CACHE_FILE, "r") as f:
+        print(f"Error fetching bike stress data for {region_id}: {e}")
+        if os.path.exists(cache_file):
+            with open(cache_file, "r") as f:
                 return json.load(f)
         raise e
 
-def fetch_offstreet_data():
-    """Fetch bike off-street data for Boulder from Open Data portal or load from cache."""
-    if os.path.exists(OFFSTREET_CACHE_FILE):
+def fetch_offstreet_data(region_id):
+    """Fetch bike off-street data for specified region or load from cache."""
+    config = REGIONS[region_id]
+    cache_file = config["offstreet_cache_file"]
+    url = config["offstreet_url"]
+    
+    if not cache_file or not url:
+        return {"type": "FeatureCollection", "features": []}
+
+    if os.path.exists(cache_file):
         try:
-            with open(OFFSTREET_CACHE_FILE, "r") as f:
+            with open(cache_file, "r") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Error reading off-street cache: {e}")
+            print(f"Error reading off-street cache for {region_id}: {e}")
             
-    print("Fetching bike off-street data from Boulder Open Data portal...")
-    url = "https://opendata.arcgis.com/datasets/8cae0bbbd3154abe8264fa349b8f245f_0.geojson"
+    print(f"Fetching bike off-street data from Open Data portal for {region_id}...")
     headers = {
         "User-Agent": "BoulderCasualBikeRouter/1.0 (contact: support@bouldercasualrouter.local)"
     }
@@ -459,13 +512,13 @@ def fetch_offstreet_data():
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
-        with open(OFFSTREET_CACHE_FILE, "w") as f:
+        with open(cache_file, "w") as f:
             json.dump(data, f)
         return data
     except Exception as e:
-        print(f"Error fetching bike off-street data: {e}")
-        if os.path.exists(OFFSTREET_CACHE_FILE):
-            with open(OFFSTREET_CACHE_FILE, "r") as f:
+        print(f"Error fetching bike off-street data for {region_id}: {e}")
+        if os.path.exists(cache_file):
+            with open(cache_file, "r") as f:
                 return json.load(f)
         raise e
 
@@ -813,66 +866,65 @@ def _bike_edge_direction(tags, infra_type):
     if infra_type == "separated_path":
         return "forward" if bike_oneway == "yes" else "both"
 
-    if oneway == "yes":
-        return "both" if bike_oneway == "no" else "forward"
-    if oneway == "-1":
-        return "both" if bike_oneway == "no" else "reverse"
-
     return "both"
 
 
-def build_graph(weights=None):
-    """Build the NetworkX routing graph from OSM JSON data."""
-    global G_connected, nodes_global, safe_crossing_nodes_global, four_lane_nodes_global
-    mark_graph_build_started()
+def build_graph(region_id="boulder", weights=None):
+    """Build the NetworkX routing graph from OSM JSON data for the specified region."""
+    mark_graph_build_started(region_id)
     if weights is None:
         weights = DEFAULT_WEIGHTS
 
     try:
-        data = fetch_osm_data()
+        data = fetch_osm_data(region_id)
     except Exception as e:
-        print(f"CRITICAL ERROR: Failed to fetch OSM data: {e}")
-        print(f"Graph will not be built. Routing will be unavailable.")
-        mark_graph_build_error(e)
+        print(f"CRITICAL ERROR: Failed to fetch OSM data for {region_id}: {e}")
+        print(f"Graph for {region_id} will not be built. Routing will be unavailable.")
+        mark_graph_build_error(region_id, e)
         return None
 
     G = nx.DiGraph()
+    config = REGIONS[region_id]
 
-    # Load stress data and build spatial index
-    try:
-        stress_data = fetch_stress_data()
-        spatial_index = SpatialGridIndex(cell_size=0.001)
-        for idx, feature in enumerate(stress_data.get("features", [])):
-            geom = feature.get("geometry", {})
-            props = feature.get("properties", {})
-            if geom.get("type") == "LineString":
-                coords = geom.get("coordinates", [])
-                for i in range(len(coords) - 1):
-                    lon1, lat1 = coords[i]
-                    lon2, lat2 = coords[i+1]
-                    spatial_index.add_segment(lat1, lon1, lat2, lon2, idx, props)
-        print("Bicycle stress spatial index built successfully.")
-    except Exception as e:
-        print(f"Error building bicycle stress spatial index: {e}")
-        spatial_index = None
+    # Load stress data and build spatial index (if configured)
+    spatial_index = None
+    if config.get("stress_cache_file"):
+        try:
+            stress_data = fetch_stress_data(region_id)
+            spatial_index = SpatialGridIndex(cell_size=0.001)
+            for idx, feature in enumerate(stress_data.get("features", [])):
+                geom = feature.get("geometry", {})
+                props = feature.get("properties", {})
+                if geom.get("type") == "LineString":
+                    coords = geom.get("coordinates", [])
+                    for i in range(len(coords) - 1):
+                        lon1, lat1 = coords[i]
+                        lon2, lat2 = coords[i+1]
+                        spatial_index.add_segment(lat1, lon1, lat2, lon2, idx, props)
+            print(f"Bicycle stress spatial index built successfully for {region_id}.")
+        except Exception as e:
+            print(f"Error building bicycle stress spatial index for {region_id}: {e}")
+            spatial_index = None
 
-    # Load off-street data and build spatial index
-    try:
-        offstreet_data = fetch_offstreet_data()
-        offstreet_spatial_index = SpatialGridIndex(cell_size=0.001)
-        for idx, feature in enumerate(offstreet_data.get("features", [])):
-            geom = feature.get("geometry", {})
-            props = feature.get("properties", {})
-            if geom.get("type") == "LineString":
-                coords = geom.get("coordinates", [])
-                for i in range(len(coords) - 1):
-                    lon1, lat1 = coords[i]
-                    lon2, lat2 = coords[i+1]
-                    offstreet_spatial_index.add_segment(lat1, lon1, lat2, lon2, idx, props)
-        print("Off-street spatial index built successfully.")
-    except Exception as e:
-        print(f"Error building off-street spatial index: {e}")
-        offstreet_spatial_index = None
+    # Load off-street data and build spatial index (if configured)
+    offstreet_spatial_index = None
+    if config.get("offstreet_cache_file"):
+        try:
+            offstreet_data = fetch_offstreet_data(region_id)
+            offstreet_spatial_index = SpatialGridIndex(cell_size=0.001)
+            for idx, feature in enumerate(offstreet_data.get("features", [])):
+                geom = feature.get("geometry", {})
+                props = feature.get("properties", {})
+                if geom.get("type") == "LineString":
+                    coords = geom.get("coordinates", [])
+                    for i in range(len(coords) - 1):
+                        lon1, lat1 = coords[i]
+                        lon2, lat2 = coords[i+1]
+                        offstreet_spatial_index.add_segment(lat1, lon1, lat2, lon2, idx, props)
+            print(f"Off-street spatial index built successfully for {region_id}.")
+        except Exception as e:
+            print(f"Error building off-street spatial index for {region_id}: {e}")
+            offstreet_spatial_index = None
 
 
 
@@ -1117,6 +1169,9 @@ def build_graph(weights=None):
                                 else:
                                     v_name = f"{v}_side2"
                                     
+                        G.add_node(u_name, lat=nodes[u]["lat"], lon=nodes[u]["lon"])
+                        G.add_node(v_name, lat=nodes[v]["lat"], lon=nodes[v]["lon"])
+                        
                         dist = haversine_distance((nodes[u]["lat"], nodes[u]["lon"]), (nodes[v]["lat"], nodes[v]["lon"]))
                         stress_level, facility_type = match_stress_for_edge(u, v, nodes, spatial_index)
                         offstreet_type, bicycles_allowed, ebike_allowed = match_offstreet_for_edge(u, v, nodes, offstreet_spatial_index)
@@ -1135,11 +1190,6 @@ def build_graph(weights=None):
                             edge_multiplier = multiplier * FACILITY_BONUS[facility_type]
                         weight = dist * edge_multiplier
                         
-                        if not G.has_node(u_name):
-                            G.add_node(u_name, lat=nodes[u]["lat"], lon=nodes[u]["lon"])
-                        if not G.has_node(v_name):
-                            G.add_node(v_name, lat=nodes[v]["lat"], lon=nodes[v]["lon"])
-
                         direction = _bike_edge_direction(tags, infra_type)
                         edge_attrs = dict(
                             weight=weight,
@@ -1164,35 +1214,37 @@ def build_graph(weights=None):
     if len(G) > 0:
         largest_cc = max(nx.weakly_connected_components(G), key=len)
         G_connected = G.subgraph(largest_cc).copy()
-        print(f"Graph loaded successfully: {G_connected.number_of_nodes()} nodes, {G_connected.number_of_edges()} edges.")
+        print(f"Graph loaded successfully for {region_id}: {G_connected.number_of_nodes()} nodes, {G_connected.number_of_edges()} edges.")
     else:
         G_connected = G
-        print("Warning: Graph is empty.")
+        print(f"Warning: Graph for {region_id} is empty.")
 
     # Store global references for API usage
-    nodes_global = nodes
-    safe_crossing_nodes_global = safe_crossing_nodes
-    four_lane_nodes_global = four_lane_nodes
+    graphs_by_region[region_id] = G_connected
+    nodes_by_region[region_id] = nodes
+    safe_crossings_by_region[region_id] = safe_crossing_nodes
+    four_lane_nodes_by_region[region_id] = four_lane_nodes
     
     # Pre-build bike routes GeoJSON
-    build_bike_routes_geojson()
+    build_bike_routes_geojson(region_id)
 
     # Pre-populate graph with default weights so CLI routing tools remain in sync
-    print("Populating graph with default routing weights...")
+    print(f"Populating graph for {region_id} with default routing weights...")
     update_graph_weights(G_connected, weights)
-    mark_graph_build_ready(G_connected)
+    mark_graph_build_ready(region_id, G_connected)
 
-def build_bike_routes_geojson():
+def build_bike_routes_geojson(region_id="boulder"):
     """Load, filter, and simplify official bike routes data into a lightweight FeatureCollection."""
-    global bike_routes_geojson_global
-    print("Compiling lightweight official bike routes GeoJSON...")
+    print(f"Compiling lightweight official bike routes GeoJSON for {region_id}...")
     
     features = []
+    config = REGIONS[region_id]
     
     # 1. Process bike stress data (on-street network)
-    if os.path.exists(STRESS_CACHE_FILE):
+    stress_file = config.get("stress_cache_file")
+    if stress_file and os.path.exists(stress_file):
         try:
-            with open(STRESS_CACHE_FILE, "r") as f:
+            with open(stress_file, "r") as f:
                 stress_data = json.load(f)
                 
             allowed_stress_types = {
@@ -1219,12 +1271,13 @@ def build_bike_routes_geojson():
                             }
                         })
         except Exception as e:
-            print(f"Error compiling stress routes: {e}")
+            print(f"Error compiling stress routes for {region_id}: {e}")
             
     # 2. Process off-street data
-    if os.path.exists(OFFSTREET_CACHE_FILE):
+    offstreet_file = config.get("offstreet_cache_file")
+    if offstreet_file and os.path.exists(offstreet_file):
         try:
-            with open(OFFSTREET_CACHE_FILE, "r") as f:
+            with open(offstreet_file, "r") as f:
                 offstreet_data = json.load(f)
                 
             allowed_offstreet_types = {
@@ -1247,24 +1300,38 @@ def build_bike_routes_geojson():
                             }
                         })
         except Exception as e:
-            print(f"Error compiling off-street routes: {e}")
+            print(f"Error compiling off-street routes for {region_id}: {e}")
             
-    bike_routes_geojson_global = {
+    bike_routes_geojson_by_region[region_id] = {
         "type": "FeatureCollection",
         "features": features
     }
-    print(f"Successfully compiled {len(features)} official bike route features.")
+    print(f"Successfully compiled {len(features)} official bike route features for {region_id}.")
 
-def find_nearest_node(target_coord):
+def find_nearest_node(graph, target_coord):
     """Find the nearest node in the connected graph to the target coordinate."""
     min_dist = float("inf")
     nearest_node = None
-    for node, data in G_connected.nodes(data=True):
+    for node, data in graph.nodes(data=True):
         dist = haversine_distance(target_coord, (data["lat"], data["lon"]))
         if dist < min_dist:
             min_dist = dist
             nearest_node = node
     return nearest_node, min_dist
+
+def get_region_for_coordinate(lat, lon):
+    """Determine the region ID that contains the given coordinate. Fallback to 'boulder' if not matched."""
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except (TypeError, ValueError):
+        return "boulder"
+        
+    for r_id, config in REGIONS.items():
+        s, w, n, e = config["bbox"]
+        if s <= lat <= n and w <= lon <= e:
+            return r_id
+    return "boulder"
 
 def update_graph_weights(G, weights):
     """Update all edge multipliers and weights in the graph G based on weights dictionary."""
@@ -1375,7 +1442,6 @@ def get_route():
     if request.method == "OPTIONS":
         return "", 200
 
-    global G_connected
     data = request.json or {}
 
     start_lat = data.get("start_lat")
@@ -1383,16 +1449,28 @@ def get_route():
     end_lat = data.get("end_lat")
     end_lon = data.get("end_lon")
     custom_weights = data.get("weights") or DEFAULT_WEIGHTS
+    region_id = data.get("region")
 
     if not all([start_lat, start_lon, end_lat, end_lon]):
         return jsonify({"error": "Missing coordinates"}), 400
 
-    # Check if graph has been initialized
-    if G_connected is None:
-        return jsonify({"error": "Routing graph not initialized. Server may still be starting up."}), 503
+    if not region_id:
+        region_id = get_region_for_coordinate(start_lat, start_lon)
+
+    if region_id not in REGIONS:
+        return jsonify({"error": f"Invalid region: {region_id}"}), 400
+
+    graph = graphs_by_region.get(region_id)
+    if graph is None:
+        return jsonify({"error": f"Routing graph not initialized for region: {region_id}"}), 503
+
+    # Check if start and end coordinates are in the same region
+    end_region_id = get_region_for_coordinate(end_lat, end_lon)
+    if region_id != end_region_id:
+        return jsonify({"error": f"Start and Destination span across separate areas ({region_id} and {end_region_id}). Cross-region routing is not supported."}), 400
 
     # Recalculate weights on the graph dynamically using client weights
-    update_graph_weights(G_connected, custom_weights)
+    update_graph_weights(graph, custom_weights)
 
     waypoints = data.get("waypoints", []) # list of [lat, lon]
     
@@ -1415,8 +1493,8 @@ def get_route():
             sub_start_lat, sub_start_lon = route_points[p]
             sub_end_lat, sub_end_lon = route_points[p+1]
             
-            sub_start_node, sub_start_dist = find_nearest_node((sub_start_lat, sub_start_lon))
-            sub_end_node, sub_end_dist = find_nearest_node((sub_end_lat, sub_end_lon))
+            sub_start_node, sub_start_dist = find_nearest_node(graph, (sub_start_lat, sub_start_lon))
+            sub_end_node, sub_end_dist = find_nearest_node(graph, (sub_end_lat, sub_end_lon))
             
             if sub_start_node is None or sub_end_node is None:
                 return jsonify({"error": f"Could not locate routing node for point {p+1}."}), 404
@@ -1426,12 +1504,12 @@ def get_route():
             if p == len(route_points) - 2:
                 end_node_dist = sub_end_dist
                 
-            path_nodes = nx.shortest_path(G_connected, source=sub_start_node, target=sub_end_node, weight="weight")
+            path_nodes = nx.shortest_path(graph, source=sub_start_node, target=sub_end_node, weight="weight")
             
             for i in range(len(path_nodes) - 1):
                 u = path_nodes[i]
                 v = path_nodes[i+1]
-                edge_data = G_connected.get_edge_data(u, v)
+                edge_data = graph.get_edge_data(u, v)
                 length = edge_data.get("length", 0)
                 infra_type = edge_data.get("type", "residential")
                 name = edge_data.get("name", "Unnamed Path")
@@ -1441,8 +1519,8 @@ def get_route():
                 total_length += length
                 total_weight += edge_weight
                 
-                node_u_data = G_connected.nodes[u]
-                node_v_data = G_connected.nodes[v]
+                node_u_data = graph.nodes[u]
+                node_v_data = graph.nodes[v]
                 
                 segments.append({
                     "coords": [
@@ -1492,10 +1570,9 @@ def get_route():
 @app.route("/api/inspect-edge", methods=["GET"])
 def inspect_edge():
     """Inspect the nearest edge in the routing graph and return its full attributes and geometry."""
-    global G_connected
-    
     lat_val = request.args.get("lat")
     lon_val = request.args.get("lon")
+    region_id = request.args.get("region")
     
     if not lat_val or not lon_val:
         return jsonify({"error": "Missing coordinates"}), 400
@@ -1505,8 +1582,18 @@ def inspect_edge():
     except ValueError:
         return jsonify({"error": "Invalid coordinates"}), 400
         
+    if not region_id:
+        region_id = get_region_for_coordinate(click_coord[0], click_coord[1])
+        
+    if region_id not in REGIONS:
+        return jsonify({"error": f"Invalid region: {region_id}"}), 400
+
+    graph = graphs_by_region.get(region_id)
+    if graph is None:
+        return jsonify({"error": f"Routing graph not initialized for region: {region_id}"}), 503
+
     # Find nearest node
-    nearest_node, _ = find_nearest_node(click_coord)
+    nearest_node, _ = find_nearest_node(graph, click_coord)
     if nearest_node is None:
         return jsonify({"error": "No road network found near click."}), 404
         
@@ -1514,10 +1601,10 @@ def inspect_edge():
     min_dist = float("inf")
     
     # Check incoming and outgoing edges connected to nearest_node to find the closest segment line.
-    connected_edges = set(G_connected.out_edges(nearest_node)) | set(G_connected.in_edges(nearest_node))
+    connected_edges = set(graph.out_edges(nearest_node)) | set(graph.in_edges(nearest_node))
     for u, v in connected_edges:
-        node_u_data = G_connected.nodes[u]
-        node_v_data = G_connected.nodes[v]
+        node_u_data = graph.nodes[u]
+        node_v_data = graph.nodes[v]
         pt_u = (node_u_data["lat"], node_u_data["lon"])
         pt_v = (node_v_data["lat"], node_v_data["lon"])
         
@@ -1530,9 +1617,9 @@ def inspect_edge():
         return jsonify({"error": "Could not identify an edge."}), 404
         
     u, v = best_edge
-    edge_data = G_connected.get_edge_data(u, v)
-    node_u_data = G_connected.nodes[u]
-    node_v_data = G_connected.nodes[v]
+    edge_data = graph.get_edge_data(u, v)
+    node_u_data = graph.nodes[u]
+    node_v_data = graph.nodes[v]
     
     response_data = {
         "name": edge_data.get("name", "Unnamed Path"),
@@ -1739,13 +1826,29 @@ ROUTE_PRESETS = [
             [40.030, -105.210]
         ],
         "route_type": "b360"
+    },
+    {
+        "name": "Broomfield Commons Tour",
+        "desc": "2.5 mi route around Broomfield Commons Park",
+        "start": [39.932, -105.059],
+        "end": [39.927, -105.080],
+        "waypoints": [
+            [39.930, -105.068],
+            [39.925, -105.075]
+        ],
+        "route_type": "broomfield_loop"
     }
 ]
 
 @app.route("/api/config", methods=["GET"])
 def get_config():
-    """Get the full list of dynamic configuration presets and sliders metadata."""
+    """Get the full list of dynamic configuration presets, sliders metadata, and supported regions."""
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    config_payload = {
+        "weights": WEIGHTS_METADATA,
+        "presets": ROUTE_PRESETS,
+        "regions": {r_id: {"name": config["name"], "bbox": config["bbox"]} for r_id, config in REGIONS.items()}
+    }
     try:
         resp = requests.get(f"{pb_url}/api/collections/global_configs/records", timeout=2)
         if resp.status_code == 200:
@@ -1755,35 +1858,35 @@ def get_config():
             
             weights = configs_dict.get("weights")
             if weights:
-                return jsonify({
-                    "weights": weights,
-                    "presets": ROUTE_PRESETS
-                })
+                config_payload["weights"] = weights
     except Exception as e:
         print(f"[-] Failed to fetch config from PocketBase: {e}. Falling back to default config.")
         
-    return jsonify({
-        "weights": WEIGHTS_METADATA,
-        "presets": ROUTE_PRESETS
-    })
+    return jsonify(config_payload)
 
 
 @app.route("/api/crossings", methods=["GET"])
 def get_crossings():
-    """Get all crossing nodes on 4+ lane roads or safe crossings in the network."""
-    global nodes_global, safe_crossing_nodes_global, four_lane_nodes_global
+    """Get all crossing nodes on 4+ lane roads or safe crossings in the network for the specified region."""
+    region_id = request.args.get("region", "boulder")
+    if region_id not in REGIONS:
+        return jsonify({"error": f"Invalid region: {region_id}"}), 400
+
+    nodes = nodes_by_region.get(region_id, {})
+    four_lane_nodes = four_lane_nodes_by_region.get(region_id, set())
+    safe_crossing_nodes = safe_crossings_by_region.get(region_id, set())
     
     crossings_list = []
-    for nid, ndata in nodes_global.items():
+    for nid, ndata in nodes.items():
         tags = ndata.get("tags", {})
         highway = tags.get("highway", "")
         if highway == "crossing" or highway == "traffic_signals":
-            if nid in four_lane_nodes_global or nid in safe_crossing_nodes_global:
+            if nid in four_lane_nodes or nid in safe_crossing_nodes:
                 lat = ndata["lat"]
                 lon = ndata["lon"]
                 
                 # Classify type
-                if nid in safe_crossing_nodes_global:
+                if nid in safe_crossing_nodes:
                     if tags.get("bicycle") in ["yes", "designated"] or tags.get("crossing:bicycle") in ["yes", "designated"]:
                         crossing_type = "bike_signal"
                         desc = "Dedicated Bike Signal"
@@ -1807,10 +1910,14 @@ def get_crossings():
 
 @app.route("/api/playgrounds", methods=["GET"])
 def get_playgrounds():
-    """Get processed playground locations sorted alphabetically with display names and centroids."""
+    """Get processed playground locations for the specified region sorted alphabetically."""
+    region_id = request.args.get("region", "boulder")
+    if region_id not in REGIONS:
+        return jsonify({"error": f"Invalid region: {region_id}"}), 400
+
     from collections import Counter
     try:
-        data = fetch_playground_data()
+        data = fetch_playground_data(region_id)
         features = data.get("features", [])
         
         # Filter for active playgrounds
@@ -1821,6 +1928,9 @@ def get_playgrounds():
             if prop.get("PLAYTYPE") == "Park Playground" and geom and geom.get("type") == "Polygon":
                 playgrounds.append(f)
                 
+        if not playgrounds:
+            return jsonify([])
+
         # Count playgrounds per park to format name properly
         park_counts = Counter(f["properties"].get("PROPNAME", "") for f in playgrounds)
         
@@ -1860,21 +1970,25 @@ def get_playgrounds():
         
         return jsonify(results)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify([]), 200 # Return empty list on failure or missing playgrounds
 
 @app.route("/api/bike-routes", methods=["GET"])
 def get_bike_routes():
-    """API endpoint to get the compiled, lightweight official bike routes GeoJSON."""
-    global bike_routes_geojson_global
-    if bike_routes_geojson_global is None:
-        build_bike_routes_geojson()
-    return jsonify(bike_routes_geojson_global)
+    """API endpoint to get the compiled, lightweight official bike routes GeoJSON for the specified region."""
+    region_id = request.args.get("region", "boulder")
+    if region_id not in REGIONS:
+        return jsonify({"error": f"Invalid region: {region_id}"}), 400
+
+    geojson = bike_routes_geojson_by_region.get(region_id)
+    if geojson is None:
+        return jsonify({"type": "FeatureCollection", "features": []})
+    return jsonify(geojson)
 
 # Simple CORS support for development
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Client-Source, X-Client-Session-Id, X-Client-Event-Id"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Client-Source, X-Client-Session-Id, X-Client-Event-Id, X-Guest-Id, X-Guest-Token"
     response.headers["Access-Control-Allow-Methods"] = "POST, GET, PATCH, PUT, DELETE, OPTIONS"
     return response
 
@@ -1906,17 +2020,16 @@ def pocketbase_status():
 
 @app.route("/api/graph-status", methods=["GET"])
 def graph_status():
-    """Report routing graph build state for polling/debugging."""
-    graph_status = get_graph_build_status()
-    return jsonify({
-        "status": graph_status["state"],
-        "graph": graph_status,
-    })
+    """Report routing graph build state for polling/debugging of all regions."""
+    status_dict = {}
+    for r_id in REGIONS:
+        status_dict[r_id] = get_graph_build_status(r_id)
+    return jsonify(status_dict)
 
 @app.route("/api/health", methods=["GET"])
 def api_health():
-    """Report backend readiness and routing graph build state."""
-    graph_status = get_graph_build_status()
+    """Report backend readiness and routing graph build state for primary (boulder) region."""
+    graph_status = get_graph_build_status("boulder")
     http_status = 200 if graph_status["ready"] else 503
     return jsonify({
         "status": "ok" if graph_status["ready"] else graph_status["state"],
@@ -2039,6 +2152,8 @@ def record_place_search_event(query, limit=None, result_count=None, target=None,
     user_id = request_auth_user_id()
     if user_id:
         payload["user"] = user_id
+    else:
+        payload["guest_owner_hash"] = get_guest_owner_hash()
     return write_pocketbase_analytics("place_search_events", payload)
 
 def record_route_analytics_event(event_type, data=None, source=None):
@@ -2067,6 +2182,8 @@ def record_route_analytics_event(event_type, data=None, source=None):
     user_id = request_auth_user_id()
     if user_id:
         payload["user"] = user_id
+    else:
+        payload["guest_owner_hash"] = get_guest_owner_hash()
     return write_pocketbase_analytics("route_analytics_events", payload)
 
 def place_record_to_api(record):
@@ -2578,12 +2695,15 @@ def get_home_location_record(pb_url, user_id, auth_header):
     items = resp.json().get("items", [])
     return (items[0] if items else None), resp
 
-def get_navigation_route_for_user(pb_url, route_id, auth_header):
-    """Fetch a navigation route and verify the current user can mutate it."""
-    user_id = get_auth_user_id(auth_header)
-    if not user_id:
-        return None, None, (jsonify({"error": "Unauthorized"}), 401)
+def get_guest_owner_hash():
+    guest_id = (request.headers.get("X-Guest-Id") or "").strip()
+    guest_token = (request.headers.get("X-Guest-Token") or "").strip()
+    if not guest_id or not guest_token or len(guest_id) > 128 or len(guest_token) > 256:
+        return None
+    return hashlib.sha256(f"{guest_id}:{guest_token}".encode("utf-8")).hexdigest()
 
+def get_navigation_route_for_user(pb_url, route_id, auth_header):
+    """Fetch a navigation route and verify account or guest-installation ownership."""
     headers = {"Authorization": auth_header} if auth_header else {}
     try:
         resp = requests.get(
@@ -2598,10 +2718,33 @@ def get_navigation_route_for_user(pb_url, route_id, auth_header):
         return None, None, (jsonify({"error": "Route not found"}), 404)
 
     route = resp.json()
-    if route.get("user") != user_id:
-        return None, None, (jsonify({"error": "Forbidden"}), 403)
+    route_owner = route.get("user")
+    guest_owner_hash = route.get("guest_owner_hash")
+    user_id = get_auth_user_id(auth_header)
 
-    return route, user_id, None
+    if auth_header and not user_id:
+        return None, None, (jsonify({"error": "Unauthorized"}), 401)
+
+    if route_owner:
+        if not user_id:
+            return None, None, (jsonify({"error": "Unauthorized"}), 401)
+        if route_owner != user_id:
+            return None, None, (jsonify({"error": "Forbidden"}), 403)
+        return route, user_id, None
+
+    if guest_owner_hash:
+        supplied_guest_hash = get_guest_owner_hash()
+        if not supplied_guest_hash:
+            return None, user_id, (jsonify({"error": "Guest credentials required"}), 401)
+        if not hmac.compare_digest(guest_owner_hash, supplied_guest_hash):
+            return None, user_id, (jsonify({"error": "Forbidden"}), 403)
+        return route, user_id, None
+
+    # Legacy guest routes predate installation credentials. Only an authenticated
+    # user with the route ID may claim or delete one during migration.
+    if user_id:
+        return route, user_id, None
+    return None, None, (jsonify({"error": "Guest route ownership unavailable"}), 403)
 
 def clear_other_default_route_tuning_profiles(pb_url, user_id, auth_header, selected_id=None):
     try:
@@ -2636,6 +2779,7 @@ def home_location_settings():
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
     auth_header = request.headers.get("Authorization")
     user_id = get_auth_user_id(auth_header)
+
     if not user_id:
         return jsonify({"error": "Unauthorized"}), 401
 
@@ -2701,12 +2845,24 @@ def nav_start():
     
     auth_header = request.headers.get("Authorization")
     user_id = get_auth_user_id(auth_header)
+
+    # A supplied but invalid token represents an expired authenticated session.
+    # Do not silently create a guest route that the user cannot later manage.
+    if auth_header and not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    guest_owner_hash = None
+    if not user_id:
+        guest_owner_hash = get_guest_owner_hash()
+        if not guest_owner_hash:
+            return jsonify({"error": "Guest credentials required"}), 401
     
     import datetime
     now_str = datetime.datetime.utcnow().isoformat() + "Z"
     
     pb_payload = {
         "user": user_id,
+        "guest_owner_hash": guest_owner_hash,
         "display_name": data.get("display_name"),
         "notes": data.get("notes"),
         "start_lat": data.get("start_lat"),
@@ -2768,6 +2924,11 @@ def nav_tick(route_id):
         return jsonify({}), 200
     data = request.json or {}
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    _, _, auth_error = get_navigation_route_for_user(
+        pb_url, route_id, request.headers.get("Authorization")
+    )
+    if auth_error:
+        return auth_error
     
     import datetime
     ts = data.get("timestamp") or datetime.datetime.utcnow().isoformat() + "Z"
@@ -2822,18 +2983,19 @@ def nav_end(route_id):
         return jsonify({}), 200
     data = request.json or {}
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    route_record, _, auth_error = get_navigation_route_for_user(
+        pb_url, route_id, request.headers.get("Authorization")
+    )
+    if auth_error:
+        return auth_error
     
     now_str = data.get("ended_at") or datetime.datetime.utcnow().isoformat() + "Z"
     status = data.get("status") or "completed"
     
     ticks = []
-    route_record = {}
+    route_record = route_record or {}
     batched_ticks = data.get("ticks") or []
     try:
-        route_resp = requests.get(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", timeout=5)
-        if route_resp.status_code == 200:
-            route_record = route_resp.json()
-
         if isinstance(batched_ticks, list):
             for tick in batched_ticks[:5000]:
                 if not isinstance(tick, dict):
@@ -2923,22 +3085,33 @@ def nav_history():
     
     auth_header = request.headers.get("Authorization")
     user_id = get_auth_user_id(auth_header)
+
+    # An invalid supplied token is an expired/invalid session, not an anonymous
+    # history request. Returning [] here makes clients look signed in with an
+    # empty account and hides the authentication failure.
+    if auth_header and not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
     
+    url = f"{pb_url}/api/collections/navigation_routes/records"
+    params = {"sort": "-started_at", "limit": 50}
     if user_id:
-        url = f"{pb_url}/api/collections/navigation_routes/records?filter=user='{user_id}'&sort=-started_at&limit=50"
+        params["filter"] = f"user='{user_id}'"
     else:
+        guest_owner_hash = get_guest_owner_hash()
+        if not guest_owner_hash:
+            return jsonify({"error": "Guest credentials required"}), 401
         route_ids_str = request.args.get("route_ids")
         if route_ids_str:
-            route_ids = [rid.strip() for rid in route_ids_str.split(",") if rid.strip()]
+            route_ids = [rid.strip() for rid in route_ids_str.split(",") if re.fullmatch(r"[A-Za-z0-9]{15}", rid.strip())]
             if not route_ids:
                 return jsonify([])
             filter_query = "||".join([f"id='{rid}'" for rid in route_ids])
-            url = f"{pb_url}/api/collections/navigation_routes/records?filter=({filter_query})&sort=-started_at&limit=50"
+            params["filter"] = f"guest_owner_hash='{guest_owner_hash}'&&({filter_query})"
         else:
-            return jsonify([])
+            params["filter"] = f"guest_owner_hash='{guest_owner_hash}'"
             
     try:
-        resp = requests.get(url, timeout=5)
+        resp = requests.get(url, params=params, timeout=5)
         if resp.status_code == 200:
             items = resp.json().get("items", [])
             normalized_items = [route_with_display_metrics(item) for item in items]
@@ -2955,14 +3128,13 @@ def nav_detail(route_id):
         return jsonify({}), 200
 
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    auth_header = request.headers.get("Authorization")
+    headers = {"Authorization": auth_header} if auth_header else {}
+    route, _, auth_error = get_navigation_route_for_user(pb_url, route_id, auth_header)
+    if auth_error:
+        return auth_error
 
     if request.method in ["PATCH", "DELETE"]:
-        auth_header = request.headers.get("Authorization")
-        headers = {"Authorization": auth_header} if auth_header else {}
-        _, _, auth_error = get_navigation_route_for_user(pb_url, route_id, auth_header)
-        if auth_error:
-            return auth_error
-
         if request.method == "DELETE":
             try:
                 tick_resp = requests.get(
@@ -3007,17 +3179,12 @@ def nav_detail(route_id):
                 timeout=5
             )
             if resp.status_code == 200:
-                return jsonify(resp.json())
+                return jsonify(route_with_display_metrics(resp.json()))
             return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
         except Exception as e:
             return jsonify({"error": str(e)}), 500
     
     try:
-        route_resp = requests.get(f"{pb_url}/api/collections/navigation_routes/records/{route_id}", timeout=5)
-        if route_resp.status_code != 200:
-            return jsonify({"error": "Route not found"}), 404
-        route = route_resp.json()
-        
         ticks_resp = requests.get(f"{pb_url}/api/collections/navigation_ticks/records?filter=route='{route_id}'&sort=timestamp&limit=5000", timeout=5)
         ticks = []
         if ticks_resp.status_code == 200:
@@ -3274,6 +3441,7 @@ def nav_sync():
 
         pb_payload = {
             "user": user_id,
+            "guest_owner_hash": None,
             "display_name": r.get("display_name"),
             "notes": r.get("notes"),
             "start_lat": r.get("start_lat"),
@@ -3391,16 +3559,16 @@ def nav_sync():
     }), 200
 
 if __name__ == "__main__":
-    # Pre-build graph on startup
-    print("[*] Starting Boulder Bike Router backend...")
-    print("[*] Building routing graph...")
-    build_graph()
-
-    if G_connected is None:
-        print("[!] CRITICAL: Routing graph failed to initialize!")
-        print("[!] Routing endpoints will return 503 errors")
-    else:
-        print(f"[+] Routing graph ready: {G_connected.number_of_nodes()} nodes, {G_connected.number_of_edges()} edges")
+    # Pre-build graph on startup for all regions
+    print("[*] Starting Multi-Region Bike Router backend...")
+    for region_id in REGIONS:
+        print(f"[*] Building routing graph for {region_id}...")
+        build_graph(region_id)
+        graph = graphs_by_region.get(region_id)
+        if graph is None:
+            print(f"[!] Warning: Graph for {region_id} failed to initialize!")
+        else:
+            print(f"[+] Graph for {region_id} ready: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
 
     # Verify PocketBase connection
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")

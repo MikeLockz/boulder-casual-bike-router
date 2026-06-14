@@ -37,6 +37,10 @@ class SyncService {
                             try await apiService.deleteRouteTuningProfile(serverId: serverId)
                         } catch {
                             print("[SyncService] Failed to delete profile \(serverId): \(error.localizedDescription)")
+                            if case APIError.unauthorized = error {
+                                NotificationCenter.default.post(name: NSNotification.Name("AuthenticationExpired"), object: nil)
+                                return
+                            }
                             continue
                         }
                     }
@@ -69,6 +73,10 @@ class SyncService {
                     localProfile.deleted = false
                 } catch {
                     print("[SyncService] Failed to sync route tuning profile \(localProfile.id): \(error.localizedDescription)")
+                    if case APIError.unauthorized = error {
+                        NotificationCenter.default.post(name: NSNotification.Name("AuthenticationExpired"), object: nil)
+                        return
+                    }
                 }
             }
 
@@ -80,6 +88,10 @@ class SyncService {
     
     /// Sync any local routes that haven't been synchronized with the remote backend database yet.
     func syncPendingRoutes() async {
+        guard UserDefaults.standard.object(forKey: "cloud_sync_enabled") as? Bool ?? true else {
+            print("[SyncService] Cloud sync disabled, skipping route sync.")
+            return
+        }
         guard let token = UserDefaults.standard.string(forKey: "pocketbase_token"),
               let userId = UserDefaults.standard.string(forKey: "logged_in_user_id") else {
             print("[SyncService] User is not authenticated, skipping sync.")
@@ -166,6 +178,7 @@ class SyncService {
             urlRequest.httpMethod = "POST"
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
             urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            GuestCredentialStore.apply(to: &urlRequest)
             
             let encoder = JSONEncoder()
             urlRequest.httpBody = try encoder.encode(payload)
@@ -199,6 +212,9 @@ class SyncService {
             } else {
                 let errString = String(data: data, encoding: .utf8) ?? ""
                 print("[SyncService] Sync failed with status: \(httpResponse.statusCode). Error: \(errString)")
+                if httpResponse.statusCode == 401 {
+                    NotificationCenter.default.post(name: NSNotification.Name("AuthenticationExpired"), object: nil)
+                }
             }
             
         } catch {

@@ -176,6 +176,9 @@ class NavigationManager {
                     }
                 } catch {
                     print("[NavigationManager] Failed to start telemetry route remotely: \(error.localizedDescription)")
+                    if case APIError.unauthorized = error {
+                        NotificationCenter.default.post(name: NSNotification.Name("AuthenticationExpired"), object: nil)
+                    }
                     // Fall back to local ID if API fails
                     await MainActor.run {
                         self.activeRouteId = UUID().uuidString
@@ -303,11 +306,9 @@ class NavigationManager {
                 deviceType: "ios",
                 weights: startReq.weights,
                 userId: currentUserId,
-                synced: isSyncActive,
+                synced: false, // Save as unsynced initially so background endNavigation can run/retry safely
                 routeGeojson: routeGeojsonString
             )
-            
-            context.insert(localRoute)
             
             // Insert ticks associated with the route
             for (idx, t) in localTicksCache.enumerated() {
@@ -327,6 +328,7 @@ class NavigationManager {
             }
             
             do {
+                context.insert(localRoute)
                 try context.save()
                 print("[NavigationManager] Session successfully saved locally to SwiftData: \(rId)")
             } catch {
@@ -335,6 +337,9 @@ class NavigationManager {
         }
         
         // 3. Close the telemetry session on the server if sync is active
+        // Fire the notification immediately so the UI transitions without waiting for the network
+        NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: rId)
+
         if isSyncActive {
             let endReq = NavigationEndRequest(
                 status: status,
@@ -348,16 +353,25 @@ class NavigationManager {
                 do {
                     try await apiService.endNavigation(routeId: rId, request: endReq)
                     print("[NavigationManager] Telemetry route closed remotely successfully.")
+
+                    // Mark as synced locally
+                    await MainActor.run {
+                        if let context = modelContext {
+                            let descriptor = FetchDescriptor<LocalRoute>()
+                            if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == rId }) {
+                                localRoute.synced = true
+                                try? context.save()
+                                print("[NavigationManager] Marked route \(rId) as synced locally.")
+                            }
+                        }
+                    }
                 } catch {
-                    print("[NavigationManager] Failed to end telemetry route remotely: \(error.localizedDescription)")
-                }
-                
-                await MainActor.run {
-                    NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: rId)
+                    print("[NavigationManager] Failed to end telemetry route remotely: \(error.localizedDescription). Leaving unsynced for future sync retry.")
+                    if case APIError.unauthorized = error {
+                        NotificationCenter.default.post(name: NSNotification.Name("AuthenticationExpired"), object: nil)
+                    }
                 }
             }
-        } else {
-            NotificationCenter.default.post(name: NSNotification.Name("TelemetryRouteEnded"), object: rId)
         }
 
         if let startReq = localStartRequest {

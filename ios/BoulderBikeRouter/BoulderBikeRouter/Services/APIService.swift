@@ -1,9 +1,92 @@
 import Foundation
 import CoreLocation
+import Security
+
+struct GuestCredential {
+    let id: String
+    let token: String
+}
+
+enum GuestCredentialStore {
+    private static let idKey = "guest_installation_id"
+    private static let keychainService = "com.bikingboulder.BoulderBikeRouter.guest"
+    private static let keychainAccount = "guest_token"
+    private static let lock = NSLock()
+
+    static func apply(to request: inout URLRequest) {
+        let value = credential()
+        request.setValue(value.id, forHTTPHeaderField: "X-Guest-Id")
+        request.setValue(value.token, forHTTPHeaderField: "X-Guest-Token")
+    }
+
+    static func credential() -> GuestCredential {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let defaults = UserDefaults.standard
+        let id: String
+        if let existing = defaults.string(forKey: idKey), !existing.isEmpty {
+            id = existing
+        } else {
+            id = UUID().uuidString.lowercased()
+            defaults.set(id, forKey: idKey)
+        }
+
+        if let token = readToken() {
+            return GuestCredential(id: id, token: token)
+        }
+
+        let token = makeToken()
+        saveToken(token)
+        return GuestCredential(id: id, token: token)
+    }
+
+    private static func readToken() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func saveToken(_ token: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount
+        ]
+        SecItemDelete(query as CFDictionary)
+        var item = query
+        item[kSecValueData as String] = Data(token.utf8)
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(item as CFDictionary, nil)
+    }
+
+    private static func makeToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+            return UUID().uuidString.replacingOccurrences(of: "-", with: "")
+                + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
 
 /// Errors that can occur when calling the Biking Boulder routing API.
 enum APIError: Error, LocalizedError {
     case invalidURL
+    case unauthorized
     case serverError(String)
     case decodingError(Error)
     case requestFailed(Error)
@@ -12,6 +95,8 @@ enum APIError: Error, LocalizedError {
         switch self {
         case .invalidURL:
             return "The API URL is invalid."
+        case .unauthorized:
+            return "Your session has expired. Please sign in again."
         case .serverError(let message):
             return "Server error: \(message)"
         case .decodingError(let error):
@@ -57,6 +142,7 @@ class APIService {
     }
 
     private func applyAnalyticsHeaders(_ request: inout URLRequest) {
+        GuestCredentialStore.apply(to: &request)
         request.setValue("ios", forHTTPHeaderField: "X-Client-Source")
         request.setValue(analyticsSessionId, forHTTPHeaderField: "X-Client-Session-Id")
         request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Client-Event-Id")
@@ -105,6 +191,9 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
+        }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -142,6 +231,9 @@ class APIService {
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
+        }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
@@ -220,6 +312,9 @@ class APIService {
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
+        }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
@@ -382,6 +477,9 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
+        }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -404,6 +502,10 @@ class APIService {
         var urlRequest = URLRequest(url: tickURL)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        GuestCredentialStore.apply(to: &urlRequest)
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
 
         do {
             let encoder = JSONEncoder()
@@ -421,6 +523,9 @@ class APIService {
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
+        }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
@@ -456,6 +561,9 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
+        }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -479,6 +587,7 @@ class APIService {
 
         var urlRequest = URLRequest(url: historyURL)
         urlRequest.httpMethod = "GET"
+        GuestCredentialStore.apply(to: &urlRequest)
         
         if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
             urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -494,6 +603,9 @@ class APIService {
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
+        }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
@@ -529,6 +641,7 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -570,6 +683,7 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -605,6 +719,7 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -638,6 +753,7 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -678,6 +794,7 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -711,6 +828,7 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -725,6 +843,10 @@ class APIService {
 
         var urlRequest = URLRequest(url: detailURL)
         urlRequest.httpMethod = "GET"
+        GuestCredentialStore.apply(to: &urlRequest)
+        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
 
         let data: Data
         let response: URLResponse
@@ -757,6 +879,7 @@ class APIService {
         var urlRequest = URLRequest(url: routeURL)
         urlRequest.httpMethod = "PATCH"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        GuestCredentialStore.apply(to: &urlRequest)
         if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
             urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -777,6 +900,7 @@ class APIService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
         }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
@@ -796,6 +920,7 @@ class APIService {
 
         var urlRequest = URLRequest(url: routeURL)
         urlRequest.httpMethod = "DELETE"
+        GuestCredentialStore.apply(to: &urlRequest)
         if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
             urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -809,6 +934,9 @@ class APIService {
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError("Invalid response type")
+        }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
@@ -894,6 +1022,42 @@ class APIService {
 
         guard (200...299).contains(httpResponse.statusCode) else {
             throw parsePBError(data: data, httpResponse: httpResponse)
+        }
+
+        do {
+            return try JSONDecoder().decode(AuthResponse.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    /// Exchange a still-valid PocketBase token for a fresh token.
+    func refreshAuthentication(token: String) async throws -> AuthResponse {
+        guard let baseURL = URL(string: baseURLLabel),
+              let refreshURL = URL(string: "/pb/api/collections/users/auth-refresh", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: refreshURL)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response")
+        }
+        guard httpResponse.statusCode != 401 else {
+            throw APIError.unauthorized
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
 
         do {

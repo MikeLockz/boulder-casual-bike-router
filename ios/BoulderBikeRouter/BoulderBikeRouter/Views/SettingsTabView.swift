@@ -493,6 +493,9 @@ struct SettingsTabView: View {
     }
 
     private var accountSummaryText: String {
+        if viewModel.isSessionExpired {
+            return "Session expired. Sign in again to resume sync."
+        }
         if viewModel.isUserLoggedIn {
             return viewModel.currentUserEmail ?? "Signed in"
         }

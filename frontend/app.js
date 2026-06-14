@@ -11,6 +11,9 @@ const BOULDER_CO = [40.015, -105.270];
 const ZOOM_LEVEL = 13;
 
 let map;
+let activeRegionId = "boulder";
+let regionsConfig = {};
+let allPresets = [];
 let startMarker = null;
 let endMarker = null;
 let routeSegments = [];
@@ -37,15 +40,57 @@ let playgroundPlaces = [];
 let playgroundLoadPromise = null;
 let currentRouteTitle = "Custom Route";
 const ANALYTICS_SESSION_KEY = "boulder_analytics_session_id";
+const GUEST_INSTALLATION_ID_KEY = "boulder_guest_installation_id";
+const GUEST_TOKEN_KEY = "boulder_guest_token";
 let analyticsSessionId = localStorage.getItem(ANALYTICS_SESSION_KEY);
 if (!analyticsSessionId) {
     analyticsSessionId = (window.crypto?.randomUUID && window.crypto.randomUUID()) || `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     localStorage.setItem(ANALYTICS_SESSION_KEY, analyticsSessionId);
 }
 
+function makeGuestToken() {
+    if (window.crypto?.getRandomValues) {
+        const bytes = new Uint8Array(32);
+        window.crypto.getRandomValues(bytes);
+        return btoa(String.fromCharCode(...bytes))
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/g, "");
+    }
+    return `${Date.now()}-${Math.random()}-${Math.random()}`;
+}
+
+function getGuestHeaders() {
+    let guestId = localStorage.getItem(GUEST_INSTALLATION_ID_KEY);
+    let guestToken = localStorage.getItem(GUEST_TOKEN_KEY);
+    if (!guestId) {
+        guestId = (window.crypto?.randomUUID && window.crypto.randomUUID()) || `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(GUEST_INSTALLATION_ID_KEY, guestId);
+    }
+    if (!guestToken) {
+        guestToken = makeGuestToken();
+        localStorage.setItem(GUEST_TOKEN_KEY, guestToken);
+    }
+    return {
+        "X-Guest-Id": guestId,
+        "X-Guest-Token": guestToken
+    };
+}
+
+function getNavigationHeaders(authData = null) {
+    const headers = {
+        "Content-Type": "application/json",
+        ...getGuestHeaders()
+    };
+    const token = authData?.token || getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+}
+
 function getAnalyticsHeaders() {
     const headers = {
         "Content-Type": "application/json",
+        ...getGuestHeaders(),
         "X-Client-Source": "web",
         "X-Client-Session-Id": analyticsSessionId,
         "X-Client-Event-Id": (window.crypto?.randomUUID && window.crypto.randomUUID()) || `evt-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -70,6 +115,8 @@ function sendAnalyticsEvent(path, payload) {
 }
 window.analyticsSessionId = analyticsSessionId;
 window.sendAnalyticsEvent = sendAnalyticsEvent;
+window.getGuestHeaders = getGuestHeaders;
+window.getNavigationHeaders = getNavigationHeaders;
 
 function summarizeRouteSegments(segments = []) {
     const typeCounts = {};
@@ -222,31 +269,19 @@ async function loadBackendConfig() {
             });
         }
 
-        // 3. Render presets dynamically
-        const presetList = document.getElementById("preset-list");
-        if (presetList) {
-            presetList.innerHTML = "";
-            config.presets
-                .filter(p => p.route_type === "b180" || p.route_type === "b360")
-                .forEach(p => {
-                const btn = document.createElement("button");
-                btn.className = "preset-item";
-                btn.setAttribute("data-start", p.start.join(","));
-                btn.setAttribute("data-end", p.end.join(","));
-                if (p.waypoints && p.waypoints.length > 0) {
-                    btn.setAttribute("data-waypoints", p.waypoints.map(wp => wp.join(",")).join(";"));
-                }
-                if (p.route_type) {
-                    btn.setAttribute("data-route-type", p.route_type);
-                }
+        // 3. Populate and render regions selector dynamically
+        if (config.regions) {
+            regionsConfig = config.regions;
+            populateRegionSelector();
+        }
 
-                const icon = p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : '';
-                btn.innerHTML = `
-                    <span class="preset-name">${icon}${p.name}</span>
-                    <span class="preset-desc">${p.desc}</span>
-                `;
-                presetList.appendChild(btn);
-            });
+        // 4. Save presets and render active region presets
+        allPresets = config.presets || [];
+        const savedRegion = localStorage.getItem("active_routing_region");
+        if (savedRegion && regionsConfig[savedRegion]) {
+            switchRegion(savedRegion);
+        } else {
+            switchRegion("boulder");
         }
         
         // Initialize sliders and listeners
@@ -302,28 +337,24 @@ function fallbackLocalRendering() {
         });
     }
 
-    // 2. Render default presets locally
-    const presetList = document.getElementById("preset-list");
-    if (presetList) {
-        const presets = [
-            { name: "Boulder Loops B-180", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], route_type: "b180" },
-            { name: "Boulder Loops B-360", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], route_type: "b360" }
-        ];
-        presetList.innerHTML = "";
-        presets.forEach(p => {
-            const btn = document.createElement("button");
-            btn.className = "preset-item";
-            btn.setAttribute("data-start", p.start.join(","));
-            btn.setAttribute("data-end", p.end.join(","));
-            if (p.waypoints.length > 0) btn.setAttribute("data-waypoints", p.waypoints.map(wp => wp.join(",")).join(";"));
-            if (p.route_type) btn.setAttribute("data-route-type", p.route_type);
-            btn.innerHTML = `
-                <span class="preset-name">${p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : ''}${p.name}</span>
-                <span class="preset-desc">${p.desc}</span>
-            `;
-            presetList.appendChild(btn);
-        });
-    }
+    // 2. Initialize default regions and presets locally
+    regionsConfig = {
+        boulder: {
+            name: "Boulder",
+            bbox: [39.914, -105.316, 40.094, -105.156]
+        },
+        broomfield: {
+            name: "Broomfield",
+            bbox: [39.88, -105.16, 40.01, -104.99]
+        }
+    };
+    allPresets = [
+        { name: "Boulder Loops B-180", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], route_type: "b180" },
+        { name: "Boulder Loops B-360", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], route_type: "b360" }
+    ];
+    populateRegionSelector();
+    switchRegion("boulder");
+
     initSliders();
     initEventListeners();
     loadRouteTuningProfiles();
@@ -969,53 +1000,7 @@ function initEventListeners() {
         saveHomePinBtn.addEventListener("click", savePendingHomeLocation);
     }
 
-    presets.forEach(preset => {
-        preset.addEventListener("click", () => {
-            presets.forEach(p => p.classList.remove("active"));
-            preset.classList.add("active");
 
-            // Update playground section title and description to match preset's starting location
-            const presetName = preset.querySelector(".preset-name").textContent;
-            let startName = "Cedar Ave";
-            if (presetName.includes("➔")) {
-                startName = presetName.split("➔")[0].trim();
-            } else if (presetName.includes("Loop")) {
-                startName = "Valmont Park";
-            }
-            updatePlaygroundStartText(startName);
-
-            const startStr = preset.getAttribute("data-start");
-            const endStr = preset.getAttribute("data-end");
-            const waypointsStr = preset.getAttribute("data-waypoints");
-            const routeType = preset.getAttribute("data-route-type");
-
-            const startCoords = startStr.split(",").map(Number);
-            const endCoords = endStr.split(",").map(Number);
-            
-            let waypoints = [];
-            if (waypointsStr) {
-                waypoints = waypointsStr.split(";").map(wp => wp.split(",").map(Number));
-            }
-
-            if (routeType === "b180" || routeType === "b360") {
-                sendAnalyticsEvent("/api/analytics/route-event", {
-                    event_type: "official_route_selected",
-                    route_type: routeType,
-                    start_lat: startCoords[0],
-                    start_lon: startCoords[1],
-                    end_lat: endCoords[0],
-                    end_lon: endCoords[1],
-                    waypoint_count: waypoints.length,
-                    end_point_name: presetName,
-                    metadata: {
-                        preset_name: presetName
-                    }
-                });
-                switchAppSection("plan");
-            }
-            loadPresetRoute(startCoords, endCoords, waypoints, routeType, presetName);
-        });
-    });
 
     // Start Navigation button
     const navBtn = document.getElementById("btn-start-nav");
@@ -1659,7 +1644,8 @@ async function calculateRoute() {
         end_lon: endLatLng.lng,
         waypoints: currentWaypoints,
         weights: weights,
-        offsets: getRouteOffsetsFromEditor()
+        offsets: getRouteOffsetsFromEditor(),
+        region: activeRegionId
     };
 
     try {
@@ -2157,19 +2143,168 @@ function generateDynamicCues(segments) {
 
 let userGPSMarker = null;
 
-// Boulder bounding box definitions
-const BOULDER_BOUNDS = {
-    minLat: 39.95,
-    maxLat: 40.15,
-    minLon: -105.35,
-    maxLon: -105.15
-};
-
-// Check if coordinates are in/near Boulder
-function isWithinBoulder(lat, lon) {
-    return lat >= BOULDER_BOUNDS.minLat && lat <= BOULDER_BOUNDS.maxLat &&
-           lon >= BOULDER_BOUNDS.minLon && lon <= BOULDER_BOUNDS.maxLon;
+// Multi-Region helper functions
+function getRegionForCoords(lat, lon) {
+    for (const [rId, config] of Object.entries(regionsConfig)) {
+        const bbox = config.bbox; // [min_lat, min_lon, max_lat, max_lon]
+        if (lat >= bbox[0] && lat <= bbox[2] && lon >= bbox[1] && lon <= bbox[3]) {
+            return rId;
+        }
+    }
+    return null;
 }
+
+function isWithinBoulder(lat, lon) {
+    return getRegionForCoords(lat, lon) !== null;
+}
+
+function populateRegionSelector() {
+    const select = document.getElementById("region-select");
+    if (!select) return;
+    select.innerHTML = "";
+    for (const [rId, config] of Object.entries(regionsConfig)) {
+        const opt = document.createElement("option");
+        opt.value = rId;
+        opt.textContent = config.name;
+        select.appendChild(opt);
+    }
+    // Event listener for select change
+    select.addEventListener("change", (e) => {
+        switchRegion(e.target.value);
+    });
+}
+
+function switchRegion(regionId) {
+    if (!regionsConfig[regionId]) return;
+    activeRegionId = regionId;
+    
+    // Update select element value if different
+    const select = document.getElementById("region-select");
+    if (select && select.value !== regionId) {
+        select.value = regionId;
+    }
+    
+    // Clear map state
+    if (startMarker) {
+        map.removeLayer(startMarker);
+        startMarker = null;
+    }
+    if (endMarker) {
+        map.removeLayer(endMarker);
+        endMarker = null;
+    }
+    const startInput = document.getElementById("route-start-input");
+    if (startInput) startInput.value = "";
+    const endInput = document.getElementById("route-end-input");
+    if (endInput) endInput.value = "";
+    
+    clearPolylines();
+    const routeInfo = document.getElementById("route-info");
+    if (routeInfo) routeInfo.classList.add("hidden");
+    
+    // Clear official routes cache
+    if (bikeRoutesLayer && map.hasLayer(bikeRoutesLayer)) {
+        map.removeLayer(bikeRoutesLayer);
+    }
+    bikeRoutesLayer = null;
+    cachedBikeRoutesGeoJSON = null;
+    
+    const officialRoutesToggle = document.getElementById("toggle-official-routes");
+    if (officialRoutesToggle && officialRoutesToggle.checked) {
+        showOfficialRoutes();
+    }
+    
+    // Reset playgrounds and crossings
+    playgroundPlaces = [];
+    playgroundLoadPromise = null;
+    loadCrossings();
+    loadPlaygrounds();
+    
+    // Render region-specific presets
+    renderPresets(regionId);
+    
+    // Fit bounds to region bbox
+    const bbox = regionsConfig[regionId].bbox; // [min_lat, min_lon, max_lat, max_lon]
+    const bounds = L.latLngBounds([bbox[0], bbox[1]], [bbox[2], bbox[3]]);
+    map.fitBounds(bounds);
+    
+    localStorage.setItem("active_routing_region", regionId);
+    console.log(`Switched active routing region to: ${regionId}`);
+}
+
+function renderPresets(regionId) {
+    const presetList = document.getElementById("preset-list");
+    if (!presetList) return;
+    presetList.innerHTML = "";
+    
+    const region = regionsConfig[regionId];
+    if (!region) return;
+    const bbox = region.bbox; // [min_lat, min_lon, max_lat, max_lon]
+    
+    const filteredPresets = allPresets.filter(p => {
+        if (p.route_type !== "b180" && p.route_type !== "b360" && p.route_type !== "broomfield_loop") {
+            return false;
+        }
+        if (!p.start || p.start.length !== 2) return false;
+        const lat = p.start[0];
+        const lon = p.start[1];
+        return lat >= bbox[0] && lat <= bbox[2] && lon >= bbox[1] && lon <= bbox[3];
+    });
+    
+    filteredPresets.forEach(p => {
+        const btn = document.createElement("button");
+        btn.className = "preset-item";
+        btn.setAttribute("data-start", p.start.join(","));
+        btn.setAttribute("data-end", p.end.join(","));
+        if (p.waypoints && p.waypoints.length > 0) {
+            btn.setAttribute("data-waypoints", p.waypoints.map(wp => wp.join(",")).join(";"));
+        }
+        if (p.route_type) {
+            btn.setAttribute("data-route-type", p.route_type);
+        }
+
+        const icon = p.route_type ? '<i class="fa-solid fa-arrows-spin"></i> ' : '';
+        btn.innerHTML = `
+            <span class="preset-name">${icon}${p.name}</span>
+            <span class="preset-desc">${p.desc}</span>
+        `;
+        
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".preset-item").forEach(el => el.classList.remove("active"));
+            btn.classList.add("active");
+
+            const presetName = p.name;
+            let startName = "Cedar Ave";
+            if (presetName.includes("➔")) {
+                startName = presetName.split("➔")[0].trim();
+            } else if (presetName.includes("Loop") || presetName.includes("Tour")) {
+                startName = presetName.includes("Boulder") ? "Valmont Park" : "Broomfield Commons";
+            }
+            updatePlaygroundStartText(startName);
+
+            if (p.route_type === "b180" || p.route_type === "b360" || p.route_type === "broomfield_loop") {
+                sendAnalyticsEvent("/api/analytics/route-event", {
+                    event_type: "official_route_selected",
+                    route_type: p.route_type,
+                    start_lat: p.start[0],
+                    start_lon: p.start[1],
+                    end_lat: p.end[0],
+                    end_lon: p.end[1],
+                    waypoint_count: p.waypoints ? p.waypoints.length : 0,
+                    end_point_name: presetName,
+                    metadata: {
+                        preset_name: presetName
+                    }
+                });
+                switchAppSection("plan");
+            }
+            loadPresetRoute(p.start, p.end, p.waypoints || [], p.route_type, presetName);
+        });
+        
+        presetList.appendChild(btn);
+    });
+}
+
 
 // Sleek Toast Notification
 function showToast(message) {
@@ -2268,7 +2403,9 @@ function autoLocateUser() {
                 localStorage.removeItem("geolocation_denied");
                 updateLocateButtonVisuals();
 
-                if (isWithinBoulder(lat, lon)) {
+                const matchedRegion = getRegionForCoords(lat, lon);
+                if (matchedRegion) {
+                    switchRegion(matchedRegion);
                     map.setView([lat, lon], 15);
                     
                     if (startMarker) {
@@ -2288,7 +2425,7 @@ function autoLocateUser() {
                     updatePlaygroundStartText("Current Location");
                     showToast("Start point set to your location.");
                 } else {
-                    showToast("Your location is outside Boulder. Loading demo route instead.");
+                    showToast("Your location is outside our routing zones. Loading demo route instead.");
                     prepopulatePoints();
                 }
             },
@@ -2336,7 +2473,9 @@ function requestLocation() {
                 localStorage.removeItem("geolocation_denied");
                 updateLocateButtonVisuals();
 
-                if (isWithinBoulder(lat, lon)) {
+                const matchedRegion = getRegionForCoords(lat, lon);
+                if (matchedRegion) {
+                    switchRegion(matchedRegion);
                     map.setView([lat, lon], 15);
                     
                     if (startMarker) {
@@ -2357,7 +2496,7 @@ function requestLocation() {
 
                     showToast("Starting point set to your location. Click on the map to set a destination!");
                 } else {
-                    showToast("Your location is outside Boulder routing zone. Loading demo route instead.");
+                    showToast("Your location is outside our routing zones. Loading demo route instead.");
                     prepopulatePoints();
                 }
             },
@@ -2448,7 +2587,9 @@ function onDemandLocate(isRetry = false) {
                 localStorage.removeItem("geolocation_denied");
                 updateLocateButtonVisuals();
 
-                if (isWithinBoulder(lat, lon)) {
+                const matchedRegion = getRegionForCoords(lat, lon);
+                if (matchedRegion) {
+                    switchRegion(matchedRegion);
                     map.setView([lat, lon], 15);
                     
                     if (startMarker) {
@@ -2474,7 +2615,7 @@ function onDemandLocate(isRetry = false) {
 
                     showToast("Start point set to your location.");
                 } else {
-                    showToast("Your location is outside Boulder. Location dot shown.");
+                    showToast("Your location is outside our routing zones. Location dot shown.");
                     showUserGPSDot(lat, lon);
                 }
             },
@@ -2582,7 +2723,7 @@ function prepopulatePoints() {
 // Fetch crossings and cache them on load
 async function loadCrossings() {
     try {
-        const response = await fetch(`${API_BASE}/api/crossings`);
+        const response = await fetch(`${API_BASE}/api/crossings?region=${activeRegionId}`);
         allCrossings = await response.json();
         console.log(`Loaded ${allCrossings.length} crossing signals for dynamic route display.`);
     } catch (err) {
@@ -2595,7 +2736,7 @@ async function loadPlaygrounds() {
     if (playgroundPlaces.length) return playgroundPlaces;
     if (playgroundLoadPromise) return playgroundLoadPromise;
 
-    playgroundLoadPromise = fetch(`${API_BASE}/api/playgrounds`)
+    playgroundLoadPromise = fetch(`${API_BASE}/api/playgrounds?region=${activeRegionId}`)
         .then(response => response.json())
         .then(playgrounds => {
             playgroundPlaces = playgrounds.map((pg, index) => ({
@@ -2737,7 +2878,7 @@ async function showOfficialRoutes() {
     if (!cachedBikeRoutesGeoJSON) {
         try {
             console.log("Fetching official bike routes GeoJSON...");
-            const response = await fetch(`${API_BASE}/api/bike-routes`);
+            const response = await fetch(`${API_BASE}/api/bike-routes?region=${activeRegionId}`);
             cachedBikeRoutesGeoJSON = await response.json();
         } catch (err) {
             console.error("Failed to fetch official bike routes:", err);
@@ -2892,7 +3033,7 @@ function initMockPermissionsSelectors() {
 // Inspect an edge on the map at the given latlng
 async function inspectEdge(latlng) {
     try {
-        const response = await fetch(`${API_BASE}/api/inspect-edge?lat=${latlng.lat}&lon=${latlng.lng}`);
+        const response = await fetch(`${API_BASE}/api/inspect-edge?lat=${latlng.lat}&lon=${latlng.lng}&region=${activeRegionId}`);
         if (!response.ok) {
             const err = await response.json();
             showToast(err.error || "Failed to inspect street segment.");
@@ -3683,10 +3824,14 @@ function getCurrentPositionCoords() {
 async function getCurrentStartCoords() {
     try {
         const coords = await getCurrentPositionCoords();
-        if (isWithinBoulder(coords[0], coords[1])) {
+        const matchedRegion = getRegionForCoords(coords[0], coords[1]);
+        if (matchedRegion) {
+            if (matchedRegion !== activeRegionId) {
+                switchRegion(matchedRegion);
+            }
             return coords;
         }
-        showToast("Current location is outside Boulder. Cannot route from current location.");
+        showToast("Current location is outside routing zones. Cannot route from current location.");
     } catch (error) {
         console.warn("[Location] Failed to use current location:", error);
         showToast("Could not get current location. Please allow location access.");
@@ -4065,8 +4210,7 @@ async function syncPendingRoutes() {
         const resp = await fetch(`${base}/api/navigation/sync`, {
             method: "POST",
             headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}`
+                ...getNavigationHeaders({ token })
             },
             body: JSON.stringify(payload)
         });
@@ -4134,7 +4278,7 @@ async function loadHistory() {
         try {
             const url = `${API_BASE}/api/navigation/history`;
             const response = await fetch(url, {
-                headers: { "Authorization": `Bearer ${token}` }
+                headers: getNavigationHeaders({ token })
             });
             if (response.ok) {
                 serverRoutes = await response.json();
@@ -4344,8 +4488,7 @@ async function updateHistoryRoute(route, changes) {
             const resp = await fetch(`${API_BASE}/api/navigation/${serverId}`, {
                 method: "PATCH",
                 headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${authData.token}`
+                    ...getNavigationHeaders(authData)
                 },
                 body: JSON.stringify(changes)
             });
@@ -4404,7 +4547,7 @@ async function deleteHistoryRoute(route) {
         try {
             const resp = await fetch(`${API_BASE}/api/navigation/${serverId}`, {
                 method: "DELETE",
-                headers: { "Authorization": `Bearer ${authData.token}` }
+                headers: getNavigationHeaders(authData)
             });
             if (!resp.ok) throw new Error(`Delete failed with status ${resp.status}`);
             localRoutes = getLocalHistoryRoutes().filter(r => !(r.id === routeId || r.local_id === routeId || r.server_id === serverId));
@@ -4454,7 +4597,7 @@ async function resolveHistoryRouteDetails(route) {
     }
 
     const response = await fetch(`${API_BASE}/api/navigation/${serverId}`, {
-        headers: { "Authorization": `Bearer ${authData.token}` }
+        headers: getNavigationHeaders(authData)
     });
     if (!response.ok) throw new Error("Failed to fetch route preview details");
     const serverRoute = await response.json();
@@ -4625,7 +4768,7 @@ async function loadHistoryRouteOnMap(routeId) {
         } else {
             const authData = getStoredAuthSession();
             const response = await fetch(`${API_BASE}/api/navigation/${routeId}`, {
-                headers: authData ? { "Authorization": `Bearer ${authData.token}` } : {}
+                headers: getNavigationHeaders(authData)
             });
             if (!response.ok) throw new Error("Failed to fetch route details");
             route = await response.json();

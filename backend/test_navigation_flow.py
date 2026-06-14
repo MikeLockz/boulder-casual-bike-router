@@ -3,6 +3,10 @@ import json
 import time
 
 BASE_URL = "http://localhost:8081/api"  # Curl through Nginx to test proxy mapping too
+GUEST_HEADERS = {
+    "X-Guest-Id": "navigation-flow-test",
+    "X-Guest-Token": "navigation-flow-test-secret"
+}
 
 def test_navigation_flow():
     print("=== Testing Start Navigation ===")
@@ -31,7 +35,7 @@ def test_navigation_flow():
         "weights": {"quietness": 0.5}
     }
     
-    start_resp = requests.post(f"{BASE_URL}/navigation/start", json=start_payload)
+    start_resp = requests.post(f"{BASE_URL}/navigation/start", json=start_payload, headers=GUEST_HEADERS)
     print(f"Status Code: {start_resp.status_code}")
     print(f"Response: {start_resp.text}")
     assert start_resp.status_code == 201, "Start navigation failed"
@@ -48,7 +52,7 @@ def test_navigation_flow():
     
     for i, tick_payload in enumerate(ticks):
         print(f"Sending tick {i+1}...")
-        tick_resp = requests.post(f"{BASE_URL}/navigation/{route_id}/tick", json=tick_payload)
+        tick_resp = requests.post(f"{BASE_URL}/navigation/{route_id}/tick", json=tick_payload, headers=GUEST_HEADERS)
         print(f"Status Code: {tick_resp.status_code}")
         print(f"Response: {tick_resp.text}")
         assert tick_resp.status_code == 201, "Tick insert failed"
@@ -59,7 +63,7 @@ def test_navigation_flow():
         "ended_lon": -105.2599,
         "status": "completed"
     }
-    end_resp = requests.post(f"{BASE_URL}/navigation/{route_id}/end", json=end_payload)
+    end_resp = requests.post(f"{BASE_URL}/navigation/{route_id}/end", json=end_payload, headers=GUEST_HEADERS)
     print(f"Status Code: {end_resp.status_code}")
     print(f"Response: {end_resp.text}")
     assert end_resp.status_code == 200, "End navigation failed"
@@ -69,7 +73,7 @@ def test_navigation_flow():
     print(f"Average speed: {end_data.get('average_speed')} m/s")
 
     print("\n=== Testing Get Navigation Details ===")
-    detail_resp = requests.get(f"{BASE_URL}/navigation/{route_id}")
+    detail_resp = requests.get(f"{BASE_URL}/navigation/{route_id}", headers=GUEST_HEADERS)
     print(f"Status Code: {detail_resp.status_code}")
     # print first 500 chars of detail response
     print(f"Response (truncated): {detail_resp.text[:500]}...")
@@ -78,7 +82,7 @@ def test_navigation_flow():
     assert len(detail_data.get("ticks", [])) == 3, "Ticks count mismatch"
 
     print("\n=== Testing Get History ===")
-    history_resp = requests.get(f"{BASE_URL}/navigation/history?route_ids={route_id}")
+    history_resp = requests.get(f"{BASE_URL}/navigation/history?route_ids={route_id}", headers=GUEST_HEADERS)
     print(f"Status Code: {history_resp.status_code}")
     print(f"Response: {history_resp.text}")
     assert history_resp.status_code == 200, "Get history failed"

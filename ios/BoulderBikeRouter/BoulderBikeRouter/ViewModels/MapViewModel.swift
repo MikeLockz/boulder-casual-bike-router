@@ -27,6 +27,7 @@ class MapViewModel {
 
     private var startGeocodeTask: Task<Void, Never>?
     private var endGeocodeTask: Task<Void, Never>?
+    @ObservationIgnored private var sessionRefreshTask: Task<Void, Never>?
 
     // Map markers and route state
     var startLocation: CLLocationCoordinate2D?
@@ -53,6 +54,11 @@ class MapViewModel {
     var currentUserEmail: String? = UserDefaults.standard.string(forKey: "logged_in_user_email")
     var currentUserId: String? = UserDefaults.standard.string(forKey: "logged_in_user_id")
     var pocketbaseToken: String? = UserDefaults.standard.string(forKey: "pocketbase_token")
+    var isSessionExpired: Bool = {
+        UserDefaults.standard.string(forKey: "pocketbase_token") == nil
+            && UserDefaults.standard.string(forKey: "logged_in_user_id") != nil
+    }()
+    var isRefreshingSession: Bool = false
     
     var isUserLoggedIn: Bool {
         pocketbaseToken != nil
@@ -63,11 +69,12 @@ class MapViewModel {
         didSet {
             syncService = modelContext.map { SyncService(modelContext: $0) }
             if modelContext != nil {
-                Task(priority: .background) {
-                    await syncService?.syncPendingRoutes()
-                    await syncService?.syncPendingRouteTuningProfiles()
-                }
                 Task {
+                    let canSync = await refreshSessionIfNeeded()
+                    if canSync {
+                        await syncService?.syncPendingRoutes()
+                        await syncService?.syncPendingRouteTuningProfiles()
+                    }
                     await loadRouteTuningProfiles()
                     await loadHomeLocation()
                     await loadHistory()
@@ -86,8 +93,11 @@ class MapViewModel {
             UserDefaults.standard.set(newValue, forKey: "cloud_sync_enabled")
             if newValue {
                 Task {
-                    await syncService?.syncPendingRoutes()
-                    await syncService?.syncPendingRouteTuningProfiles()
+                    let canSync = await refreshSessionIfNeeded()
+                    if canSync {
+                        await syncService?.syncPendingRoutes()
+                        await syncService?.syncPendingRouteTuningProfiles()
+                    }
                     await loadRouteTuningProfiles()
                     await loadHomeLocation()
                     await loadHistory()
@@ -103,6 +113,9 @@ class MapViewModel {
     var selectedHistoryRoute: PastRoute? = nil
     var selectedHistoryRouteTicks: [NavigationTick] = []
     var selectedHistoryRouteDetails: DetailedRouteResponse? = nil
+    @ObservationIgnored private var pendingRouteDeletionIds: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: "pending_route_deletion_ids") ?? []
+    )
 
     // Services
     private let apiService = APIService()
@@ -115,6 +128,22 @@ class MapViewModel {
             return CLLocationCoordinate2D(latitude: lat, longitude: lon)
         }
         return nil
+    }
+
+    private func debugLog(_ message: String) {
+        print("DEBUG_LOG: \(message)")
+        let path = "/Users/mbp/.gemini/antigravity/scratch/debug_log.txt"
+        let fileURL = URL(fileURLWithPath: path)
+        let logMessage = "[\(Date())] \(message)\n"
+        if let data = logMessage.data(using: .utf8) {
+            if let fileHandle = try? FileHandle(forWritingTo: fileURL) {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write(data)
+                fileHandle.closeFile()
+            } else {
+                try? data.write(to: fileURL)
+            }
+        }
     }
 
     init() {
@@ -142,7 +171,7 @@ class MapViewModel {
                 await self?.loadHistory()
             }
         }
-        
+
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("RouteRerouted"),
             object: nil,
@@ -160,11 +189,15 @@ class MapViewModel {
             queue: .main
         ) { [weak self] _ in
             Task {
-                await self?.syncService?.syncPendingRoutes()
-                await self?.syncService?.syncPendingRouteTuningProfiles()
-                await self?.loadRouteTuningProfiles()
-                await self?.loadHomeLocation()
-                await self?.loadHistory()
+                guard let self else { return }
+                let canSync = await self.refreshSessionIfNeeded()
+                if canSync {
+                    await self.syncService?.syncPendingRoutes()
+                    await self.syncService?.syncPendingRouteTuningProfiles()
+                }
+                await self.loadRouteTuningProfiles()
+                await self.loadHomeLocation()
+                await self.loadHistory()
             }
         }
     }
@@ -177,7 +210,7 @@ class MapViewModel {
             await MainActor.run {
                 self.presets = config.presets.filter { $0.routeType == "b180" || $0.routeType == "b360" }
                 self.weightsMetadata = config.weights
-                
+
                 // Populate dynamic weights dictionary
                 var newWeights: [String: Double] = [:]
                 for w in config.weights {
@@ -225,7 +258,7 @@ class MapViewModel {
         startLocation = preset.startCoordinate
         endLocation = preset.endCoordinate
         waypoints = preset.waypointCoordinates
-        
+
         // Lock/unlock sliders based on preset type (like official routes B180/B360)
         if preset.routeType != nil {
             isWeightsLocked = true
@@ -238,7 +271,7 @@ class MapViewModel {
             setEndLocation(preset.endCoordinate, destinationName: nil)
             return
         }
-        
+
         // Trigger routing
         Task {
             await fetchRoute()
@@ -287,7 +320,7 @@ class MapViewModel {
                 } catch {
                     print("Geocoding failed: \(error.localizedDescription)")
                 }
-                
+
                 if let home = self.homeLocation,
                    self.coordinateDistance(coordinate, to: home.coordinate) <= 20 {
                     resolvedName = "Home"
@@ -625,6 +658,7 @@ class MapViewModel {
         return newWeights
     }
 
+    @MainActor
     func loadRouteTuningProfiles() async {
         let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
         let isSyncActive = isUserLoggedIn && isCloudSyncEnabled
@@ -684,14 +718,12 @@ class MapViewModel {
                 }
                 .map(\.toRouteTuningProfile)
 
-            await MainActor.run {
-                self.routeTuningProfiles = profiles
-                if let activeId = self.activeRouteTuningProfileId,
-                   let active = profiles.first(where: { $0.localId == activeId || $0.id == activeId }) {
-                    self.applyRouteTuningProfile(active)
-                } else if let defaultProfile = profiles.first(where: { $0.isDefault }) {
-                    self.applyRouteTuningProfile(defaultProfile)
-                }
+            self.routeTuningProfiles = profiles
+            if let activeId = self.activeRouteTuningProfileId,
+               let active = profiles.first(where: { $0.localId == activeId || $0.id == activeId }) {
+                self.applyRouteTuningProfile(active)
+            } else if let defaultProfile = profiles.first(where: { $0.isDefault }) {
+                self.applyRouteTuningProfile(defaultProfile)
             }
         } catch {
             print("Failed to load local route tuning profiles: \(error.localizedDescription)")
@@ -974,9 +1006,12 @@ class MapViewModel {
     }
 
     /// Load telemetry route history from both remote server (if sync is enabled) and SwiftData.
+    @MainActor
     func loadHistory() async {
         let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
         let isSyncActive = isUserLoggedIn && isCloudSyncEnabled
+
+        debugLog("loadHistory started. isUserLoggedIn: \(isUserLoggedIn), isCloudSyncEnabled: \(isCloudSyncEnabled), currentUserId: \(currentUserId ?? "nil")")
         
         var serverRoutes: [PastRoute] = []
         
@@ -984,13 +1019,19 @@ class MapViewModel {
         if isSyncActive {
             do {
                 serverRoutes = try await apiService.fetchHistory(routeIds: nil)
+                debugLog("loadHistory: Fetched \(serverRoutes.count) remote routes from server.")
             } catch {
+                if case APIError.unauthorized = error {
+                    expireAuthenticationSession()
+                }
+                debugLog("loadHistory: Failed to load telemetry history from server: \(error.localizedDescription)")
                 print("Failed to load telemetry history from server: \(error.localizedDescription)")
             }
         }
         
         // 2. Fetch local routes from SwiftData
         var localRoutes: [PastRoute] = []
+        var deletedRouteIds = pendingRouteDeletionIds
         if let context = modelContext {
             do {
                 let descriptor = FetchDescriptor<LocalRoute>(
@@ -998,6 +1039,16 @@ class MapViewModel {
                 )
                 let allLocalRoutes = try context.fetch(descriptor)
                 
+                // Track deleted routes to filter remote/server routes
+                for r in allLocalRoutes {
+                    if r.deleted {
+                        deletedRouteIds.insert(r.id)
+                        if let serverId = r.serverId {
+                            deletedRouteIds.insert(serverId)
+                        }
+                    }
+                }
+
                 // Filter routes depending on auth context
                 let filteredLocalRoutes = allLocalRoutes.filter { r in
                     if r.deleted { return false }
@@ -1011,24 +1062,29 @@ class MapViewModel {
                 }
                 
                 localRoutes = filteredLocalRoutes.map { $0.toPastRoute }
+                debugLog("loadHistory: Fetched \(allLocalRoutes.count) raw local routes, \(localRoutes.count) filtered local routes. Deleted local IDs: \(deletedRouteIds)")
             } catch {
+                debugLog("loadHistory: Failed to load local routes from SwiftData: \(error.localizedDescription)")
                 print("Failed to load local routes from SwiftData: \(error.localizedDescription)")
             }
+        } else {
+            debugLog("loadHistory: modelContext is nil!")
         }
         
         // 3. Combine and sort
-        await MainActor.run {
-            var combinedMap: [String: PastRoute] = [:]
-            for r in serverRoutes {
+        var combinedMap: [String: PastRoute] = [:]
+        for r in serverRoutes {
+            if !deletedRouteIds.contains(r.id) {
                 combinedMap[r.id] = r
             }
-            for r in localRoutes {
-                combinedMap[r.id] = r
-            }
-            
-            self.pastRoutes = combinedMap.values.sorted(by: { $0.date > $1.date })
-            print("Loaded \(self.pastRoutes.count) past routes (Local: \(localRoutes.count), Server: \(serverRoutes.count)).")
         }
+        for r in localRoutes {
+            combinedMap[r.id] = r
+        }
+
+        self.pastRoutes = combinedMap.values.sorted(by: { $0.date > $1.date })
+        debugLog("loadHistory completed. self.pastRoutes count: \(self.pastRoutes.count)")
+        print("Loaded \(self.pastRoutes.count) past routes (Local: \(localRoutes.count), Server: \(serverRoutes.count)).")
     }
     
     func selectHistoryRoute(_ route: PastRoute) async {
@@ -1179,46 +1235,234 @@ class MapViewModel {
 
     @MainActor
     func deleteHistoryRoute(_ route: PastRoute) async {
+        let routeId = route.id
         var shouldDeleteRemote = isUserLoggedIn && isCloudSyncEnabled
+
+        if shouldDeleteRemote {
+            pendingRouteDeletionIds.insert(routeId)
+            savePendingRouteDeletionIds()
+        }
+
+        debugLog("deleteHistoryRoute started for routeId: \(routeId). shouldDeleteRemote: \(shouldDeleteRemote)")
 
         if let context = modelContext {
             do {
-                let routeId = route.id
                 let descriptor = FetchDescriptor<LocalRoute>()
-                if let localRoute = try context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
+                let allRoutes = try context.fetch(descriptor)
+                debugLog("deleteHistoryRoute: Found \(allRoutes.count) raw local routes in DB.")
+                for r in allRoutes {
+                    debugLog("  - LocalRoute DB record: id=\(r.id), serverId=\(r.serverId ?? "nil"), deleted=\(r.deleted), synced=\(r.synced)")
+                }
+
+                if let localRoute = allRoutes.first(where: { $0.id == routeId || $0.serverId == routeId }) {
+                    debugLog("deleteHistoryRoute: Found matching localRoute: id=\(localRoute.id), serverId=\(localRoute.serverId ?? "nil")")
                     if shouldDeleteRemote && localRoute.serverId != nil {
+                        debugLog("deleteHistoryRoute: Setting deleted=true, synced=false locally for sync pending.")
                         localRoute.deleted = true
                         localRoute.synced = false
                     } else {
+                        debugLog("deleteHistoryRoute: Deleting localRoute from context directly.")
                         shouldDeleteRemote = false
                         context.delete(localRoute)
                     }
                     try context.save()
+                    debugLog("deleteHistoryRoute: Local context saved successfully.")
+                } else {
+                    debugLog("deleteHistoryRoute: No matching localRoute found in context.")
+                    if shouldDeleteRemote {
+                        debugLog("deleteHistoryRoute: Creating a placeholder localRoute with deleted=true, synced=false.")
+                        let newLocalRoute = LocalRoute(
+                            id: routeId,
+                            serverId: routeId,
+                            displayName: route.displayName,
+                            notes: route.notes,
+                            startPointName: route.startPointName,
+                            endPointName: route.endPointName,
+                            startLat: route.startLat,
+                            startLon: route.startLon,
+                            endLat: route.endLat,
+                            endLon: route.endLon,
+                            totalLengthMeters: route.totalLengthMeters,
+                            totalEstimatedTimeSeconds: route.totalEstimatedTimeSeconds,
+                            status: route.status,
+                            startedAt: route.startedAt,
+                            userId: currentUserId,
+                            synced: false,
+                            deleted: true
+                        )
+                        context.insert(newLocalRoute)
+                        try context.save()
+                        debugLog("deleteHistoryRoute: Placeholder localRoute saved successfully.")
+                    }
                 }
             } catch {
+                debugLog("deleteHistoryRoute: Failed to delete local history route: \(error.localizedDescription)")
                 print("Failed to delete local history route: \(error.localizedDescription)")
             }
+        } else {
+            debugLog("deleteHistoryRoute: modelContext is nil!")
         }
 
+        // The local tombstone is authoritative for the UI. Remote acknowledgement
+        // must not keep the route visible or block dismissal on a slow connection.
+        pastRoutes.removeAll { $0.id == routeId }
+        clearHistorySelection()
+
         if shouldDeleteRemote {
+            Task { @MainActor in
+                do {
+                    debugLog("deleteHistoryRoute: Sending remote delete request to apiService...")
+                    try await apiService.deleteHistoryRoute(routeId: route.id)
+                    debugLog("deleteHistoryRoute: Remote delete request completed successfully.")
+                    pendingRouteDeletionIds.remove(routeId)
+                    savePendingRouteDeletionIds()
+
+                    if let context = modelContext {
+                        let descriptor = FetchDescriptor<LocalRoute>()
+                        if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
+                            debugLog("deleteHistoryRoute: Deleting matching localRoute after successful remote delete.")
+                            context.delete(localRoute)
+                            try? context.save()
+                            debugLog("deleteHistoryRoute: Local context saved after remote delete.")
+                        }
+                    }
+                } catch {
+                    if case APIError.unauthorized = error {
+                        expireAuthenticationSession()
+                    }
+                    debugLog("deleteHistoryRoute: Failed to delete remote history route: \(error.localizedDescription)")
+                    print("Failed to delete remote history route: \(error.localizedDescription)")
+
+                    // Reassert the tombstone after the failed request. A later foreground
+                    // or connectivity sync will retry it together with other pending work.
+                    if let context = modelContext {
+                        let descriptor = FetchDescriptor<LocalRoute>()
+                        if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
+                            localRoute.deleted = true
+                            localRoute.synced = false
+                            try? context.save()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func expireAuthenticationSession() {
+        guard pocketbaseToken != nil else { return }
+        sessionRefreshTask?.cancel()
+        sessionRefreshTask = nil
+        UserDefaults.standard.removeObject(forKey: "pocketbase_token")
+        pocketbaseToken = nil
+        isSessionExpired = true
+        debugLog("Authentication token rejected by server; local session marked expired.")
+    }
+
+    @MainActor
+    func handleAuthenticationExpired() {
+        expireAuthenticationSession()
+    }
+
+    @MainActor
+    @discardableResult
+    func refreshSessionIfNeeded() async -> Bool {
+        guard let token = pocketbaseToken else { return false }
+        guard !isRefreshingSession else { return false }
+
+        isRefreshingSession = true
+        defer { isRefreshingSession = false }
+
+        do {
+            let auth = try await apiService.refreshAuthentication(token: token)
+            UserDefaults.standard.set(auth.token, forKey: "pocketbase_token")
+            UserDefaults.standard.set(auth.record.email, forKey: "logged_in_user_email")
+            UserDefaults.standard.set(auth.record.id, forKey: "logged_in_user_id")
+            pocketbaseToken = auth.token
+            currentUserEmail = auth.record.email
+            currentUserId = auth.record.id
+            isSessionExpired = false
+            scheduleSessionRefresh(for: auth.token)
+            await retryPendingRouteDeletions()
+            return true
+        } catch APIError.unauthorized {
+            expireAuthenticationSession()
+            return false
+        } catch {
+            // A transient network failure does not prove that the token is invalid.
+            print("Failed to refresh authentication: \(error.localizedDescription)")
+            return true
+        }
+    }
+
+    @MainActor
+    private func scheduleSessionRefresh(for token: String) {
+        sessionRefreshTask?.cancel()
+        guard let expiration = jwtExpirationDate(token) else { return }
+
+        let refreshDate = expiration.addingTimeInterval(-30 * 60)
+        let delay = max(1, refreshDate.timeIntervalSinceNow)
+        let nanoseconds = UInt64(min(delay, Double(UInt64.max) / 1_000_000_000) * 1_000_000_000)
+
+        sessionRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !Task.isCancelled, let self else { return }
+            let canSync = await self.refreshSessionIfNeeded()
+            if canSync {
+                await self.syncService?.syncPendingRoutes()
+                await self.syncService?.syncPendingRouteTuningProfiles()
+            }
+        }
+    }
+
+    private func jwtExpirationDate(_ token: String) -> Date? {
+        let segments = token.split(separator: ".")
+        guard segments.count > 1 else { return nil }
+
+        var base64 = String(segments[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = (4 - base64.count % 4) % 4
+        base64.append(String(repeating: "=", count: padding))
+
+        guard let data = Data(base64Encoded: base64),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let expiration = payload["exp"] as? TimeInterval else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: expiration)
+    }
+
+    @MainActor
+    private func retryPendingRouteDeletions() async {
+        guard isCloudSyncEnabled, isUserLoggedIn else { return }
+
+        for routeId in Array(pendingRouteDeletionIds) {
             do {
-                try await apiService.deleteHistoryRoute(routeId: route.id)
+                try await apiService.deleteHistoryRoute(routeId: routeId)
+                pendingRouteDeletionIds.remove(routeId)
+
                 if let context = modelContext {
-                    let routeId = route.id
                     let descriptor = FetchDescriptor<LocalRoute>()
                     if let localRoute = try? context.fetch(descriptor).first(where: { $0.id == routeId || $0.serverId == routeId }) {
                         context.delete(localRoute)
                         try? context.save()
                     }
                 }
+            } catch APIError.unauthorized {
+                expireAuthenticationSession()
+                break
             } catch {
-                print("Failed to delete remote history route: \(error.localizedDescription)")
-                await syncService?.syncPendingRoutes()
+                print("Failed to retry route deletion \(routeId): \(error.localizedDescription)")
             }
         }
 
-        clearHistorySelection()
-        await loadHistory()
+        savePendingRouteDeletionIds()
+        pastRoutes.removeAll { pendingRouteDeletionIds.contains($0.id) }
+    }
+
+    private func savePendingRouteDeletionIds() {
+        UserDefaults.standard.set(Array(pendingRouteDeletionIds), forKey: "pending_route_deletion_ids")
     }
 
     func recordCompletedRoute() {
@@ -1241,6 +1485,9 @@ class MapViewModel {
         self.pocketbaseToken = auth.token
         self.currentUserEmail = auth.record.email
         self.currentUserId = auth.record.id
+        self.isSessionExpired = false
+        self.scheduleSessionRefresh(for: auth.token)
+        await self.retryPendingRouteDeletions()
         
         // Trigger batch upload of any pending offline guest routes
         if let sync = syncService {
@@ -1265,6 +1512,8 @@ class MapViewModel {
     
     @MainActor
     func signOut() {
+        sessionRefreshTask?.cancel()
+        sessionRefreshTask = nil
         // Clear synced authenticated user routes from local DB on sign-out
         if let sync = syncService {
             sync.clearUserSyncedData()
@@ -1279,6 +1528,7 @@ class MapViewModel {
         self.pocketbaseToken = nil
         self.currentUserEmail = nil
         self.currentUserId = nil
+        self.isSessionExpired = false
         self.activeRouteTuningProfileId = nil
         self.homeLocation = nil
         self.homeLocationError = nil
