@@ -2421,8 +2421,12 @@ def get_nearest_place():
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid lat or lng values"}), 400
 
-    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
-    
+    return jsonify(resolve_nearest_place(lat, lng)), 200
+
+def resolve_nearest_place(lat, lng, pb_url=None):
+    """Resolve a coordinate to the same weighted place used by the public API."""
+    pb_url = pb_url or os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+
     # Try query bounding boxes of increasing sizes: 500m (~0.005), 1.5km (~0.015), 5km (~0.05)
     deltas = [0.005, 0.015, 0.05]
     records = []
@@ -2463,10 +2467,10 @@ def get_nearest_place():
             print(f"[-] Error querying PocketBase fallback: {e}")
             
     if not records:
-        return jsonify({
+        return {
             "place": None,
             "display_name": f"near {lat:.6f}, {lng:.6f}"
-        }), 200
+        }
         
     closest_place = None
     min_score = float("inf")
@@ -2493,7 +2497,7 @@ def get_nearest_place():
             
     if closest_place and closest_distance <= 5000:
         name = closest_place.get("name") or "Unknown Landmark"
-        return jsonify({
+        return {
             "place": {
                 "id": closest_place.get("id"),
                 "name": name,
@@ -2503,12 +2507,30 @@ def get_nearest_place():
                 "distance_meters": closest_distance
             },
             "display_name": f"near {name}"
-        }), 200
+        }
     else:
-        return jsonify({
+        return {
             "place": None,
             "display_name": f"near {lat:.6f}, {lng:.6f}"
-        }), 200
+        }
+
+def resolved_near_name(lat, lng, pb_url=None):
+    """Return a persistable nearest-place label, excluding coordinate fallbacks."""
+    try:
+        resolved = resolve_nearest_place(float(lat), float(lng), pb_url=pb_url)
+    except (TypeError, ValueError):
+        return None
+    return resolved.get("display_name") if resolved.get("place") else None
+
+def navigation_near_names(data, pb_url=None):
+    """Fill only missing route endpoint labels so client-provided values remain stable."""
+    start_name = clean_optional_text(data.get("start_near_name"), 300)
+    end_name = clean_optional_text(data.get("end_near_name"), 300)
+    if not start_name:
+        start_name = resolved_near_name(data.get("start_lat"), data.get("start_lon"), pb_url=pb_url)
+    if not end_name:
+        end_name = resolved_near_name(data.get("end_lat"), data.get("end_lon"), pb_url=pb_url)
+    return start_name, end_name
 
 @app.route("/api/analytics/place-search", methods=["POST", "OPTIONS"])
 def analytics_place_search():
@@ -2859,6 +2881,7 @@ def nav_start():
     
     import datetime
     now_str = datetime.datetime.utcnow().isoformat() + "Z"
+    start_near_name, end_near_name = navigation_near_names(data, pb_url=pb_url)
     
     pb_payload = {
         "user": user_id,
@@ -2871,6 +2894,8 @@ def nav_start():
         "end_lon": data.get("end_lon"),
         "start_point_name": data.get("start_point_name") or "Start Point",
         "end_point_name": data.get("end_point_name") or "Destination",
+        "start_near_name": start_near_name,
+        "end_near_name": end_near_name,
         "route_geojson": data.get("route_geojson"),
         "total_length_meters": data.get("total_length_meters", 0),
         "total_estimated_time_seconds": data.get("total_estimated_time_seconds", 0),
@@ -3450,6 +3475,8 @@ def nav_sync():
             "end_lon": r.get("end_lon"),
             "start_point_name": r.get("start_point_name") or "Start Point",
             "end_point_name": r.get("end_point_name") or "Destination",
+            "start_near_name": clean_optional_text(r.get("start_near_name"), 300),
+            "end_near_name": clean_optional_text(r.get("end_near_name"), 300),
             "route_geojson": r.get("route_geojson") or {
                 "type": "Feature",
                 "geometry": {
@@ -3471,6 +3498,10 @@ def nav_sync():
             "device_type": r.get("device_type") or "web",
             "weights": r.get("weights") or {}
         }
+        if not pb_payload["start_near_name"] or not pb_payload["end_near_name"]:
+            start_near_name, end_near_name = navigation_near_names(pb_payload, pb_url=pb_url)
+            pb_payload["start_near_name"] = start_near_name
+            pb_payload["end_near_name"] = end_near_name
         
         try:
             if server_id:

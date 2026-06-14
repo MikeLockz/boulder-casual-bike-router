@@ -301,6 +301,8 @@ struct PastRoute: Codable, Identifiable, Hashable {
     let notes: String?
     let startPointName: String
     let endPointName: String
+    let startNearName: String?
+    let endNearName: String?
     let startLat: Double
     let startLon: Double
     let endLat: Double
@@ -327,6 +329,8 @@ struct PastRoute: Codable, Identifiable, Hashable {
         case notes
         case startPointName = "start_point_name"
         case endPointName = "end_point_name"
+        case startNearName = "start_near_name"
+        case endNearName = "end_near_name"
         case startLat = "start_lat"
         case startLon = "start_lon"
         case endLat = "end_lat"
@@ -472,6 +476,8 @@ struct NavigationStartRequest: Codable {
     let endLon: Double
     let startPointName: String
     let endPointName: String
+    let startNearName: String?
+    let endNearName: String?
     let routeGeojson: GeoJSONFeatureCollection
     let totalLengthMeters: Double
     let totalEstimatedTimeSeconds: Double
@@ -487,6 +493,8 @@ struct NavigationStartRequest: Codable {
         case endLon = "end_lon"
         case startPointName = "start_point_name"
         case endPointName = "end_point_name"
+        case startNearName = "start_near_name"
+        case endNearName = "end_near_name"
         case routeGeojson = "route_geojson"
         case totalLengthMeters = "total_length_meters"
         case totalEstimatedTimeSeconds = "total_estimated_time_seconds"
@@ -567,6 +575,8 @@ struct DetailedRouteResponse: Codable {
     let notes: String?
     let startPointName: String
     let endPointName: String
+    let startNearName: String?
+    let endNearName: String?
     let startLat: Double
     let startLon: Double
     let endLat: Double
@@ -595,6 +605,8 @@ struct DetailedRouteResponse: Codable {
         case notes
         case startPointName = "start_point_name"
         case endPointName = "end_point_name"
+        case startNearName = "start_near_name"
+        case endNearName = "end_near_name"
         case startLat = "start_lat"
         case startLon = "start_lon"
         case endLat = "end_lat"
@@ -731,4 +743,3 @@ struct NearestPlaceResponse: Codable, Equatable, Hashable {
         case displayName = "display_name"
     }
 }
-

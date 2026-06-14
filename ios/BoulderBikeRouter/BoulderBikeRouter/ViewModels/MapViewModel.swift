@@ -1120,6 +1120,8 @@ class MapViewModel {
                         notes: localRoute.notes,
                         startPointName: localRoute.startPointName,
                         endPointName: localRoute.endPointName,
+                        startNearName: localRoute.startNearName,
+                        endNearName: localRoute.endNearName,
                         startLat: localRoute.startLat,
                         startLon: localRoute.startLon,
                         endLat: localRoute.endLat,

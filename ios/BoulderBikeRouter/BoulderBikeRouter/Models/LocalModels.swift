@@ -9,6 +9,8 @@ class LocalRoute {
     var notes: String?
     var startPointName: String
     var endPointName: String
+    var startNearName: String?
+    var endNearName: String?
     var startLat: Double
     var startLon: Double
     var endLat: Double
@@ -43,6 +45,8 @@ class LocalRoute {
         notes: String? = nil,
         startPointName: String,
         endPointName: String,
+        startNearName: String? = nil,
+        endNearName: String? = nil,
         startLat: Double,
         startLon: Double,
         endLat: Double,
@@ -70,6 +74,8 @@ class LocalRoute {
         self.notes = notes
         self.startPointName = startPointName
         self.endPointName = endPointName
+        self.startNearName = startNearName
+        self.endNearName = endNearName
         self.startLat = startLat
         self.startLon = startLon
         self.endLat = endLat
@@ -100,6 +106,8 @@ class LocalRoute {
             notes: notes,
             startPointName: startPointName,
             endPointName: endPointName,
+            startNearName: startNearName,
+            endNearName: endNearName,
             startLat: startLat,
             startLon: startLon,
             endLat: endLat,

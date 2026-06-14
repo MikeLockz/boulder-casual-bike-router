@@ -93,7 +93,7 @@ struct HistoryTabView: View {
                                         Circle()
                                             .fill(Color.primaryMint)
                                             .frame(width: 6, height: 6)
-                                        Text(coordinateText(latitude: route.startLat, longitude: route.startLon))
+                                        Text(endpointText(route.startNearName, pointName: route.startPointName, latitude: route.startLat, longitude: route.startLon))
                                             .font(.system(size: 12))
                                             .foregroundColor(.onSurfaceVariant)
                                             .lineLimit(1)
@@ -103,7 +103,7 @@ struct HistoryTabView: View {
                                         Circle()
                                             .fill(Color.errorRose)
                                             .frame(width: 6, height: 6)
-                                        Text(coordinateText(latitude: route.endLat, longitude: route.endLon))
+                                        Text(endpointText(route.endNearName, pointName: route.endPointName, latitude: route.endLat, longitude: route.endLon))
                                             .font(.system(size: 12))
                                             .foregroundColor(.onSurfaceVariant)
                                             .lineLimit(1)
@@ -173,6 +173,17 @@ struct HistoryTabView: View {
 
     private func coordinateText(latitude: Double, longitude: Double) -> String {
         String(format: "%.5f, %.5f", latitude, longitude)
+    }
+
+    private func endpointText(_ nearName: String?, pointName: String, latitude: Double, longitude: Double) -> String {
+        if let nearName, !nearName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return nearName
+        }
+        let trimmedPointName = pointName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPointName.isEmpty && trimmedPointName != "Start Point" && trimmedPointName != "Destination" {
+            return trimmedPointName
+        }
+        return coordinateText(latitude: latitude, longitude: longitude)
     }
 
     private func presentPendingRouteIfNeeded() {

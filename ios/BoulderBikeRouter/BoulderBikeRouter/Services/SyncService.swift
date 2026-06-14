@@ -148,6 +148,8 @@ class SyncService {
                     end_lon: localRoute.endLon,
                     start_point_name: localRoute.startPointName,
                     end_point_name: localRoute.endPointName,
+                    start_near_name: localRoute.startNearName,
+                    end_near_name: localRoute.endNearName,
                     route_geojson: routeGeojsonObj,
                     total_length_meters: localRoute.totalLengthMeters,
                     total_estimated_time_seconds: localRoute.totalEstimatedTimeSeconds,
@@ -270,6 +272,8 @@ struct SyncRouteItem: Codable {
     let end_lon: Double
     let start_point_name: String
     let end_point_name: String
+    let start_near_name: String?
+    let end_near_name: String?
     let route_geojson: GeoJSONFeatureCollection?
     let total_length_meters: Double
     let total_estimated_time_seconds: Double

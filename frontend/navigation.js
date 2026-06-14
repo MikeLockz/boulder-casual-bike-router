@@ -961,6 +961,13 @@ const Navigation = (() => {
         const startLon = segments[0].coords[0][1];
         const endLat = segments[segments.length - 1].coords[segments[segments.length - 1].coords.length - 1][0];
         const endLon = segments[segments.length - 1].coords[segments[segments.length - 1].coords.length - 1][1];
+        const persistableNearName = (value) => {
+            const trimmed = String(value || "").trim();
+            if (!trimmed || /^near -?\d+(\.\d+)?,\s*-?\d+(\.\d+)?$/i.test(trimmed)) return null;
+            return trimmed.toLowerCase().startsWith("near ") ? trimmed : `near ${trimmed}`;
+        };
+        const startNearName = persistableNearName(document.getElementById("route-start-input")?.value);
+        const endNearName = persistableNearName(document.getElementById("route-end-input")?.value);
         
         const tempId = generateUUID();
         state.routeId = tempId;
@@ -984,6 +991,8 @@ const Navigation = (() => {
             end_lon: endLon,
             start_point_name: startName,
             end_point_name: endName,
+            start_near_name: startNearName,
+            end_near_name: endNearName,
             total_length_meters: totalLength,
             total_estimated_time_seconds: totalEstimatedTime,
             started_at: new Date().toISOString(),
@@ -998,6 +1007,8 @@ const Navigation = (() => {
                 end_lon: endLon,
                 start_point_name: startName,
                 end_point_name: endName,
+                start_near_name: startNearName,
+                end_near_name: endNearName,
                 route_geojson: routeGeojson,
                 total_length_meters: totalLength,
                 total_estimated_time_seconds: totalEstimatedTime,
@@ -1143,6 +1154,8 @@ const Navigation = (() => {
                 end_lon: startReq.end_lon,
                 start_point_name: startReq.start_point_name,
                 end_point_name: startReq.end_point_name,
+                start_near_name: startReq.start_near_name,
+                end_near_name: startReq.end_near_name,
                 route_geojson: state.routeGeojson,
                 total_length_meters: startReq.total_length_meters,
                 total_estimated_time_seconds: startReq.total_estimated_time_seconds,

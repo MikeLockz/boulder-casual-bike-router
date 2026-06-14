@@ -64,7 +64,7 @@ migrate((app) => {
       }
     ],
     indexes: [
-      "CREATE INDEX idx_place_search_events_created ON place_search_events (created)",
+      "CREATE INDEX idx_place_search_events_occurred_at ON place_search_events (occurred_at)",
       "CREATE INDEX idx_place_search_events_query ON place_search_events (normalized_query)",
       "CREATE INDEX idx_place_search_events_user ON place_search_events (user)"
     ],
@@ -173,7 +173,7 @@ migrate((app) => {
       }
     ],
     indexes: [
-      "CREATE INDEX idx_route_analytics_events_created ON route_analytics_events (created)",
+      "CREATE INDEX idx_route_analytics_events_occurred_at ON route_analytics_events (occurred_at)",
       "CREATE INDEX idx_route_analytics_events_type ON route_analytics_events (event_type)",
       "CREATE INDEX idx_route_analytics_events_route_type ON route_analytics_events (route_type)",
       "CREATE INDEX idx_route_analytics_events_user ON route_analytics_events (user)"

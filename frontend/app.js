@@ -4192,6 +4192,8 @@ async function syncPendingRoutes() {
                 end_lon: r.end_lon,
                 start_point_name: r.start_point_name,
                 end_point_name: r.end_point_name,
+                start_near_name: r.start_near_name,
+                end_near_name: r.end_near_name,
                 route_geojson: r.route_geojson,
                 total_length_meters: r.total_length_meters,
                 total_estimated_time_seconds: r.total_estimated_time_seconds,
@@ -4359,11 +4361,11 @@ async function loadHistory() {
             <div class="history-endpoints">
                 <div class="history-endpoints-row">
                     <i class="fa-solid fa-circle-dot"></i>
-                    <span>${escapeHtml(item.start_point_name)}</span>
+                    <span>${escapeHtml(getHistoryEndpointName(item, "start"))}</span>
                 </div>
                 <div class="history-endpoints-row">
                     <i class="fa-solid fa-circle"></i>
-                    <span>${escapeHtml(item.end_point_name)}</span>
+                    <span>${escapeHtml(getHistoryEndpointName(item, "end"))}</span>
                 </div>
             </div>
         `;
@@ -4376,6 +4378,20 @@ async function loadHistory() {
         
         historyListContainer.appendChild(el);
     });
+}
+
+function getHistoryEndpointName(route, endpoint) {
+    const nearName = String(route?.[`${endpoint}_near_name`] || "").trim();
+    if (nearName) return nearName;
+
+    const pointName = String(route?.[`${endpoint}_point_name`] || "").trim();
+    if (pointName && pointName !== "Start Point" && pointName !== "Destination") return pointName;
+
+    const lat = Number(route?.[`${endpoint}_lat`]);
+    const lon = Number(route?.[`${endpoint}_lon`]);
+    return Number.isFinite(lat) && Number.isFinite(lon)
+        ? `${lat.toFixed(5)}, ${lon.toFixed(5)}`
+        : pointName || (endpoint === "start" ? "Start Point" : "Destination");
 }
 
 async function showHistoryDetail(routeId) {

@@ -414,6 +414,8 @@ struct MainMapView: View {
         navigationManager.start(
             segments: route.segments,
             modelContext: modelContext,
+            startNearName: viewModel.selectedStartName,
+            endNearName: viewModel.selectedDestinationName,
             destinationName: navigationDestinationName,
             weights: viewModel.weights,
             offsets: viewModel.routeOffsets.isEmpty ? nil : viewModel.routeOffsets

@@ -72,7 +72,7 @@ class NavigationManager {
         return hasToken && isSyncEnabled
     }
 
-    func start(segments: [RouteSegment], modelContext: ModelContext, destinationName: String? = nil, weights: [String: Double] = [:], offsets: [String: Double]? = nil) {
+    func start(segments: [RouteSegment], modelContext: ModelContext, startNearName: String? = nil, endNearName: String? = nil, destinationName: String? = nil, weights: [String: Double] = [:], offsets: [String: Double]? = nil) {
         guard !segments.isEmpty else { return }
         
         self.modelContext = modelContext
@@ -147,6 +147,8 @@ class NavigationManager {
             endLon: endLon,
             startPointName: "Start Point",
             endPointName: endPointName,
+            startNearName: Self.persistableNearName(startNearName),
+            endNearName: Self.persistableNearName(endNearName),
             routeGeojson: geojson,
             totalLengthMeters: totalLength,
             totalEstimatedTimeSeconds: estTime,
@@ -289,6 +291,8 @@ class NavigationManager {
                 notes: startReq.notes,
                 startPointName: startReq.startPointName,
                 endPointName: startReq.endPointName,
+                startNearName: startReq.startNearName,
+                endNearName: startReq.endNearName,
                 startLat: startReq.startLat,
                 startLon: startReq.startLon,
                 endLat: startReq.endLat,
@@ -876,5 +880,17 @@ class NavigationManager {
         
         // Keep ticks local during active navigation. They are uploaded in one
         // batch when the route ends to reduce radio wakeups and battery cost.
+    }
+
+    private static func persistableNearName(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        let coordinatePattern = #"^near -?\d+(\.\d+)?,\s*-?\d+(\.\d+)?$"#
+        guard trimmed.range(of: coordinatePattern, options: .regularExpression) == nil else {
+            return nil
+        }
+        return trimmed.hasPrefix("near ") ? trimmed : "near \(trimmed)"
     }
 }
