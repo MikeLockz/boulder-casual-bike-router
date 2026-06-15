@@ -39,6 +39,7 @@ class NavigationManager {
     private var isRerouting: Bool = false
     private var rerouteWeights: [String: Double] = [:]
     private var rerouteOffsets: [String: Double]? = nil
+    private var routeRegion: String = "boulder"
     var routeCoords: [CLLocationCoordinate2D] = []
     var segments: [RouteSegment] = []
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -72,7 +73,7 @@ class NavigationManager {
         return hasToken && isSyncEnabled
     }
 
-    func start(segments: [RouteSegment], modelContext: ModelContext, startNearName: String? = nil, endNearName: String? = nil, destinationName: String? = nil, weights: [String: Double] = [:], offsets: [String: Double]? = nil) {
+    func start(segments: [RouteSegment], modelContext: ModelContext, region: String = "boulder", startNearName: String? = nil, endNearName: String? = nil, destinationName: String? = nil, weights: [String: Double] = [:], offsets: [String: Double]? = nil) {
         guard !segments.isEmpty else { return }
         
         self.modelContext = modelContext
@@ -85,6 +86,7 @@ class NavigationManager {
         self.isActive = true
         self.rerouteWeights = weights
         self.rerouteOffsets = offsets
+        self.routeRegion = region
         self.offRouteCount = 0
         self.isRerouting = false
         
@@ -139,6 +141,7 @@ class NavigationManager {
             endPointName = segments.last?.name ?? "Destination"
         }
         let startReq = NavigationStartRequest(
+            region: region,
             displayName: nil,
             notes: nil,
             startLat: startLat,
@@ -297,6 +300,7 @@ class NavigationManager {
                 startLon: startReq.startLon,
                 endLat: startReq.endLat,
                 endLon: startReq.endLon,
+                region: startReq.region,
                 totalLengthMeters: startReq.totalLengthMeters,
                 totalEstimatedTimeSeconds: startReq.totalEstimatedTimeSeconds,
                 status: status,
@@ -568,6 +572,7 @@ class NavigationManager {
         sendWatchSnapshot(status: .offRoute, instruction: "Rerouting...", force: true)
 
         let request = RouteRequest(
+            region: routeRegion,
             startLat: location.coordinate.latitude,
             startLon: location.coordinate.longitude,
             endLat: destCoord.latitude,

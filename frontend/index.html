@@ -33,13 +33,7 @@
                     <i class="fa-solid fa-bicycle logo-icon"></i>
                     <h1>Biking Boulder</h1>
                 </div>
-                <!-- Region Selector Dropdown -->
-                <div class="region-selector" id="region-selector-container">
-                    <select id="region-select" aria-label="Select routing region">
-                        <!-- Loaded dynamically -->
-                    </select>
-                    <i class="fa-solid fa-chevron-down region-select-arrow"></i>
-                </div>
+                <span id="active-region-label" class="region-selector" aria-label="Active routing region">Boulder</span>
                 <button id="btn-close-panel" class="close-panel-btn"><i class="fa-solid fa-xmark"></i></button>
             </header>
 
@@ -134,6 +128,20 @@
                         <i class="fa-solid fa-chevron-right"></i>
                     </button>
                 </div>
+
+                <details open class="collapsible-section app-section" id="sec-region" data-app-section="settings">
+                    <summary>
+                        <span class="summary-title"><i class="fa-solid fa-map-location-dot"></i> Routing Region</span>
+                        <i class="fa-solid fa-chevron-down chevron"></i>
+                    </summary>
+                    <div class="section-content">
+                        <p class="section-desc">Routes must stay inside one supported region. Your manual choice lasts for this browser session.</p>
+                        <div class="region-selector settings-region-selector" id="region-selector-container">
+                            <select id="region-select" aria-label="Select routing region"></select>
+                            <i class="fa-solid fa-chevron-down region-select-arrow"></i>
+                        </div>
+                    </div>
+                </details>
 
                 <details open class="collapsible-section app-section" id="sec-home" data-app-section="settings">
                     <summary>
@@ -701,7 +709,7 @@
     
     <!-- Custom JS -->
     <script src="mock-permissions.js"></script>
-    <script src="app.js?v=20260608-routes"></script>
+    <script src="app.js?v=20260615-routes-fixed"></script>
     <script src="sim.js"></script>
     <script src="navigationMetricsFilter.js"></script>
     <script src="navigation.js"></script>

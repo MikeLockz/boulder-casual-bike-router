@@ -142,6 +142,7 @@ class SyncService {
                     deleted: localRoute.deleted,
                     display_name: localRoute.displayName,
                     notes: localRoute.notes,
+                    region: localRoute.region,
                     start_lat: localRoute.startLat,
                     start_lon: localRoute.startLon,
                     end_lat: localRoute.endLat,
@@ -266,6 +267,7 @@ struct SyncRouteItem: Codable {
     let deleted: Bool
     let display_name: String?
     let notes: String?
+    let region: String
     let start_lat: Double
     let start_lon: Double
     let end_lat: Double

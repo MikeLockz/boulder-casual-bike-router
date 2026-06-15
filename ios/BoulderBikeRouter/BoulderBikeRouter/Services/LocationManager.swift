@@ -15,6 +15,7 @@ protocol LocationProvider: AnyObject {
     var delegate: LocationProviderDelegate? { get set }
     var authorizationStatus: CLAuthorizationStatus { get }
     func requestAuthorization()
+    func setBackgroundUpdatesEnabled(_ enabled: Bool)
     func startUpdating()
     func stopUpdating()
 }
@@ -24,25 +25,19 @@ protocol LocationProvider: AnyObject {
 class CoreLocationProvider: NSObject, LocationProvider, CLLocationManagerDelegate {
     weak var delegate: LocationProviderDelegate?
     private let locationManager = CLLocationManager()
+    private let canUseBackgroundLocation: Bool
 
     override init() {
+        let env = ProcessInfo.processInfo.environment
+        let isTesting = env.keys.contains { $0.contains("XCTest") || $0.contains("XCInject") } || NSClassFromString("XCTestCase") != nil
+        let backgroundModes = Bundle.main.infoDictionary?["UIBackgroundModes"] as? [String]
+        canUseBackgroundLocation = !isTesting && (backgroundModes?.contains("location") == true)
+
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter = 2.0 // Update every 2 meters
         locationManager.headingFilter = 2.0 // Ignore tiny heading jitter
-        
-        // Prevent crashes in test environments or builds lacking location background mode
-        let env = ProcessInfo.processInfo.environment
-        let isTesting = env.keys.contains { $0.contains("XCTest") || $0.contains("XCInject") } || NSClassFromString("XCTestCase") != nil
-        
-        if !isTesting {
-            if let backgroundModes = Bundle.main.infoDictionary?["UIBackgroundModes"] as? [String],
-               backgroundModes.contains("location") {
-                locationManager.allowsBackgroundLocationUpdates = true
-                locationManager.showsBackgroundLocationIndicator = true
-            }
-        }
     }
 
     var authorizationStatus: CLAuthorizationStatus {
@@ -51,6 +46,12 @@ class CoreLocationProvider: NSObject, LocationProvider, CLLocationManagerDelegat
 
     func requestAuthorization() {
         locationManager.requestWhenInUseAuthorization()
+    }
+
+    func setBackgroundUpdatesEnabled(_ enabled: Bool) {
+        let shouldEnable = enabled && canUseBackgroundLocation
+        locationManager.allowsBackgroundLocationUpdates = shouldEnable
+        locationManager.showsBackgroundLocationIndicator = shouldEnable
     }
 
     func startUpdating() {
@@ -154,6 +155,8 @@ class SimulatedLocationProvider: LocationProvider {
         self.authorizationStatus = .authorizedWhenInUse
         delegate?.locationProvider(self, didChangeAuthorization: .authorizedWhenInUse)
     }
+
+    func setBackgroundUpdatesEnabled(_ enabled: Bool) {}
 
     func startUpdating() {
         guard !coordinates.isEmpty else { return }
@@ -289,6 +292,7 @@ class LocationManager: LocationProviderDelegate {
     private var activeProvider: LocationProvider?
     private let realProvider = CoreLocationProvider()
     private let simulatedProvider = SimulatedLocationProvider()
+    private var backgroundUpdatesEnabled = false
 
     init() {
         setupProvider()
@@ -304,11 +308,18 @@ class LocationManager: LocationProviderDelegate {
         }
         
         activeProvider?.delegate = self
+        activeProvider?.setBackgroundUpdatesEnabled(backgroundUpdatesEnabled)
         self.authorizationStatus = activeProvider?.authorizationStatus ?? .notDetermined
     }
 
     func requestAuthorization() {
         activeProvider?.requestAuthorization()
+    }
+
+    func setBackgroundNavigationEnabled(_ enabled: Bool) {
+        backgroundUpdatesEnabled = enabled
+        realProvider.setBackgroundUpdatesEnabled(enabled)
+        simulatedProvider.setBackgroundUpdatesEnabled(enabled)
     }
 
     func startUpdating() {

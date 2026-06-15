@@ -26,55 +26,14 @@ except ImportError as e:
 
 app = Flask(__name__)
 
-# Multi-Region Configuration
-REGIONS = {
-    "boulder": {
-        "name": "Boulder",
-        "bbox": (39.96, -105.30, 40.09, -105.18),
-        "osm_cache_file": os.path.join(os.path.dirname(__file__), "boulder_osm_data.json"),
-        "playgrounds_cache_file": os.path.join(os.path.dirname(__file__), "boulder_playground_data.json"),
-        "stress_cache_file": os.path.join(os.path.dirname(__file__), "boulder_bike_stress_data.json"),
-        "offstreet_cache_file": os.path.join(os.path.dirname(__file__), "boulder_bike_offstreet_data.json"),
-        "playground_url": "https://opendata.arcgis.com/datasets/b1297c2328b343528f70dfd78c6de459_1.geojson",
-        "stress_url": "https://opendata.arcgis.com/datasets/e20bc9b72c3b4d0fac167d722a7cf1b7_0.geojson",
-        "offstreet_url": "https://opendata.arcgis.com/datasets/8cae0bbbd3154abe8264fa349b8f245f_0.geojson",
-    },
-    "broomfield": {
-        "name": "Broomfield",
-        "bbox": (39.88, -105.16, 40.01, -104.99),
-        "osm_cache_file": os.path.join(os.path.dirname(__file__), "broomfield_osm_data.json"),
-        "playgrounds_cache_file": None,
-        "stress_cache_file": None,
-        "offstreet_cache_file": None,
-        "playground_url": None,
-        "stress_url": None,
-        "offstreet_url": None,
-    }
-}
+from graph_cache import (
+    REGIONS,
+    DEFAULT_WEIGHTS,
+    load_graph_bundle,
+    save_graph_bundle,
+)
 
-DEFAULT_WEIGHTS = {
-    "separated_path": 0.5,
-    "sharrow_minor": 1.5,
-    "sidewalk": 2.0,
-    "residential": 0.7,
-    "busy_with_lane": 5.0,
-    "busy_with_sharrow": 8.0,
-    "busy_undesignated": 15.0,
-    "sidewalk_forced": 6.0,
-    "crossing_safe": 1.0,
-    "crossing_unsafe": 6.0,
-    "stress_low": 0.7,
-    "stress_high": 2.0,
-    "offstreet_multiuse": 0.8,
-    "ebike_restricted": 1.0,
-    # Boulder GIS FACILITYTYPE bonus multipliers (applied on top of base type)
-    # Lower = more preferred. Physical infrastructure beats mere designation.
-    "facility_designated_route": 0.55,  # Designated Bike Route — mild preference (no physical infra)
-    "facility_protected_lane": 0.20,    # Protected / Separated Bike Lane — physical barrier
-    "facility_onstreet_lane": 0.55,     # On-Street Bike Lane (painted) — physical lanes
-    "facility_bikeable_shoulder": 0.65, # Bikeable Shoulder
-    "facility_contraflow": 0.45         # Contra Flow Bike Lane
-}
+DEFAULT_REGION_ID = "boulder"
 
 NAV_METRIC_FILTER = {
     "max_accuracy_meters": 75.0,
@@ -83,12 +42,33 @@ NAV_METRIC_FILTER = {
     "max_step_speed_mps": 15.0,
 }
 
-# In-memory graph storage per region
-graphs_by_region = {}
-nodes_by_region = {}
-safe_crossings_by_region = {}
-four_lane_nodes_by_region = {}
-bike_routes_geojson_by_region = {}
+class RegionGraphManager:
+    """Owns independently built graph data and exposes validated region lookups."""
+
+    def __init__(self, regions):
+        self.regions = regions
+        self.graphs = {}
+        self.nodes = {}
+        self.safe_crossings = {}
+        self.four_lane_nodes = {}
+        self.bike_routes_geojson = {}
+
+    def is_valid_region(self, region_id):
+        return region_id in self.regions
+
+    def graph_for(self, region_id):
+        return self.graphs.get(region_id)
+
+
+region_graphs = RegionGraphManager(REGIONS)
+
+# Compatibility aliases keep graph construction code localized while all endpoint
+# access goes through the manager.
+graphs_by_region = region_graphs.graphs
+nodes_by_region = region_graphs.nodes
+safe_crossings_by_region = region_graphs.safe_crossings
+four_lane_nodes_by_region = region_graphs.four_lane_nodes
+bike_routes_geojson_by_region = region_graphs.bike_routes_geojson
 
 # Build statuses per region
 graph_build_statuses = {}
@@ -108,6 +88,10 @@ def get_default_build_status():
         "nodes": 0,
         "edges": 0,
         "build_id": 0,
+        "source": None,
+        "cache_hit": None,
+        "cache_miss_reason": None,
+        "cache_creation_time": None,
     }
 
 def mark_graph_build_started(region_id):
@@ -869,11 +853,40 @@ def _bike_edge_direction(tags, infra_type):
     return "both"
 
 
+def install_region_bundle(region_id, bundle):
+    """Install a fully loaded/constructed region graph and companion objects into RegionGraphManager."""
+    graphs_by_region[region_id] = bundle["G"]
+    nodes_by_region[region_id] = bundle["nodes"]
+    safe_crossings_by_region[region_id] = bundle["safe_crossings"]
+    four_lane_nodes_by_region[region_id] = bundle["four_lane_nodes"]
+    bike_routes_geojson_by_region[region_id] = bundle["bike_routes_geojson"]
+
+
 def build_graph(region_id="boulder", weights=None):
     """Build the NetworkX routing graph from OSM JSON data for the specified region."""
     mark_graph_build_started(region_id)
     if weights is None:
         weights = DEFAULT_WEIGHTS
+
+    config = REGIONS[region_id]
+
+    # Attempt cache load
+    bundle, miss_reason = load_graph_bundle(region_id, config, weights)
+    if bundle:
+        install_region_bundle(region_id, bundle)
+        with graph_build_lock:
+            graph_build_statuses[region_id].update({
+                "source": "cache",
+                "cache_hit": True,
+                "cache_miss_reason": None,
+                "cache_creation_time": bundle["metadata"]["created_at"]
+            })
+        mark_graph_build_ready(region_id, bundle["G"])
+        print(f"[Cache] Loaded {region_id} graph from cache bundle successfully.")
+        return
+
+    # Cache miss: build from source
+    print(f"[Cache] Cache miss for {region_id}. Reason: {miss_reason}. Rebuilding...")
 
     try:
         data = fetch_osm_data(region_id)
@@ -884,7 +897,6 @@ def build_graph(region_id="boulder", weights=None):
         return None
 
     G = nx.DiGraph()
-    config = REGIONS[region_id]
 
     # Load stress data and build spatial index (if configured)
     spatial_index = None
@@ -1219,18 +1231,36 @@ def build_graph(region_id="boulder", weights=None):
         G_connected = G
         print(f"Warning: Graph for {region_id} is empty.")
 
-    # Store global references for API usage
-    graphs_by_region[region_id] = G_connected
-    nodes_by_region[region_id] = nodes
-    safe_crossings_by_region[region_id] = safe_crossing_nodes
-    four_lane_nodes_by_region[region_id] = four_lane_nodes
-    
     # Pre-build bike routes GeoJSON
-    build_bike_routes_geojson(region_id)
+    geojson = build_bike_routes_geojson(region_id)
 
     # Pre-populate graph with default weights so CLI routing tools remain in sync
     print(f"Populating graph for {region_id} with default routing weights...")
     update_graph_weights(G_connected, weights)
+
+    # Install into memory structures
+    bundle = {
+        "G": G_connected,
+        "nodes": nodes,
+        "safe_crossings": safe_crossing_nodes,
+        "four_lane_nodes": four_lane_nodes,
+        "bike_routes_geojson": geojson,
+    }
+    install_region_bundle(region_id, bundle)
+
+    # Save cache bundle
+    save_graph_bundle(region_id, G_connected, nodes, safe_crossing_nodes, four_lane_nodes, geojson, config, weights)
+
+    with graph_build_lock:
+        if region_id not in graph_build_statuses:
+            graph_build_statuses[region_id] = get_default_build_status()
+        graph_build_statuses[region_id].update({
+            "source": "build",
+            "cache_hit": False,
+            "cache_miss_reason": miss_reason,
+            "cache_creation_time": None
+        })
+
     mark_graph_build_ready(region_id, G_connected)
 
 def build_bike_routes_geojson(region_id="boulder"):
@@ -1282,7 +1312,9 @@ def build_bike_routes_geojson(region_id="boulder"):
                 
             allowed_offstreet_types = {
                 "Multi-Use Path",
-                "Bike Park Path"
+                "Bike Park Path",
+                "Soft Surface Trail",
+                "On-Street Bike Lane",
             }
             
             for feat in offstreet_data.get("features", []):
@@ -1302,11 +1334,13 @@ def build_bike_routes_geojson(region_id="boulder"):
         except Exception as e:
             print(f"Error compiling off-street routes for {region_id}: {e}")
             
-    bike_routes_geojson_by_region[region_id] = {
+    geojson = {
         "type": "FeatureCollection",
         "features": features
     }
+    bike_routes_geojson_by_region[region_id] = geojson
     print(f"Successfully compiled {len(features)} official bike route features for {region_id}.")
+    return geojson
 
 def find_nearest_node(graph, target_coord):
     """Find the nearest node in the connected graph to the target coordinate."""
@@ -1319,19 +1353,155 @@ def find_nearest_node(graph, target_coord):
             nearest_node = node
     return nearest_node, min_dist
 
-def get_region_for_coordinate(lat, lon):
-    """Determine the region ID that contains the given coordinate. Fallback to 'boulder' if not matched."""
+def find_region_for_coordinate(lat, lon):
+    """Return the region containing a coordinate, or None for invalid/unsupported points."""
     try:
         lat = float(lat)
         lon = float(lon)
     except (TypeError, ValueError):
-        return "boulder"
+        return None
+
+    if not math.isfinite(lat) or not math.isfinite(lon) or not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return None
         
     for r_id, config in REGIONS.items():
         s, w, n, e = config["bbox"]
         if s <= lat <= n and w <= lon <= e:
             return r_id
-    return "boulder"
+    return None
+
+
+def get_region_for_coordinate(lat, lon):
+    """Backward-compatible strict alias. UI fallback belongs in clients, not routing."""
+    return find_region_for_coordinate(lat, lon)
+
+
+def region_error(code, message, **details):
+    payload = {"error": {"code": code, "message": message}}
+    if details:
+        payload["error"]["details"] = details
+    return jsonify(payload), 400
+
+
+def parse_route_point(value, label, index=None):
+    try:
+        lat, lon = value
+        lat = float(lat)
+        lon = float(lon)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must contain numeric latitude and longitude")
+    if not math.isfinite(lat) or not math.isfinite(lon) or not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        raise ValueError(f"{label} contains an invalid coordinate")
+    return {"label": label, "index": index, "lat": lat, "lon": lon}
+
+
+def resolve_route_region(points, requested_region=None):
+    if requested_region is not None and not region_graphs.is_valid_region(requested_region):
+        return None, ("invalid_region", f"Unknown routing region: {requested_region}", {"requested_region": requested_region})
+
+    resolved = []
+    for point in points:
+        point_region = find_region_for_coordinate(point["lat"], point["lon"])
+        if point_region is None:
+            details = {"point": point["label"], "lat": point["lat"], "lon": point["lon"]}
+            if point["index"] is not None:
+                details["index"] = point["index"]
+            return None, ("unsupported_coordinate", f"{point['label']} is outside every supported routing region", details)
+        resolved.append(point_region)
+
+    unique_regions = sorted(set(resolved))
+    if len(unique_regions) != 1:
+        return None, ("cross_region_route", "All route points must be inside the same routing region", {
+            "point_regions": [
+                {"point": point["label"], "index": point["index"], "region": region_id}
+                for point, region_id in zip(points, resolved)
+            ]
+        })
+
+    resolved_region = unique_regions[0]
+    if requested_region is not None and requested_region != resolved_region:
+        return None, ("region_mismatch", "The requested region does not contain every route point", {
+            "requested_region": requested_region,
+            "resolved_region": resolved_region,
+        })
+    return resolved_region, None
+
+
+def edge_cost_components(edge_data, weights):
+    """Calculate request-local multiplier and cost without mutating the shared graph."""
+    weights = weights or DEFAULT_WEIGHTS
+    facility_bonus = {
+        "Designated Bike Route": weights.get("facility_designated_route", DEFAULT_WEIGHTS["facility_designated_route"]),
+        "Protected Bike Lane": weights.get("facility_protected_lane", DEFAULT_WEIGHTS["facility_protected_lane"]),
+        "Separated Bike Lane": weights.get("facility_protected_lane", DEFAULT_WEIGHTS["facility_protected_lane"]),
+        "On-Street Bike Lane": weights.get("facility_onstreet_lane", DEFAULT_WEIGHTS["facility_onstreet_lane"]),
+        "Bikeable Shoulder": weights.get("facility_bikeable_shoulder", DEFAULT_WEIGHTS["facility_bikeable_shoulder"]),
+        "Contra Flow Bike Lane": weights.get("facility_contraflow", DEFAULT_WEIGHTS["facility_contraflow"]),
+    }
+    infra_type = edge_data.get("type", "residential")
+    base_multiplier = weights.get(infra_type, DEFAULT_WEIGHTS.get(infra_type, 1.0))
+    facility_type = edge_data.get("facility_type", "None")
+    facility_modifier = facility_bonus.get(facility_type, 1.0)
+    tags = edge_data.get("tags", {})
+    lane_values = re.findall(r"\d+", str(tags.get("lanes", "")))
+    lanes = max((int(value) for value in lane_values), default=2)
+    try:
+        directional_lanes = int(tags.get("lanes:forward", "0")) + int(tags.get("lanes:backward", "0"))
+        if directional_lanes:
+            lanes = directional_lanes
+    except (TypeError, ValueError):
+        pass
+    is_major = lanes >= 4 or tags.get("highway", "") in {"primary", "primary_link", "secondary", "secondary_link"}
+    if is_major:
+        facility_caps = {
+            "Protected Bike Lane": weights.get("separated_path", DEFAULT_WEIGHTS["separated_path"]),
+            "Separated Bike Lane": weights.get("separated_path", DEFAULT_WEIGHTS["separated_path"]),
+            "On-Street Bike Lane": weights.get("busy_with_lane", DEFAULT_WEIGHTS["busy_with_lane"]),
+            "Designated Bike Route": weights.get("busy_with_sharrow", DEFAULT_WEIGHTS["busy_with_sharrow"]),
+            "Bikeable Shoulder": weights.get("busy_undesignated", DEFAULT_WEIGHTS["busy_undesignated"]),
+            "Contra Flow Bike Lane": weights.get("busy_with_lane", DEFAULT_WEIGHTS["busy_with_lane"]),
+        }
+    else:
+        facility_caps = {
+            "Protected Bike Lane": weights.get("separated_path", DEFAULT_WEIGHTS["separated_path"]),
+            "Separated Bike Lane": weights.get("separated_path", DEFAULT_WEIGHTS["separated_path"]),
+            "On-Street Bike Lane": weights.get("sharrow_minor", DEFAULT_WEIGHTS["sharrow_minor"]),
+            "Designated Bike Route": weights.get("residential", DEFAULT_WEIGHTS["residential"]),
+            "Bikeable Shoulder": weights.get("busy_with_lane", DEFAULT_WEIGHTS["busy_with_lane"]),
+            "Contra Flow Bike Lane": weights.get("sharrow_minor", DEFAULT_WEIGHTS["sharrow_minor"]),
+        }
+    if facility_type in facility_caps:
+        base_multiplier = min(base_multiplier, facility_caps[facility_type])
+
+    stress = edge_data.get("bikestress", "None")
+    if stress == "None" and infra_type == "separated_path":
+        stress = "Low"
+    stress_modifier = 1.0
+    if stress == "Low":
+        stress_modifier = weights.get("stress_low", DEFAULT_WEIGHTS["stress_low"])
+    elif stress == "High":
+        stress_modifier = weights.get("stress_high", DEFAULT_WEIGHTS["stress_high"])
+
+    if edge_data.get("bicycles_allowed", "Yes") == "No":
+        multiplier = 999999.0
+    else:
+        offstreet_type = edge_data.get("offstreet_type")
+        if offstreet_type == "Multi-Use Path":
+            offstreet_modifier = weights.get("offstreet_multiuse", DEFAULT_WEIGHTS["offstreet_multiuse"])
+        elif offstreet_type == "Soft Surface Trail":
+            offstreet_modifier = weights.get("offstreet_soft_surface", DEFAULT_WEIGHTS["offstreet_soft_surface"])
+        else:
+            offstreet_modifier = 1.0
+        ebike_modifier = weights.get("ebike_restricted", DEFAULT_WEIGHTS["ebike_restricted"]) if edge_data.get("ebike_allowed") == "No" else 1.0
+        multiplier = base_multiplier * facility_modifier * stress_modifier * offstreet_modifier * ebike_modifier
+
+    length = edge_data.get("length", 0.0)
+    cost = ((length + 100.0) if infra_type == "crossing_unsafe" else length) * multiplier
+    return multiplier, cost
+
+
+def make_edge_weight(weights):
+    return lambda _u, _v, edge_data: edge_cost_components(edge_data, weights)[1]
 
 def update_graph_weights(G, weights):
     """Update all edge multipliers and weights in the graph G based on weights dictionary."""
@@ -1420,6 +1590,8 @@ def update_graph_weights(G, weights):
             offstreet_type = d.get("offstreet_type", "None")
             if offstreet_type == "Multi-Use Path":
                 offstreet_modifier = weights.get("offstreet_multiuse", DEFAULT_WEIGHTS.get("offstreet_multiuse", 0.8))
+            elif offstreet_type == "Soft Surface Trail":
+                offstreet_modifier = weights.get("offstreet_soft_surface", DEFAULT_WEIGHTS.get("offstreet_soft_surface", 1.0))
 
             ebike_allowed = d.get("ebike_allowed", "Yes")
             ebike_modifier = 1.0
@@ -1451,34 +1623,32 @@ def get_route():
     custom_weights = data.get("weights") or DEFAULT_WEIGHTS
     region_id = data.get("region")
 
-    if not all([start_lat, start_lon, end_lat, end_lon]):
-        return jsonify({"error": "Missing coordinates"}), 400
+    if any(value is None for value in [start_lat, start_lon, end_lat, end_lon]):
+        return region_error("unsupported_coordinate", "Start and destination coordinates are required")
 
-    if not region_id:
-        region_id = get_region_for_coordinate(start_lat, start_lon)
+    waypoints = data.get("waypoints", [])
+    try:
+        route_point_details = [
+            parse_route_point((start_lat, start_lon), "start"),
+            *[parse_route_point(wp, "waypoint", index) for index, wp in enumerate(waypoints)],
+            parse_route_point((end_lat, end_lon), "destination"),
+        ]
+    except ValueError as error:
+        return region_error("unsupported_coordinate", str(error))
 
-    if region_id not in REGIONS:
-        return jsonify({"error": f"Invalid region: {region_id}"}), 400
+    region_id, resolution_error = resolve_route_region(route_point_details, region_id)
+    if resolution_error:
+        code, message, details = resolution_error
+        return region_error(code, message, **details)
 
-    graph = graphs_by_region.get(region_id)
+    graph = region_graphs.graph_for(region_id)
     if graph is None:
-        return jsonify({"error": f"Routing graph not initialized for region: {region_id}"}), 503
-
-    # Check if start and end coordinates are in the same region
-    end_region_id = get_region_for_coordinate(end_lat, end_lon)
-    if region_id != end_region_id:
-        return jsonify({"error": f"Start and Destination span across separate areas ({region_id} and {end_region_id}). Cross-region routing is not supported."}), 400
-
-    # Recalculate weights on the graph dynamically using client weights
-    update_graph_weights(graph, custom_weights)
-
-    waypoints = data.get("waypoints", []) # list of [lat, lon]
+        build_status = get_graph_build_status(region_id)
+        return jsonify({"error": {"code": "region_unavailable", "message": f"Routing graph is not ready for {region_id}", "details": {"region": region_id, "build": build_status}}}), 503
     
     # Compile a sequence of coordinates to route between
-    route_points = [(start_lat, start_lon)]
-    for wp in waypoints:
-        route_points.append((wp[0], wp[1]))
-    route_points.append((end_lat, end_lon))
+    route_points = [(point["lat"], point["lon"]) for point in route_point_details]
+    edge_weight = make_edge_weight(custom_weights)
 
     try:
         segments = []
@@ -1504,7 +1674,7 @@ def get_route():
             if p == len(route_points) - 2:
                 end_node_dist = sub_end_dist
                 
-            path_nodes = nx.shortest_path(graph, source=sub_start_node, target=sub_end_node, weight="weight")
+            path_nodes = nx.shortest_path(graph, source=sub_start_node, target=sub_end_node, weight=edge_weight)
             
             for i in range(len(path_nodes) - 1):
                 u = path_nodes[i]
@@ -1513,11 +1683,9 @@ def get_route():
                 length = edge_data.get("length", 0)
                 infra_type = edge_data.get("type", "residential")
                 name = edge_data.get("name", "Unnamed Path")
-                multiplier = edge_data.get("multiplier", 1.0)
-                
-                edge_weight = edge_data.get("weight", length * multiplier)
+                multiplier, calculated_edge_weight = edge_cost_components(edge_data, custom_weights)
                 total_length += length
-                total_weight += edge_weight
+                total_weight += calculated_edge_weight
                 
                 node_u_data = graph.nodes[u]
                 node_v_data = graph.nodes[v]
@@ -1538,6 +1706,7 @@ def get_route():
                 })
                 
         response_payload = {
+            "region": region_id,
             "segments": segments,
             "total_length_meters": total_length,
             "total_weight": total_weight,
@@ -1557,6 +1726,7 @@ def get_route():
             "weights": custom_weights,
             "offsets": clean_optional_json(data.get("offsets")),
             "metadata": compact_route_metadata(segments),
+            "region": region_id,
             "client_session_id": data.get("client_session_id"),
             "client_event_id": data.get("client_event_id"),
         }, source=get_request_source("backend"))
@@ -1582,13 +1752,16 @@ def inspect_edge():
     except ValueError:
         return jsonify({"error": "Invalid coordinates"}), 400
         
-    if not region_id:
-        region_id = get_region_for_coordinate(click_coord[0], click_coord[1])
-        
-    if region_id not in REGIONS:
-        return jsonify({"error": f"Invalid region: {region_id}"}), 400
+    coordinate_region = find_region_for_coordinate(*click_coord)
+    if coordinate_region is None:
+        return region_error("unsupported_coordinate", "The inspection coordinate is outside every supported routing region", lat=click_coord[0], lon=click_coord[1])
+    if region_id and region_id not in REGIONS:
+        return region_error("invalid_region", f"Unknown routing region: {region_id}", requested_region=region_id)
+    if region_id and region_id != coordinate_region:
+        return region_error("region_mismatch", "The requested region does not contain the inspection coordinate", requested_region=region_id, resolved_region=coordinate_region)
+    region_id = coordinate_region
 
-    graph = graphs_by_region.get(region_id)
+    graph = region_graphs.graph_for(region_id)
     if graph is None:
         return jsonify({"error": f"Routing graph not initialized for region: {region_id}"}), 503
 
@@ -1784,7 +1957,8 @@ ROUTE_PRESETS = [
         "start": [],
         "end": [],
         "waypoints": [],
-        "route_type": "playgrounds"
+        "route_type": "playgrounds",
+        "region": "boulder"
     },
     {
         "name": "Boulder Loops B-180",
@@ -1801,7 +1975,8 @@ ROUTE_PRESETS = [
             [40.014, -105.275],
             [40.015, -105.253]
         ],
-        "route_type": "b180"
+        "route_type": "b180",
+        "region": "boulder"
     },
     {
         "name": "Boulder Loops B-360",
@@ -1825,7 +2000,8 @@ ROUTE_PRESETS = [
             [39.998, -105.228],
             [40.030, -105.210]
         ],
-        "route_type": "b360"
+        "route_type": "b360",
+        "region": "boulder"
     },
     {
         "name": "Broomfield Commons Tour",
@@ -1836,7 +2012,8 @@ ROUTE_PRESETS = [
             [39.930, -105.068],
             [39.925, -105.075]
         ],
-        "route_type": "broomfield_loop"
+        "route_type": "broomfield_loop",
+        "region": "broomfield"
     }
 ]
 
@@ -1847,7 +2024,18 @@ def get_config():
     config_payload = {
         "weights": WEIGHTS_METADATA,
         "presets": ROUTE_PRESETS,
-        "regions": {r_id: {"name": config["name"], "bbox": config["bbox"]} for r_id, config in REGIONS.items()}
+        "default_region": DEFAULT_REGION_ID,
+        "regions": {
+            r_id: {
+                "id": r_id,
+                "name": config["name"],
+                "bbox": config["bbox"],
+                "center": config["center"],
+                "default_zoom": config["default_zoom"],
+                "capabilities": config["capabilities"],
+            }
+            for r_id, config in REGIONS.items()
+        }
     }
     try:
         resp = requests.get(f"{pb_url}/api/collections/global_configs/records", timeout=2)
@@ -2028,12 +2216,18 @@ def graph_status():
 
 @app.route("/api/health", methods=["GET"])
 def api_health():
-    """Report backend readiness and routing graph build state for primary (boulder) region."""
-    graph_status = get_graph_build_status("boulder")
-    http_status = 200 if graph_status["ready"] else 503
+    """Report default or requested region readiness while including all region states."""
+    region_id = request.args.get("region", DEFAULT_REGION_ID)
+    if region_id not in REGIONS:
+        return region_error("invalid_region", f"Unknown routing region: {region_id}", requested_region=region_id)
+    region_status = get_graph_build_status(region_id)
+    all_statuses = {r_id: get_graph_build_status(r_id) for r_id in REGIONS}
+    http_status = 200 if region_status["ready"] else 503
     return jsonify({
-        "status": "ok" if graph_status["ready"] else graph_status["state"],
-        "graph": graph_status,
+        "status": "ok" if region_status["ready"] else region_status["state"],
+        "region": region_id,
+        "graph": region_status,
+        "regions": all_statuses,
     }), http_status
 
 def get_auth_user_id(auth_header):
@@ -2882,8 +3076,20 @@ def nav_start():
     import datetime
     now_str = datetime.datetime.utcnow().isoformat() + "Z"
     start_near_name, end_near_name = navigation_near_names(data, pb_url=pb_url)
+    try:
+        navigation_points = [
+            parse_route_point((data.get("start_lat"), data.get("start_lon")), "start"),
+            parse_route_point((data.get("end_lat"), data.get("end_lon")), "destination"),
+        ]
+    except ValueError as error:
+        return region_error("unsupported_coordinate", str(error))
+    region_id, resolution_error = resolve_route_region(navigation_points, data.get("region"))
+    if resolution_error:
+        code, message, details = resolution_error
+        return region_error(code, message, **details)
     
     pb_payload = {
+        "region": region_id,
         "user": user_id,
         "guest_owner_hash": guest_owner_hash,
         "display_name": data.get("display_name"),
@@ -2927,6 +3133,7 @@ def nav_start():
                 "total_length_meters": record.get("total_length_meters"),
                 "weights": record.get("weights"),
                 "metadata": {
+                    "region": record.get("region"),
                     "device_type": record.get("device_type"),
                     "status": record.get("status"),
                 },
@@ -3465,6 +3672,7 @@ def nav_sync():
             continue
 
         pb_payload = {
+            "region": r.get("region") or find_region_for_coordinate(r.get("start_lat"), r.get("start_lon")),
             "user": user_id,
             "guest_owner_hash": None,
             "display_name": r.get("display_name"),
@@ -3589,18 +3797,41 @@ def nav_sync():
         "synced_routes": synced_routes
     }), 200
 
-if __name__ == "__main__":
-    # Pre-build graph on startup for all regions
-    print("[*] Starting Multi-Region Bike Router backend...")
-    for region_id in REGIONS:
+_init_lock = threading.Lock()
+_initialization_started = False
+
+def get_bool_env(name, default=False):
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.lower() in ("true", "1", "yes", "on", "t")
+
+backend_debug = get_bool_env("BACKEND_DEBUG", False)
+backend_reload = get_bool_env("BACKEND_RELOAD", False)
+
+def build_all_region_graphs():
+    """Build regions sequentially in priority order without blocking health endpoints."""
+    for region_id in sorted(REGIONS, key=lambda item: REGIONS[item]["build_priority"]):
         print(f"[*] Building routing graph for {region_id}...")
         build_graph(region_id)
-        graph = graphs_by_region.get(region_id)
+        graph = region_graphs.graph_for(region_id)
         if graph is None:
             print(f"[!] Warning: Graph for {region_id} failed to initialize!")
         else:
             print(f"[+] Graph for {region_id} ready: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
 
+def start_graph_initialization():
+    """Start the background thread to load or build all regional graphs, ensuring it runs exactly once."""
+    global _initialization_started
+    with _init_lock:
+        if _initialization_started:
+            return
+        _initialization_started = True
+    print("[*] Starting regional graph initialization...")
+    threading.Thread(target=build_all_region_graphs, name="region-graph-builder", daemon=True).start()
+
+def run_server():
+    """Verify PocketBase connection and launch the Flask server."""
     # Verify PocketBase connection
     pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
     print(f"[*] PocketBase connection check: pinging {pb_url}...")
@@ -3613,5 +3844,22 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[-] PocketBase connection failed: {e}")
 
-    print("[*] Starting Flask server on 0.0.0.0:3001")
-    app.run(host="0.0.0.0", port=3001, debug=True, use_reloader=False)
+    print(f"[*] Starting Flask server on 0.0.0.0:3001 (debug={backend_debug}, reload={backend_reload})")
+    app.run(host="0.0.0.0", port=3001, debug=backend_debug, use_reloader=backend_reload)
+
+
+if __name__ == "__main__":
+    print("[*] Starting Multi-Region Bike Router backend...")
+    
+    # Under main, launch graph initialization only when reload is disabled or WERKZEUG_RUN_MAIN identifies the serving child
+    should_init = True
+    if backend_reload:
+        should_init = (os.environ.get("WERKZEUG_RUN_MAIN") == "true")
+
+    if should_init:
+        start_graph_initialization()
+    else:
+        print("[*] Gating graph initialization in supervisor process.")
+
+    run_server()
+# Hot reload verification comment

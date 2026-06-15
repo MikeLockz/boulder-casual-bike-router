@@ -7,6 +7,11 @@ import SwiftData
 class MapViewModel {
     // Dynamic configurations loaded from server
     var presets: [PresetConfig] = []
+    var routingRegions: [RoutingRegion] = []
+    var activeRegionId: String = "boulder"
+    var defaultRegionId: String = "boulder"
+    private var allRegionPresets: [PresetConfig] = []
+    private(set) var hasManualRegionSelection = false
     var weightsMetadata: [WeightConfig] = []
     var weights: [String: Double] = [:]
     var routeOffsets: [String: Double] = [:]
@@ -208,7 +213,10 @@ class MapViewModel {
             let config = try await apiService.fetchConfig()
             
             await MainActor.run {
-                self.presets = config.presets.filter { $0.routeType == "b180" || $0.routeType == "b360" }
+                self.routingRegions = config.regions.values.sorted { $0.name < $1.name }
+                self.defaultRegionId = config.defaultRegion
+                self.allRegionPresets = config.presets
+                self.applyActiveRegionResources()
                 self.weightsMetadata = config.weights
 
                 // Populate dynamic weights dictionary
@@ -222,7 +230,7 @@ class MapViewModel {
             }
             
             // Also load playgrounds
-            let playgrounds = try await apiService.fetchPlaygrounds()
+            let playgrounds = try await apiService.fetchPlaygrounds(region: activeRegionId)
             await MainActor.run {
                 self.playgroundsList = playgrounds
                 // Cache for instant preset display on next launch
@@ -239,6 +247,59 @@ class MapViewModel {
             await MainActor.run {
                 self.loadLocalFallbacks()
                 self.isConfigLoaded = true // proceed with fallbacks
+            }
+        }
+    }
+
+    func selectAutomaticRegion(for coordinate: CLLocationCoordinate2D?) {
+        guard !hasManualRegionSelection, !routingRegions.isEmpty else { return }
+        let matched = coordinate.flatMap { location in routingRegions.first(where: { $0.contains(location) })?.id }
+        setActiveRegion(matched ?? defaultRegionId, manual: false)
+    }
+
+    func setActiveRegion(_ regionId: String, manual: Bool = true) {
+        guard routingRegions.contains(where: { $0.id == regionId }) else { return }
+        if manual { hasManualRegionSelection = true }
+        guard activeRegionId != regionId else { return }
+        activeRegionId = regionId
+        startGeocodeTask?.cancel()
+        endGeocodeTask?.cancel()
+        startLocation = nil
+        endLocation = nil
+        waypoints = []
+        routeResponse = nil
+        selectedPresetName = nil
+        selectedPlayground = nil
+        startPlaceSuggestions = []
+        endPlaceSuggestions = []
+        routingError = nil
+        applyActiveRegionResources()
+        Task { await reloadRegionResources() }
+    }
+
+    private func applyActiveRegionResources() {
+        presets = allRegionPresets.filter { preset in
+            guard preset.region == activeRegionId else { return false }
+            return preset.routeType == "b180" || preset.routeType == "b360" || preset.routeType == "broomfield_loop"
+        }
+        if routingRegions.first(where: { $0.id == activeRegionId })?.capabilities.playgrounds == false {
+            playgroundsList = []
+        }
+    }
+
+    private func reloadRegionResources() async {
+        guard routingRegions.first(where: { $0.id == activeRegionId })?.capabilities.playgrounds != false else { return }
+        let requestedRegion = activeRegionId
+        do {
+            let playgrounds = try await apiService.fetchPlaygrounds(region: requestedRegion)
+            await MainActor.run {
+                guard self.activeRegionId == requestedRegion else { return }
+                self.playgroundsList = playgrounds
+            }
+        } catch {
+            await MainActor.run {
+                guard self.activeRegionId == requestedRegion else { return }
+                self.playgroundsList = []
             }
         }
     }
@@ -938,6 +999,7 @@ class MapViewModel {
         let wpsArray = waypoints.map { [$0.latitude, $0.longitude] }
         
         let request = RouteRequest(
+            region: activeRegionId,
             startLat: start.latitude,
             startLon: start.longitude,
             endLat: end.latitude,
@@ -983,6 +1045,25 @@ class MapViewModel {
 
     private func loadLocalFallbacks() {
         // Fallbacks matching the initial preset items if backend is unreachable on first run
+        self.routingRegions = [
+            RoutingRegion(
+                id: "boulder",
+                name: "Boulder",
+                bbox: [39.96, -105.30, 40.09, -105.18],
+                center: [40.015, -105.24],
+                defaultZoom: 13,
+                capabilities: RoutingRegionCapabilities(playgrounds: true, officialRoutes: true)
+            ),
+            RoutingRegion(
+                id: "broomfield",
+                name: "Broomfield",
+                bbox: [39.88, -105.17, 40.03, -104.98],
+                center: [39.94, -105.075],
+                defaultZoom: 13,
+                capabilities: RoutingRegionCapabilities(playgrounds: false, officialRoutes: true)
+            )
+        ]
+        self.defaultRegionId = "boulder"
         self.presets = [
             PresetConfig(name: "Boulder Loops B-180", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], routeType: "b180"),
             PresetConfig(name: "Boulder Loops B-360", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], routeType: "b360")

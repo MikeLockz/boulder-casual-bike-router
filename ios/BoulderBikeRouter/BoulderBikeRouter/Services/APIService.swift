@@ -88,6 +88,7 @@ enum APIError: Error, LocalizedError {
     case invalidURL
     case unauthorized
     case serverError(String)
+    case regionError(code: String, message: String)
     case decodingError(Error)
     case requestFailed(Error)
 
@@ -99,12 +100,22 @@ enum APIError: Error, LocalizedError {
             return "Your session has expired. Please sign in again."
         case .serverError(let message):
             return "Server error: \(message)"
+        case .regionError(_, let message):
+            return message
         case .decodingError(let error):
             return "Failed to decode server response: \(error.localizedDescription)"
         case .requestFailed(let error):
             return "Network request failed: \(error.localizedDescription)"
         }
     }
+}
+
+private struct StructuredAPIErrorResponse: Decodable {
+    struct Detail: Decodable {
+        let code: String
+        let message: String
+    }
+    let error: Detail
 }
 
 private struct OfficialLoopFeatureCollection: Decodable {
@@ -195,6 +206,9 @@ class APIService {
             throw APIError.unauthorized
         }
         guard (200...299).contains(httpResponse.statusCode) else {
+            if let structured = try? JSONDecoder().decode(StructuredAPIErrorResponse.self, from: data) {
+                throw APIError.regionError(code: structured.error.code, message: structured.error.message)
+            }
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
         }
 
@@ -289,13 +303,13 @@ class APIService {
             }
         }
 
-        return RouteResponse(segments: segments, totalLengthMeters: totalLength, totalWeight: totalLength, error: nil)
+        return RouteResponse(region: "boulder", segments: segments, totalLengthMeters: totalLength, totalWeight: totalLength, error: nil)
     }
 
     /// Fetch the list of playgrounds with location data
-    func fetchPlaygrounds() async throws -> [Playground] {
+    func fetchPlaygrounds(region: String) async throws -> [Playground] {
         guard let baseURL = URL(string: baseURLLabel),
-              let playgroundsURL = URL(string: "/api/playgrounds", relativeTo: baseURL) else {
+              let playgroundsURL = URL(string: "/api/playgrounds?region=\(region)", relativeTo: baseURL) else {
             throw APIError.invalidURL
         }
 

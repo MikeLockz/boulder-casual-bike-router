@@ -27,7 +27,7 @@ Use this file as the first stop in fresh chats. It captures durable context from
 - Home location was added as authenticated per-user settings via `/api/settings/home` backed by PocketBase `user_configs`. Both web and iOS have Home settings/editing flows.
 - Home route semantics were debated and changed: Home shortcut should usually mean route from current location to Home, not from Home. Later route planner controls added Home as the middle icon in both start and destination rows, so check current code before assuming exact semantics.
 - A CORS/stale-container issue happened locally: source had correct CORS headers, but the running Docker backend was stale. Rebuild/recreate backend if browser preflight errors show missing `Authorization` or missing newer endpoints.
-- Flask debug reloader caused slow/double graph initialization in Docker; backend startup was patched to avoid the reloader loop.
+- Flask debug reloader is now supported. Double graph initialization is gated using `WERKZEUG_RUN_MAIN == "true"`, starting the initialization thread only in the active serving child. Graphs are cached in `GRAPH_CACHE_DIR` as gzipped pickles to avoid building on restart.
 - A server route metric investigation found route `pfp2a86n43myb4q` had clean GeoJSON/planned distance but 69,341 ticks across 27.65 h, accumulating 209.93 mi from a stale active session near the destination. The bug class is session lifecycle/GPS jitter, not route geometry.
 
 ## Architecture
@@ -112,6 +112,9 @@ Use this file as the first stop in fresh chats. It captures durable context from
 - Important debug endpoint: `GET /api/inspect-edge?lat=...&lon=...`.
 - Weight formula from tools guide: edge cost = length * base multiplier * facility modifier * stress modifier * off-street modifier * e-bike modifier.
 - When changing default route weights, keep defaults in sync across `backend/app.py`, `frontend/app.js`, `frontend/index.html`, and PocketBase seed/migration config if applicable.
+- Multi-region routing is strict: `find_region_for_coordinate` has no fallback, and `/api/route` validates start, destination, and every waypoint against one graph.
+- Broomfield caches are `backend/broomfield_osm_data.json` and `backend/broomfield_bike_offstreet_data.json`. Refresh Trails with `./venv/bin/python3 backend/sync_gis_data.py --broomfield`.
+- Web region overrides use `sessionStorage`; iOS region overrides are in-memory on `MapViewModel`. Do not persist either manual selection across a fresh app session.
 
 ## PocketBase Data Model
 
@@ -208,6 +211,14 @@ During backend startup or rebuilds, the server takes time to initialize and cons
 
 - There may be local uncommitted Swift/Xcode changes from the user. Check `git status` before edits and do not revert unrelated files.
 - Prefer small, targeted edits. Backend changes can affect web, iOS, and deployed Docker behavior.
+- After every backend code change, make sure the active local server is actually running the updated code before verification. Identify whether Flask is running directly or through Docker; for Docker, rebuild and recreate it with `docker compose up -d --build --force-recreate boulder-backend`. Verify the changed endpoint or behavior through `http://localhost:8081/api/...`, because that is the path used by the web app and iOS simulator. If the restart rebuilds routing graphs, wait for `GET /api/health` to return HTTP 200 and confirm every required region is ready. Do not treat source edits or a successful image build alone as proof that the live local backend was updated.
 - Avoid committing generated local state like Xcode `UserInterfaceState.xcuserstate`, `pb_data/`, logs, or local venv files.
 - For frontend changes, verify at `http://localhost:8081` when practical.
 - For deployment changes, reason through both local `docker-compose.yml` and remote expectations in `update.sh`.
+
+## Graph Caching & Development Reloader
+- Caching interface: [graph_cache.py](file:///Users/mbp/.gemini/antigravity/scratch/boulder-bike-router/backend/graph_cache.py).
+- Cache files: stored in the named volume `/app/.cache/graphs/` in Docker (or `backend/.graph_cache/` locally).
+- Gating logic: checks `os.environ.get("WERKZEUG_RUN_MAIN") == "true"` to prevent supervisor/child double initialization of graph building threads.
+- GIS data sync: `sync_gis_data.py` proactively invalidates the cached `.graph-cache.pkl` for modified regions.
+- Hot reload: python edits trigger automatic reload. Warm cache loads the entire graph under 1 second. If you change graph-building logic or defaults, bump `GRAPH_BUILD_VERSION` in `graph_cache.py` to force invalidation.

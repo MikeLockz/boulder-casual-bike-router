@@ -15,6 +15,7 @@ class LocalRoute {
     var startLon: Double
     var endLat: Double
     var endLon: Double
+    var region: String
     var totalLengthMeters: Double
     var totalEstimatedTimeSeconds: Double
     var status: String
@@ -51,6 +52,7 @@ class LocalRoute {
         startLon: Double,
         endLat: Double,
         endLon: Double,
+        region: String = "boulder",
         totalLengthMeters: Double,
         totalEstimatedTimeSeconds: Double,
         status: String,
@@ -80,6 +82,7 @@ class LocalRoute {
         self.startLon = startLon
         self.endLat = endLat
         self.endLon = endLon
+        self.region = region
         self.totalLengthMeters = totalLengthMeters
         self.totalEstimatedTimeSeconds = totalEstimatedTimeSeconds
         self.status = status

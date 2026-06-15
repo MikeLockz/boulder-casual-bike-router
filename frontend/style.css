@@ -394,7 +394,7 @@ body {
     font-size: 13px;
 }
 
-.map-non-plan .leaflet-overlay-pane,
+.map-non-plan .leaflet-overlay-pane path:not(.official-bike-route-path),
 .map-non-plan .leaflet-marker-pane,
 .map-non-plan .leaflet-tooltip-pane,
 .map-non-plan .leaflet-popup-pane {
@@ -2808,6 +2808,14 @@ input[type="range"]::-webkit-slider-thumb:hover {
     margin-right: 12px;
     display: flex;
     align-items: center;
+}
+
+.settings-region-selector {
+    width: 100%;
+}
+
+.settings-region-selector select {
+    width: 100%;
 }
 
 .region-selector select {

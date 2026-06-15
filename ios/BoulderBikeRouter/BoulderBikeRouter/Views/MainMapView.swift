@@ -176,6 +176,8 @@ struct MainMapView: View {
                     fitMap(to: historyFitCoordinates(start: startCoord, end: endCoord), insets: .historyBanner)
                 } else if viewModel.routeResponse != nil {
                     fitMap(to: routeFitCoordinates(for: viewModel.routeResponse), insets: .routeCard)
+                } else if viewModel.hasManualRegionSelection {
+                    centerMapOnActiveRegion()
                 }
             }
         }
@@ -183,12 +185,14 @@ struct MainMapView: View {
             if let loc = newLocation {
                 DispatchQueue.main.async {
                     viewModel.currentLocation = loc.coordinate
+                    viewModel.selectAutomaticRegion(for: loc.coordinate)
                     // Auto-initialize starting point to current location if not set yet
-                    if viewModel.startLocation == nil {
+                    if viewModel.startLocation == nil,
+                       viewModel.routingRegions.first(where: { $0.id == viewModel.activeRegionId })?.contains(loc.coordinate) == true {
                         viewModel.setStartLocation(loc.coordinate, startName: nil)
                     }
 
-                    if !hasCenteredInitialLocation && viewModel.routeResponse == nil && viewModel.selectedHistoryRoute == nil && !viewModel.isSelectingHomeLocation && mapSelectionMode == nil {
+                    if !hasCenteredInitialLocation && !viewModel.hasManualRegionSelection && viewModel.routeResponse == nil && viewModel.selectedHistoryRoute == nil && !viewModel.isSelectingHomeLocation && mapSelectionMode == nil {
                         hasCenteredInitialLocation = true
                         centerMap(on: loc.coordinate, spanDelta: 0.015)
                     }
@@ -209,6 +213,9 @@ struct MainMapView: View {
             if isSelecting {
                 seedHomeSelectionFromCurrentLocation()
             }
+        }
+        .onChange(of: viewModel.activeRegionId) { _, _ in
+            centerMapOnActiveRegion()
         }
         .onChange(of: viewModel.startLocation) { _, newLoc in
             DispatchQueue.main.async {
@@ -304,6 +311,11 @@ struct MainMapView: View {
         }
         .onChange(of: navigationManager.isActive) { _, isActive in
             isNavigationActive = isActive
+            locationManager.setBackgroundNavigationEnabled(isActive)
+            if !isActive {
+                locationManager.stopUpdating()
+                locationManager.isSimulating = false
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RouteRerouted"))) { notification in
             if let newRoute = notification.object as? RouteResponse {
@@ -361,6 +373,16 @@ struct MainMapView: View {
         }
     }
 
+    private func centerMapOnActiveRegion() {
+        guard let region = viewModel.routingRegions.first(where: { $0.id == viewModel.activeRegionId }),
+              region.center.count == 2 else { return }
+        hasCenteredInitialLocation = true
+        centerMap(
+            on: CLLocationCoordinate2D(latitude: region.center[0], longitude: region.center[1]),
+            spanDelta: 0.12
+        )
+    }
+
     private func fitMap(to coordinates: [CLLocationCoordinate2D], insets: MapFitInsets) {
         guard let region = RouteMapCamera.region(
             for: coordinates,
@@ -409,11 +431,12 @@ struct MainMapView: View {
         #else
         locationManager.isSimulating = false
         #endif
-        
+
         let navigationDestinationName = routeTitle == "Custom Route" ? nil : routeTitle
         navigationManager.start(
             segments: route.segments,
             modelContext: modelContext,
+            region: viewModel.activeRegionId,
             startNearName: viewModel.selectedStartName,
             endNearName: viewModel.selectedDestinationName,
             destinationName: navigationDestinationName,
@@ -421,6 +444,7 @@ struct MainMapView: View {
             offsets: viewModel.routeOffsets.isEmpty ? nil : viewModel.routeOffsets
         )
         isNavigationActive = navigationManager.isActive
+        locationManager.setBackgroundNavigationEnabled(navigationManager.isActive)
         locationManager.startUpdating()
     }
 
@@ -430,6 +454,7 @@ struct MainMapView: View {
         
         navigationManager.stop()
         isNavigationActive = navigationManager.isActive
+        locationManager.setBackgroundNavigationEnabled(false)
         locationManager.stopUpdating()
         locationManager.isSimulating = false
         

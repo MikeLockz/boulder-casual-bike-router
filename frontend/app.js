@@ -13,6 +13,8 @@ const ZOOM_LEVEL = 13;
 let map;
 let activeRegionId = "boulder";
 let regionsConfig = {};
+let defaultRegionId = "boulder";
+let regionSwitchGeneration = 0;
 let allPresets = [];
 let startMarker = null;
 let endMarker = null;
@@ -272,16 +274,17 @@ async function loadBackendConfig() {
         // 3. Populate and render regions selector dynamically
         if (config.regions) {
             regionsConfig = config.regions;
+            defaultRegionId = config.default_region || "boulder";
             populateRegionSelector();
         }
 
         // 4. Save presets and render active region presets
         allPresets = config.presets || [];
-        const savedRegion = localStorage.getItem("active_routing_region");
+        const savedRegion = sessionStorage.getItem("active_routing_region");
         if (savedRegion && regionsConfig[savedRegion]) {
-            switchRegion(savedRegion);
+            switchRegion(savedRegion, { manual: false });
         } else {
-            switchRegion("boulder");
+            await selectInitialRegionFromLocation();
         }
         
         // Initialize sliders and listeners
@@ -345,14 +348,16 @@ function fallbackLocalRendering() {
         },
         broomfield: {
             name: "Broomfield",
-            bbox: [39.88, -105.16, 40.01, -104.99]
+            bbox: [39.88, -105.17, 40.03, -104.98]
         }
     };
+    defaultRegionId = "boulder";
     allPresets = [
         { name: "Boulder Loops B-180", desc: "12 mi scenic loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.033,-105.253],[40.038,-105.263],[40.028,-105.281],[40.028,-105.283],[40.021,-105.291],[40.015,-105.292],[40.014,-105.275],[40.015,-105.253]], route_type: "b180" },
         { name: "Boulder Loops B-360", desc: "24 mi grand loop (Valmont Park)", start: [40.030, -105.234], end: [40.030, -105.234], waypoints: [[40.034,-105.225],[40.052,-105.207],[40.054,-105.228],[40.040,-105.249],[40.046,-105.265],[40.060,-105.275],[40.039,-105.289],[40.028,-105.289],[40.015,-105.292],[39.998,-105.283],[39.991,-105.263],[39.986,-105.238],[39.981,-105.233],[39.998,-105.228],[40.030,-105.210]], route_type: "b360" }
     ];
     populateRegionSelector();
+    switchRegion(defaultRegionId, { manual: false });
     switchRegion("boulder");
 
     initSliders();
@@ -1662,7 +1667,8 @@ async function calculateRoute() {
         const data = await response.json();
 
         if (data.error) {
-            alert("Routing error: " + data.error);
+            const message = typeof data.error === "string" ? data.error : data.error.message;
+            showToast(message || "Unable to calculate this route.");
             clearPolylines();
             return;
         }
@@ -2168,14 +2174,30 @@ function populateRegionSelector() {
         opt.textContent = config.name;
         select.appendChild(opt);
     }
-    // Event listener for select change
-    select.addEventListener("change", (e) => {
-        switchRegion(e.target.value);
+    select.onchange = (e) => switchRegion(e.target.value, { manual: true });
+}
+
+function selectInitialRegionFromLocation() {
+    return new Promise((resolve) => {
+        const finish = (regionId) => {
+            switchRegion(regionId, { manual: false });
+            resolve();
+        };
+        if (!navigator.geolocation) {
+            finish(defaultRegionId);
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            (position) => finish(getRegionForCoords(position.coords.latitude, position.coords.longitude) || defaultRegionId),
+            () => finish(defaultRegionId),
+            { enableHighAccuracy: false, maximumAge: 60000, timeout: 5000 }
+        );
     });
 }
 
-function switchRegion(regionId) {
+function switchRegion(regionId, { manual = false } = {}) {
     if (!regionsConfig[regionId]) return;
+    regionSwitchGeneration += 1;
     activeRegionId = regionId;
     
     // Update select element value if different
@@ -2183,6 +2205,8 @@ function switchRegion(regionId) {
     if (select && select.value !== regionId) {
         select.value = regionId;
     }
+    const activeLabel = document.getElementById("active-region-label");
+    if (activeLabel) activeLabel.textContent = regionsConfig[regionId].name;
     
     // Clear map state
     if (startMarker) {
@@ -2197,6 +2221,9 @@ function switchRegion(regionId) {
     if (startInput) startInput.value = "";
     const endInput = document.getElementById("route-end-input");
     if (endInput) endInput.value = "";
+    clearWaypoints();
+    Object.values(autocompleteAbortControllers).forEach(controller => controller.abort());
+    autocompleteAbortControllers = {};
     
     clearPolylines();
     const routeInfo = document.getElementById("route-info");
@@ -2217,8 +2244,8 @@ function switchRegion(regionId) {
     // Reset playgrounds and crossings
     playgroundPlaces = [];
     playgroundLoadPromise = null;
-    loadCrossings();
-    loadPlaygrounds();
+    loadCrossings(regionSwitchGeneration);
+    loadPlaygrounds(regionSwitchGeneration);
     
     // Render region-specific presets
     renderPresets(regionId);
@@ -2228,7 +2255,7 @@ function switchRegion(regionId) {
     const bounds = L.latLngBounds([bbox[0], bbox[1]], [bbox[2], bbox[3]]);
     map.fitBounds(bounds);
     
-    localStorage.setItem("active_routing_region", regionId);
+    if (manual) sessionStorage.setItem("active_routing_region", regionId);
     console.log(`Switched active routing region to: ${regionId}`);
 }
 
@@ -2237,18 +2264,12 @@ function renderPresets(regionId) {
     if (!presetList) return;
     presetList.innerHTML = "";
     
-    const region = regionsConfig[regionId];
-    if (!region) return;
-    const bbox = region.bbox; // [min_lat, min_lon, max_lat, max_lon]
-    
     const filteredPresets = allPresets.filter(p => {
+        if (p.region && p.region !== regionId) return false;
         if (p.route_type !== "b180" && p.route_type !== "b360" && p.route_type !== "broomfield_loop") {
             return false;
         }
-        if (!p.start || p.start.length !== 2) return false;
-        const lat = p.start[0];
-        const lon = p.start[1];
-        return lat >= bbox[0] && lat <= bbox[2] && lon >= bbox[1] && lon <= bbox[3];
+        return !p.region && p.start?.length === 2 ? getRegionForCoords(p.start[0], p.start[1]) === regionId : true;
     });
     
     filteredPresets.forEach(p => {
@@ -2721,10 +2742,13 @@ function prepopulatePoints() {
 }
 
 // Fetch crossings and cache them on load
-async function loadCrossings() {
+async function loadCrossings(generation = regionSwitchGeneration) {
+    const regionId = activeRegionId;
     try {
-        const response = await fetch(`${API_BASE}/api/crossings?region=${activeRegionId}`);
-        allCrossings = await response.json();
+        const response = await fetch(`${API_BASE}/api/crossings?region=${regionId}`);
+        const crossings = await response.json();
+        if (generation !== regionSwitchGeneration || regionId !== activeRegionId) return;
+        allCrossings = crossings;
         console.log(`Loaded ${allCrossings.length} crossing signals for dynamic route display.`);
     } catch (err) {
         console.error("Failed to load crossings:", err);
@@ -2732,13 +2756,20 @@ async function loadCrossings() {
 }
 
 // Fetch playgrounds and cache them for the destination suggestion list.
-async function loadPlaygrounds() {
+async function loadPlaygrounds(generation = regionSwitchGeneration) {
+    if (regionsConfig[activeRegionId]?.capabilities?.playgrounds === false) {
+        playgroundPlaces = [];
+        playgroundLoadPromise = Promise.resolve([]);
+        return playgroundLoadPromise;
+    }
     if (playgroundPlaces.length) return playgroundPlaces;
     if (playgroundLoadPromise) return playgroundLoadPromise;
 
-    playgroundLoadPromise = fetch(`${API_BASE}/api/playgrounds?region=${activeRegionId}`)
+    const regionId = activeRegionId;
+    playgroundLoadPromise = fetch(`${API_BASE}/api/playgrounds?region=${regionId}`)
         .then(response => response.json())
         .then(playgrounds => {
+            if (generation !== regionSwitchGeneration || regionId !== activeRegionId) return [];
             playgroundPlaces = playgrounds.map((pg, index) => ({
                 id: pg.id || `playground-${index}`,
                 name: pg.name,
@@ -2876,10 +2907,14 @@ async function showOfficialRoutes() {
     
     // If not cached, fetch from API
     if (!cachedBikeRoutesGeoJSON) {
+        const generation = regionSwitchGeneration;
+        const regionId = activeRegionId;
         try {
             console.log("Fetching official bike routes GeoJSON...");
-            const response = await fetch(`${API_BASE}/api/bike-routes?region=${activeRegionId}`);
-            cachedBikeRoutesGeoJSON = await response.json();
+            const response = await fetch(`${API_BASE}/api/bike-routes?region=${regionId}`);
+            const geojson = await response.json();
+            if (generation !== regionSwitchGeneration || regionId !== activeRegionId) return;
+            cachedBikeRoutesGeoJSON = geojson;
         } catch (err) {
             console.error("Failed to fetch official bike routes:", err);
             alert("Failed to load official bike routes layer from backend.");
@@ -2909,7 +2944,8 @@ async function showOfficialRoutes() {
                 weight: weight,
                 opacity: 0.75,
                 lineCap: "round",
-                lineJoin: "round"
+                lineJoin: "round",
+                className: "official-bike-route-path"
             };
         },
         onEachFeature: function (feature, layer) {

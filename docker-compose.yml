@@ -21,8 +21,17 @@ services:
     environment:
       - POCKETBASE_URL=http://pocketbase:8090
       - PYTHONUNBUFFERED=1
+      - GRAPH_CACHE_DIR=/app/.cache/graphs
+    volumes:
+      - graph-cache:/app/.cache/graphs
     depends_on:
       - pocketbase
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3001/api/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
 
   boulder-frontend:
     image: nginx:alpine
@@ -34,3 +43,6 @@ services:
       - "8081:80"
     depends_on:
       - boulder-backend
+
+volumes:
+  graph-cache:

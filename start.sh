@@ -8,6 +8,8 @@ echo "   Starting Boulder Casual Bike Router       "
 echo "============================================="
 
 # Start backend
+export BACKEND_DEBUG=1
+export BACKEND_RELOAD=1
 ./venv/bin/python3 backend/app.py > backend.log 2>&1 &
 BACKEND_PID=$!
 echo "✓ Backend server started with PID $BACKEND_PID (logging to backend.log)"
@@ -21,7 +23,7 @@ echo "✓ Frontend server started with PID $FRONTEND_PID (logging to frontend.lo
 cleanup() {
     echo ""
     echo "Stopping servers..."
-    kill $BACKEND_PID 2>/dev/null
+    kill -INT $BACKEND_PID 2>/dev/null
     kill $FRONTEND_PID 2>/dev/null
     echo "✓ Servers stopped. Goodbye!"
     exit 0

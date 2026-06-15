@@ -1,0 +1,11 @@
+version: "3.7"
+
+services:
+  boulder-backend:
+    environment:
+      - BACKEND_DEBUG=1
+      - BACKEND_RELOAD=1
+      - GRAPH_CACHE_DIR=/app/.cache/graphs
+    volumes:
+      - ./backend:/app/backend
+      - graph-cache:/app/.cache/graphs

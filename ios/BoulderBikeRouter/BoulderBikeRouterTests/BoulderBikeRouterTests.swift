@@ -18,6 +18,28 @@ struct BoulderBikeRouterTests {
         // https://developer.apple.com/documentation/testing
     }
 
+    @MainActor @Test func backendConfigDecodesLegacyRegionPayload() throws {
+        let payload = """
+        {
+          "presets": [],
+          "weights": [],
+          "regions": {
+            "boulder": {
+              "name": "Boulder",
+              "bbox": [39.96, -105.30, 40.09, -105.18]
+            }
+          }
+        }
+        """
+
+        let config = try JSONDecoder().decode(BackendConfig.self, from: Data(payload.utf8))
+
+        #expect(config.defaultRegion == "boulder")
+        #expect(config.regions["boulder"]?.id == "boulder")
+        #expect(config.regions["boulder"]?.center == [40.025, -105.24])
+        #expect(config.regions["boulder"]?.capabilities.playgrounds == true)
+    }
+
     @Test func watchNavigationDistanceFormatterUsesFeetForNearbyManeuvers() {
         #expect(WatchNavigationDistanceFormatter.shortDistance(30.48) == "100 ft")
     }

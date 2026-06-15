@@ -42,3 +42,8 @@ scratch_config.json
 # PocketBase local database
 pb_data/
 
+# Graph cache
+backend/.graph_cache/
+*.graph-cache.pkl
+*.tmp
+

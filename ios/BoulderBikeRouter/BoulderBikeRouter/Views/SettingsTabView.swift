@@ -122,11 +122,52 @@ struct SettingsTabView: View {
     private var rootContent: some View {
         VStack(spacing: 24) {
             accountNavSection
+            regionSection
             if viewModel.isUserLoggedIn {
                 homeSection
             }
             weightsNavSection
             layersPlaceholder
+        }
+    }
+
+    private var regionSection: some View {
+        settingsGroup(title: "ROUTING REGION") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "map.fill")
+                        .foregroundColor(.primaryMint)
+                        .frame(width: 24)
+
+                    Text("Region")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.onSurface)
+
+                    Spacer()
+
+                    Picker("Region", selection: Binding(
+                        get: { viewModel.activeRegionId },
+                        set: { viewModel.setActiveRegion($0) }
+                    )) {
+                        ForEach(viewModel.routingRegions) { region in
+                            Text(region.name).tag(region.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .tint(.primaryMint)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(Color.surfaceElevated)
+                .cornerRadius(10)
+
+                Text("Routes stay inside one region. This choice resets on a cold app launch.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.onSurfaceVariant)
+            }
+            .padding(16)
         }
     }
 

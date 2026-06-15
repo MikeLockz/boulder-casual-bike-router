@@ -29,6 +29,7 @@ struct GeoCoordinate: Codable, Equatable, Hashable {
 
 /// Request payload for the `/api/route` endpoint.
 struct RouteRequest: Codable {
+    let region: String
     let startLat: Double
     let startLon: Double
     let endLat: Double
@@ -38,6 +39,7 @@ struct RouteRequest: Codable {
     let offsets: [String: Double]?
 
     enum CodingKeys: String, CodingKey {
+        case region
         case startLat = "start_lat"
         case startLon = "start_lon"
         case endLat = "end_lat"
@@ -151,13 +153,14 @@ struct RouteSegment: Codable, Identifiable, Equatable {
 
 /// Response payload from the `/api/route` endpoint.
 struct RouteResponse: Codable, Equatable {
+    var region: String? = nil
     let segments: [RouteSegment]
     let totalLengthMeters: Double
     let totalWeight: Double
     let error: String?
 
     enum CodingKeys: String, CodingKey {
-        case segments
+        case region, segments
         case totalLengthMeters = "total_length_meters"
         case totalWeight = "total_weight"
         case error
@@ -203,9 +206,10 @@ struct PresetConfig: Codable, Identifiable, Hashable {
     let end: [Double]
     let waypoints: [[Double]]
     let routeType: String?
+    var region: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case name, desc, start, end, waypoints
+        case name, desc, start, end, waypoints, region
         case routeType = "route_type"
     }
 
@@ -227,10 +231,116 @@ struct PresetConfig: Codable, Identifiable, Hashable {
     }
 }
 
+struct RoutingRegionCapabilities: Codable, Hashable {
+    let playgrounds: Bool
+    let officialRoutes: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case playgrounds
+        case officialRoutes = "official_routes"
+    }
+
+    init(playgrounds: Bool, officialRoutes: Bool) {
+        self.playgrounds = playgrounds
+        self.officialRoutes = officialRoutes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        playgrounds = try container.decodeIfPresent(Bool.self, forKey: .playgrounds) ?? false
+        officialRoutes = try container.decodeIfPresent(Bool.self, forKey: .officialRoutes) ?? true
+    }
+}
+
+struct RoutingRegion: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let bbox: [Double]
+    let center: [Double]
+    let defaultZoom: Int
+    let capabilities: RoutingRegionCapabilities
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, bbox, center, capabilities
+        case defaultZoom = "default_zoom"
+    }
+
+    init(
+        id: String,
+        name: String,
+        bbox: [Double],
+        center: [Double],
+        defaultZoom: Int,
+        capabilities: RoutingRegionCapabilities
+    ) {
+        self.id = id
+        self.name = name
+        self.bbox = bbox
+        self.center = center
+        self.defaultZoom = defaultZoom
+        self.capabilities = capabilities
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
+        name = try container.decode(String.self, forKey: .name)
+        bbox = try container.decode([Double].self, forKey: .bbox)
+        center = try container.decodeIfPresent([Double].self, forKey: .center)
+            ?? Self.center(of: bbox)
+        defaultZoom = try container.decodeIfPresent(Int.self, forKey: .defaultZoom) ?? 13
+        capabilities = try container.decodeIfPresent(RoutingRegionCapabilities.self, forKey: .capabilities)
+            ?? RoutingRegionCapabilities(playgrounds: false, officialRoutes: true)
+    }
+
+    private static func center(of bbox: [Double]) -> [Double] {
+        guard bbox.count == 4 else { return [] }
+        return [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+    }
+
+    func contains(_ coordinate: CLLocationCoordinate2D) -> Bool {
+        guard bbox.count == 4 else { return false }
+        return coordinate.latitude >= bbox[0] && coordinate.latitude <= bbox[2]
+            && coordinate.longitude >= bbox[1] && coordinate.longitude <= bbox[3]
+    }
+}
+
 /// Dynamic bootstrapper configuration payload.
 struct BackendConfig: Codable {
     let presets: [PresetConfig]
     let weights: [WeightConfig]
+    let regions: [String: RoutingRegion]
+    let defaultRegion: String
+
+    enum CodingKeys: String, CodingKey {
+        case presets, weights, regions
+        case defaultRegion = "default_region"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        presets = try container.decode([PresetConfig].self, forKey: .presets)
+        weights = try container.decode([WeightConfig].self, forKey: .weights)
+
+        let decodedRegions = try container.decode([String: RoutingRegion].self, forKey: .regions)
+        regions = Dictionary(uniqueKeysWithValues: decodedRegions.map { regionKey, region in
+            let regionId = region.id.isEmpty ? regionKey : region.id
+            let capabilities = region.id.isEmpty && regionId == "boulder"
+                ? RoutingRegionCapabilities(playgrounds: true, officialRoutes: true)
+                : region.capabilities
+            let normalizedRegion = RoutingRegion(
+                id: regionId,
+                name: region.name,
+                bbox: region.bbox,
+                center: region.center,
+                defaultZoom: region.defaultZoom,
+                capabilities: capabilities
+            )
+            return (regionKey, normalizedRegion)
+        })
+        defaultRegion = try container.decodeIfPresent(String.self, forKey: .defaultRegion)
+            ?? (regions["boulder"] != nil ? "boulder" : regions.keys.sorted().first ?? "")
+    }
 }
 
 /// Search result returned by `/api/autocomplete`.
@@ -297,6 +407,7 @@ struct HomeLocationRequest: Codable {
 /// Represents a completed route in the navigation history log.
 struct PastRoute: Codable, Identifiable, Hashable {
     let id: String
+    var region: String? = nil
     let displayName: String?
     let notes: String?
     let startPointName: String
@@ -468,6 +579,7 @@ struct GeoJSONFeatureCollection: Codable {
 }
 
 struct NavigationStartRequest: Codable {
+    let region: String
     let displayName: String?
     let notes: String?
     let startLat: Double
@@ -485,6 +597,7 @@ struct NavigationStartRequest: Codable {
     let weights: [String: Double]
 
     enum CodingKeys: String, CodingKey {
+        case region
         case displayName = "display_name"
         case notes
         case startLat = "start_lat"
