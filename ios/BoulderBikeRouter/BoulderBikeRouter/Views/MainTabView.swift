@@ -118,14 +118,17 @@ struct MainTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TelemetryRouteEnded"))) { notification in
             guard let routeId = notification.object as? String else { return }
             Task {
+                let completedRoute = viewModel.loadCompletedRouteFromLocalStore(routeId: routeId)
+                historyRouteToPresent = completedRoute
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    selectTab(2)
+                }
+
+                // Reconcile cloud history after the local summary is already visible.
                 await viewModel.loadHistory()
-                await MainActor.run {
-                    if let route = viewModel.pastRoutes.first(where: { $0.id == routeId }) {
-                        historyRouteToPresent = route
-                    }
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        selectTab(2)
-                    }
+                if completedRoute == nil,
+                   let recoveredRoute = viewModel.pastRoutes.first(where: { $0.id == routeId }) {
+                    historyRouteToPresent = recoveredRoute
                 }
             }
         }

@@ -578,6 +578,13 @@ struct GeoJSONFeatureCollection: Codable {
     let features: [GeoJSONFeature]
 }
 
+struct BikeRouteOverlay: Identifiable {
+    let id: String
+    let facilityType: String
+    let name: String
+    let coordinates: [CLLocationCoordinate2D]
+}
+
 struct NavigationStartRequest: Codable {
     let region: String
     let displayName: String?
@@ -759,6 +766,24 @@ struct DetailedRouteResponse: Codable {
 
     var plannedRouteCoordinatePaths: [[CLLocationCoordinate2D]] {
         mergeRoutePaths(plannedRouteCoordinates)
+    }
+
+    /// The recorded GPS trace, ordered chronologically and stripped of invalid points.
+    /// History maps should prefer this over `routeGeojson`, which is the original plan.
+    var actualRouteCoordinatePath: [CLLocationCoordinate2D] {
+        let coordinates = ticks
+            .filter {
+                $0.lat.isFinite && $0.lon.isFinite &&
+                (-90.0...90.0).contains($0.lat) &&
+                (-180.0...180.0).contains($0.lon)
+            }
+            .sorted { $0.timestamp < $1.timestamp }
+            .map(\.clCoordinate)
+
+        if coordinates.count < 2 {
+            return coordinates
+        }
+        return mergeRoutePaths([coordinates]).first ?? []
     }
 }
 

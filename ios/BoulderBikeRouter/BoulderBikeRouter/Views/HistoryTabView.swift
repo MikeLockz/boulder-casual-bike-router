@@ -305,26 +305,32 @@ struct RouteHistoryDetailView: View {
     }
 
     private var startCoordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: route.startLat, longitude: route.startLon)
+        if viewModel.selectedHistoryRouteDetails?.id == route.id,
+           let firstRecordedCoordinate = viewModel.selectedHistoryRouteDetails?.actualRouteCoordinatePath.first {
+            return firstRecordedCoordinate
+        }
+        return CLLocationCoordinate2D(latitude: route.startLat, longitude: route.startLon)
     }
 
     private var endCoordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: route.endLat, longitude: route.endLon)
+        if viewModel.selectedHistoryRouteDetails?.id == route.id,
+           let lastRecordedCoordinate = viewModel.selectedHistoryRouteDetails?.actualRouteCoordinatePath.last {
+            return lastRecordedCoordinate
+        }
+        return CLLocationCoordinate2D(latitude: route.endLat, longitude: route.endLon)
     }
 
     private var previewRouteCoordinates: [[CLLocationCoordinate2D]] {
         if viewModel.selectedHistoryRouteDetails?.id == route.id,
            let details = viewModel.selectedHistoryRouteDetails {
+            let actualCoordinates = details.actualRouteCoordinatePath
+            if actualCoordinates.count >= 2 {
+                return [actualCoordinates]
+            }
+
             let plannedCoordinates = details.plannedRouteCoordinates.filter { $0.count >= 2 }
             if !plannedCoordinates.isEmpty {
                 return plannedCoordinates
-            }
-
-            let tickCoordinates = details.ticks
-                .sorted { $0.timestamp < $1.timestamp }
-                .map { $0.clCoordinate }
-            if tickCoordinates.count >= 2 {
-                return [tickCoordinates]
             }
         }
 

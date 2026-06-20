@@ -1,5 +1,3 @@
-version: "3.7"
-
 services:
   pocketbase:
     image: ghcr.io/muchobien/pocketbase:0.39.1
@@ -23,7 +21,7 @@ services:
       - PYTHONUNBUFFERED=1
       - GRAPH_CACHE_DIR=/app/.cache/graphs
     volumes:
-      - graph-cache:/app/.cache/graphs
+      - ${GRAPH_CACHE_HOST_DIR:-./.docker-data/graph-cache}:/app/.cache/graphs
     depends_on:
       - pocketbase
     healthcheck:
@@ -43,6 +41,3 @@ services:
       - "8081:80"
     depends_on:
       - boulder-backend
-
-volumes:
-  graph-cache:

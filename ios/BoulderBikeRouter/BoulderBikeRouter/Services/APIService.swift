@@ -131,6 +131,46 @@ private struct OfficialLoopGeometry: Decodable {
     let coordinates: [[[Double]]]
 }
 
+private struct BikeRoutesFeatureCollection: Decodable {
+    let features: [BikeRouteFeature]
+}
+
+private struct BikeRouteFeature: Decodable {
+    struct Properties: Decodable {
+        let facilityType: String
+        let name: String
+
+        enum CodingKeys: String, CodingKey {
+            case facilityType = "FACILITYTYPE"
+            case name
+        }
+    }
+
+    let geometry: BikeRouteGeometry
+    let properties: Properties
+}
+
+private struct BikeRouteGeometry: Decodable {
+    let coordinatePaths: [[[Double]]]
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case coordinates
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .type) {
+        case "LineString":
+            coordinatePaths = [try container.decode([[Double]].self, forKey: .coordinates)]
+        case "MultiLineString":
+            coordinatePaths = try container.decode([[[Double]]].self, forKey: .coordinates)
+        default:
+            coordinatePaths = []
+        }
+    }
+}
+
 /// Service that manages connection to the Biking Boulder backend service.
 class APIService {
     private var baseURLLabel: String = {
@@ -256,6 +296,52 @@ class APIService {
         do {
             let geojson = try JSONDecoder().decode(OfficialLoopFeatureCollection.self, from: data)
             return makeOfficialLoopRouteResponse(from: geojson, routeType: routeType)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    func fetchBikeRoutes(region: String) async throws -> [BikeRouteOverlay] {
+        guard var components = URLComponents(string: "\(baseURLLabel)/api/bike-routes") else {
+            throw APIError.invalidURL
+        }
+        components.queryItems = [URLQueryItem(name: "region", value: region)]
+        guard let url = components.url else { throw APIError.invalidURL }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(from: url)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            let collection = try JSONDecoder().decode(BikeRoutesFeatureCollection.self, from: data)
+            return collection.features.enumerated().flatMap { featureIndex, feature in
+                feature.geometry.coordinatePaths.enumerated().compactMap { pathIndex, path in
+                    let coordinates = path.compactMap { pair -> CLLocationCoordinate2D? in
+                        guard pair.count >= 2,
+                              (-180.0...180.0).contains(pair[0]),
+                              (-90.0...90.0).contains(pair[1]) else { return nil }
+                        return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
+                    }
+                    guard coordinates.count >= 2 else { return nil }
+                    return BikeRouteOverlay(
+                        id: "\(region)-\(featureIndex)-\(pathIndex)",
+                        facilityType: feature.properties.facilityType,
+                        name: feature.properties.name,
+                        coordinates: coordinates
+                    )
+                }
+            }
         } catch {
             throw APIError.decodingError(error)
         }

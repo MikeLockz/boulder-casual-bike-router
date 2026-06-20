@@ -181,6 +181,11 @@ struct MainMapView: View {
                 }
             }
         }
+        .task(id: "\(viewModel.activeRegionId)-\(viewModel.showOfficialRoutesLayer)") {
+            if viewModel.showOfficialRoutesLayer {
+                await viewModel.loadBikeRouteOverlays()
+            }
+        }
         .onChange(of: locationManager.currentLocation) { _, newLocation in
             if let loc = newLocation {
                 DispatchQueue.main.async {
@@ -398,9 +403,12 @@ struct MainMapView: View {
     }
 
     private func historyFitCoordinates(start: CLLocationCoordinate2D, end: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
+        let actual = viewModel.selectedHistoryRouteDetails?.actualRouteCoordinatePath ?? []
+        if actual.count >= 2 {
+            return actual
+        }
         let planned = viewModel.selectedHistoryRouteDetails?.plannedRouteCoordinatePaths.flatMap { $0 } ?? []
-        let ticks = viewModel.selectedHistoryRouteTicks.map { $0.clCoordinate }
-        return planned + ticks + [start, end]
+        return planned + [start, end]
     }
 
     private var routeMarkerCoordinates: [CLLocationCoordinate2D] {
@@ -1162,6 +1170,20 @@ struct MainMapView: View {
     @ViewBuilder
     private func mapCanvas(proxy: MapProxy) -> some View {
         Map(position: $cameraPosition, interactionModes: .all) {
+            if viewModel.showOfficialRoutesLayer {
+                ForEach(viewModel.bikeRouteOverlays) { bikeRoute in
+                    MapPolyline(coordinates: bikeRoute.coordinates)
+                        .stroke(
+                            bikeRouteColor(for: bikeRoute.facilityType).opacity(0.75),
+                            style: StrokeStyle(
+                                lineWidth: bikeRoute.facilityType == "Multi-Use Path" || bikeRoute.facilityType == "Bike Park Path" ? 4.5 : 3.5,
+                                lineCap: .round,
+                                lineJoin: .round
+                            )
+                        )
+                }
+            }
+
             if !viewModel.isSelectingHomeLocation {
                 // Start Marker
                 if let start = viewModel.startLocation {
@@ -1218,22 +1240,22 @@ struct MainMapView: View {
                             .stroke(Color.primaryMint, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
                     }
                 } else if let details = viewModel.selectedHistoryRouteDetails {
-                    ForEach(0..<details.plannedRouteCoordinatePaths.count, id: \.self) { pathIdx in
-                        MapPolyline(coordinates: details.plannedRouteCoordinatePaths[pathIdx])
-                            .stroke(Color.secondary, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-                    }
-
-                    let tickCoordinates = viewModel.selectedHistoryRouteTicks.map { $0.clCoordinate }
-                    if tickCoordinates.count >= 2 {
-                        MapPolyline(coordinates: tickCoordinates)
-                            .stroke(Color.orange, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                    } else if let tickCoordinate = tickCoordinates.first {
+                    let actualCoordinates = details.actualRouteCoordinatePath
+                    if actualCoordinates.count >= 2 {
+                        MapPolyline(coordinates: actualCoordinates)
+                            .stroke(Color.primaryMint, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                    } else if let tickCoordinate = actualCoordinates.first {
                         Annotation("", coordinate: tickCoordinate) {
                             Circle()
-                                .fill(Color.orange)
+                                .fill(Color.primaryMint)
                                 .frame(width: 8, height: 8)
                                 .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
                                 .shadow(radius: 2)
+                        }
+                    } else {
+                        ForEach(0..<details.plannedRouteCoordinatePaths.count, id: \.self) { pathIdx in
+                            MapPolyline(coordinates: details.plannedRouteCoordinatePaths[pathIdx])
+                                .stroke(Color.secondary, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
                         }
                     }
                 }
@@ -1285,6 +1307,23 @@ struct MainMapView: View {
                     handleMapTap(at: coordinate)
                 }
             }
+        }
+    }
+
+    private func bikeRouteColor(for facilityType: String) -> Color {
+        switch facilityType {
+        case "Multi-Use Path", "Bike Park Path":
+            return Color(red: 0.0, green: 0.90, blue: 0.46)
+        case "Protected Bike Lane", "Separated Bike Lane", "Contra Flow Bike Lane":
+            return Color(red: 0.0, green: 0.90, blue: 1.0)
+        case "On-Street Bike Lane":
+            return Color(red: 0.16, green: 0.47, blue: 1.0)
+        case "Designated Bike Route":
+            return Color(red: 0.70, green: 0.53, blue: 1.0)
+        case "Bikeable Shoulder":
+            return Color(red: 0.56, green: 0.64, blue: 0.68)
+        default:
+            return Color(red: 0.69, green: 0.74, blue: 0.77)
         }
     }
     

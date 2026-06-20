@@ -48,7 +48,7 @@ Then navigate to `http://localhost:8081` in your browser.
 
 Routing graphs for each region are constructed and cached as serialized bundles (`.graph-cache.pkl`) in `backend/.graph_cache` (default) or overridden by setting the `GRAPH_CACHE_DIR` environment variable.
 
-- **Warm Startup**: If cache files exist and match the source files' content hashes and region configuration fingerprints, the routing graphs load almost instantly (under 1 second), dramatically reducing startup delay.
+- **Warm Startup**: If cache files match the source hashes and configuration fingerprints, regional graphs load in a few seconds instead of being rebuilt from source.
 - **Cache Invalidation**: Caches are validated on load using chunked content hashing and configuration fingerprints. Proactive cache invalidation is also triggered by the GIS data sync script (`sync_gis_data.py`).
 - **Manual Cache Removal**: To force a clean rebuild of the graphs from source JSON files, simply delete the cache files:
   ```bash
@@ -76,3 +76,13 @@ Or start the project with:
 ./start.sh
 ```
 When reloader is enabled, the background graph-initialization thread is gated by the `WERKZEUG_RUN_MAIN` environment variable to ensure it only starts once in the serving child process (preventing duplicate thread compilation overhead in the supervisor process).
+
+Docker development uses an explicit overlay so production never auto-enables Flask debug mode:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+The base Compose file keeps reload disabled and persists graph bundles in the host directory `.docker-data/graph-cache`. Production can choose an inspectable host path outside the repository:
+```bash
+GRAPH_CACHE_HOST_DIR=/root/lockdev-home/data/boulder-graph-cache docker compose up -d --build
+```

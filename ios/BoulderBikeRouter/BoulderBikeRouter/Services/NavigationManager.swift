@@ -20,8 +20,9 @@ struct Maneuver: Identifiable, Equatable {
 }
 
 /// Manages active route turn guidance, voice announcements, and navigation banners.
+@MainActor
 @Observable
-class NavigationManager {
+class NavigationManager: NSObject, @preconcurrency AVSpeechSynthesizerDelegate {
     var isActive: Bool = false
     var isMuted: Bool = false
     var currentManeuverIndex: Int = 0
@@ -43,6 +44,7 @@ class NavigationManager {
     var routeCoords: [CLLocationCoordinate2D] = []
     var segments: [RouteSegment] = []
     private let speechSynthesizer = AVSpeechSynthesizer()
+    private var currentUtterance: AVSpeechUtterance?
     
     // Telemetry properties
     private var activeRouteId: String? = nil
@@ -66,6 +68,11 @@ class NavigationManager {
     private let confirmDistance: Double = 30.0     // meters (~100 ft)
     private let passedManeuverDistance: Double = 20.0
     private let casualSpeedMps = 4.47              // 10 mph in meters/second
+
+    override init() {
+        super.init()
+        speechSynthesizer.delegate = self
+    }
 
     private var isSyncActive: Bool {
         let hasToken = UserDefaults.standard.string(forKey: "pocketbase_token") != nil
@@ -549,12 +556,44 @@ class NavigationManager {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(
+                .playback,
+                mode: .voicePrompt,
+                options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers]
+            )
+            try audioSession.setActive(true)
+        } catch {
+            print("[NavigationManager] Failed to activate voice prompt audio session: \(error.localizedDescription)")
+        }
         
         // Stop current speaking and start new announcement
+        currentUtterance = utterance
         if speechSynthesizer.isSpeaking {
             speechSynthesizer.stopSpeaking(at: .immediate)
         }
         speechSynthesizer.speak(utterance)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        finishVoicePrompt(for: utterance)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        finishVoicePrompt(for: utterance)
+    }
+
+    private func finishVoicePrompt(for utterance: AVSpeechUtterance) {
+        guard utterance === currentUtterance else { return }
+        currentUtterance = nil
+
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            print("[NavigationManager] Failed to deactivate voice prompt audio session: \(error.localizedDescription)")
+        }
     }
 
     private func updateOverlay(distanceFromStart: Double) {

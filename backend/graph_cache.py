@@ -13,7 +13,7 @@ import networkx as nx
 GRAPH_CACHE_FORMAT_VERSION = 1
 
 # GRAPH_BUILD_VERSION should be bumped whenever the graph building or weighting logic in app.py changes.
-GRAPH_BUILD_VERSION = 1
+GRAPH_BUILD_VERSION = 2
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 GRAPH_CACHE_DIR = os.path.join(BACKEND_DIR, ".graph_cache")
@@ -115,27 +115,41 @@ def get_cache_path(region_id):
     """Get absolute path to the cached bundle file for a region."""
     return os.path.join(get_cache_dir(), f"{region_id}.graph-cache.pkl")
 
-def save_graph_bundle(region_id, G, nodes, safe_crossings, four_lane_nodes, bike_routes_geojson, region_config, weights):
+def get_source_hashes(region_config):
+    """Capture hashes for every graph-affecting source configured for a region."""
+    return {
+        key: hash_file(region_config.get(key)) if region_config.get(key) else None
+        for key in ["osm_cache_file", "stress_cache_file", "offstreet_cache_file"]
+    }
+
+
+def save_graph_bundle(
+    region_id,
+    G,
+    nodes,
+    safe_crossings,
+    four_lane_nodes,
+    bike_routes_geojson,
+    region_config,
+    weights,
+    expected_source_hashes=None,
+    created_at=None,
+):
     """Atomically write the graph and companion state to a gzipped pickle cache bundle."""
     try:
         cache_dir = get_cache_dir()
         os.makedirs(cache_dir, exist_ok=True)
         cache_path = get_cache_path(region_id)
-        
-        # Capture current hashes for graph-affecting source files
-        source_hashes = {}
-        for key in ["osm_cache_file", "stress_cache_file", "offstreet_cache_file"]:
-            filepath = region_config.get(key)
-            if filepath:
-                source_hashes[key] = hash_file(filepath)
-            else:
-                source_hashes[key] = None
+
+        source_hashes = get_source_hashes(region_config)
+        if expected_source_hashes is not None and source_hashes != expected_source_hashes:
+            return False, "source_files_changed_during_build"
 
         metadata = {
             "cache_format_version": GRAPH_CACHE_FORMAT_VERSION,
             "graph_build_version": GRAPH_BUILD_VERSION,
             "region_id": region_id,
-            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at": created_at or datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "python_version": sys.version_info[:2],
             "networkx_version": nx.__version__,
             "source_file_hashes": source_hashes,
@@ -161,6 +175,9 @@ def save_graph_bundle(region_id, G, nodes, safe_crossings, four_lane_nodes, bike
                     pickle.dump(bundle, f_gz, protocol=pickle.HIGHEST_PROTOCOL)
                 f_raw.flush()
                 os.fsync(f_raw.fileno())
+            if expected_source_hashes is not None and get_source_hashes(region_config) != expected_source_hashes:
+                os.remove(temp_path)
+                return False, "source_files_changed_during_build"
             os.replace(temp_path, cache_path)
             print(f"[Cache] Successfully serialized graph bundle for {region_id} to {cache_path}")
             return True, "success"

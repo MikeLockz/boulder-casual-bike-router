@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync searchable Boulder places from open place data into PocketBase."""
+"""Sync searchable places from open place data into PocketBase."""
 
 import argparse
 import json
@@ -9,6 +9,9 @@ import sys
 import time
 
 import requests
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from backend.graph_cache import REGIONS
 
 DEFAULT_BBOX = "39.96,-105.30,40.09,-105.18"
 DEFAULT_PLACE_CACHE_FILE = "backend/boulder_place_osm_data.json"
@@ -387,15 +390,40 @@ def sync_payloads(pb_url, headers, payloads):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sync Boulder open-data places into PocketBase.")
-    parser.add_argument("--bbox", default=DEFAULT_BBOX, help="Overpass bbox as south,west,north,east.")
+    parser = argparse.ArgumentParser(description="Sync open-data places into PocketBase.")
+    parser.add_argument("--region", choices=list(REGIONS.keys()), help="Target routing region (defines defaults for bbox/caches).")
+    parser.add_argument("--bbox", help="Overpass bbox as south,west,north,east. Overrides region default.")
     parser.add_argument("--pb-url", default=os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090"))
-    parser.add_argument("--place-cache-file", default=DEFAULT_PLACE_CACHE_FILE, help="Dedicated place-focused OSM JSON cache.")
+    parser.add_argument("--place-cache-file", help="Dedicated place-focused OSM JSON cache. Overrides region default.")
     parser.add_argument("--refresh-place-cache", action="store_true", help="Fetch place-focused OSM data even if the cache exists.")
-    parser.add_argument("--playground-cache-file", default=DEFAULT_PLAYGROUND_CACHE_FILE, help="Boulder playground open-data cache.")
+    parser.add_argument("--playground-cache-file", help="Playground open-data cache. Overrides region default.")
     parser.add_argument("--replace-generated", action="store_true", help="Delete existing generated place records before syncing.")
     parser.add_argument("--cache-file", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    # Determine parameter values based on region default or explicit overrides
+    bbox = args.bbox
+    place_cache_file = args.place_cache_file
+    playground_cache_file = args.playground_cache_file
+
+    if args.region:
+        reg_config = REGIONS[args.region]
+        if not bbox:
+            r_bbox = reg_config.get("bbox")
+            if r_bbox:
+                bbox = f"{r_bbox[0]},{r_bbox[1]},{r_bbox[2]},{r_bbox[3]}"
+        if not place_cache_file:
+            place_cache_file = os.path.join("backend", f"{args.region}_place_osm_data.json")
+        if not playground_cache_file:
+            playground_cache_file = reg_config.get("playgrounds_cache_file") or ""
+    else:
+        # Fall back to legacy default (Boulder) if no region is provided
+        if not bbox:
+            bbox = DEFAULT_BBOX
+        if not place_cache_file:
+            place_cache_file = DEFAULT_PLACE_CACHE_FILE
+        if not playground_cache_file:
+            playground_cache_file = DEFAULT_PLAYGROUND_CACHE_FILE
 
     pb_url = args.pb_url.rstrip("/")
     headers = auth_headers(
@@ -411,9 +439,9 @@ def main():
         print("Warning: --cache-file is deprecated for place search. Use --place-cache-file.", file=sys.stderr)
         elements = load_cached_osm_places(args.cache_file)
     else:
-        elements = load_or_fetch_osm_places(args.place_cache_file, args.bbox, args.refresh_place_cache)
+        elements = load_or_fetch_osm_places(place_cache_file, bbox, args.refresh_place_cache)
     counts = sync_places(pb_url, headers, elements)
-    playground_counts = sync_payloads(pb_url, headers, playground_payloads(args.playground_cache_file))
+    playground_counts = sync_payloads(pb_url, headers, playground_payloads(playground_cache_file))
     print(
         "OSM places sync complete: "
         f'{counts["created"]} created, {counts["updated"]} updated, '

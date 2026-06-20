@@ -44,6 +44,6 @@ pb_data/
 
 # Graph cache
 backend/.graph_cache/
+.docker-data/
 *.graph-cache.pkl
 *.tmp
-

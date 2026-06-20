@@ -126,7 +126,7 @@ Hot reload is a local-development feature only. Production must run with the deb
 4. Run `sync_gis_data.py --broomfield`, verify only its bundle disappears, restart, and confirm Boulder loads while Broomfield rebuilds.
 5. Modify a copied fixture source file without calling the sync script and verify hash validation still forces rebuild.
 6. In local Docker, edit a Python file and confirm reload through `http://localhost:8081/api/graph-status`; verify one builder sequence and successful proxied routing after readiness.
-7. Recreate the backend container and verify the named volume allows cache hits across container lifetimes.
+7. Recreate the backend container and verify the configured host cache mount allows cache hits across container lifetimes.
 
 #### Performance Acceptance
 

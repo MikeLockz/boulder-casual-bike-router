@@ -29,6 +29,7 @@ app = Flask(__name__)
 from graph_cache import (
     REGIONS,
     DEFAULT_WEIGHTS,
+    get_source_hashes,
     load_graph_bundle,
     save_graph_bundle,
 )
@@ -887,6 +888,7 @@ def build_graph(region_id="boulder", weights=None):
 
     # Cache miss: build from source
     print(f"[Cache] Cache miss for {region_id}. Reason: {miss_reason}. Rebuilding...")
+    source_hashes = get_source_hashes(config)
 
     try:
         data = fetch_osm_data(region_id)
@@ -937,8 +939,6 @@ def build_graph(region_id="boulder", weights=None):
         except Exception as e:
             print(f"Error building off-street spatial index for {region_id}: {e}")
             offstreet_spatial_index = None
-
-
 
     # Phase 1: Parse nodes & map network topology for crossings
     node_highways = {}
@@ -1248,8 +1248,22 @@ def build_graph(region_id="boulder", weights=None):
     }
     install_region_bundle(region_id, bundle)
 
-    # Save cache bundle
-    save_graph_bundle(region_id, G_connected, nodes, safe_crossing_nodes, four_lane_nodes, geojson, config, weights)
+    # Publish only if the source files still match the snapshot used for this build.
+    cache_created_at = utc_now_iso()
+    cache_saved, cache_save_reason = save_graph_bundle(
+        region_id,
+        G_connected,
+        nodes,
+        safe_crossing_nodes,
+        four_lane_nodes,
+        geojson,
+        config,
+        weights,
+        expected_source_hashes=source_hashes,
+        created_at=cache_created_at,
+    )
+    if not cache_saved:
+        print(f"[Cache] Graph for {region_id} is ready in memory but was not cached: {cache_save_reason}")
 
     with graph_build_lock:
         if region_id not in graph_build_statuses:
@@ -1258,7 +1272,7 @@ def build_graph(region_id="boulder", weights=None):
             "source": "build",
             "cache_hit": False,
             "cache_miss_reason": miss_reason,
-            "cache_creation_time": None
+            "cache_creation_time": cache_created_at if cache_saved else None
         })
 
     mark_graph_build_ready(region_id, G_connected)
@@ -1487,6 +1501,8 @@ def edge_cost_components(edge_data, weights):
     else:
         offstreet_type = edge_data.get("offstreet_type")
         if offstreet_type == "Multi-Use Path":
+            # Cap the base multiplier at the separated_path level since GIS confirms it's a dedicated off-street path
+            base_multiplier = min(base_multiplier, weights.get("separated_path", DEFAULT_WEIGHTS["separated_path"]))
             offstreet_modifier = weights.get("offstreet_multiuse", DEFAULT_WEIGHTS["offstreet_multiuse"])
         elif offstreet_type == "Soft Surface Trail":
             offstreet_modifier = weights.get("offstreet_soft_surface", DEFAULT_WEIGHTS["offstreet_soft_surface"])
@@ -1589,6 +1605,8 @@ def update_graph_weights(G, weights):
         else:
             offstreet_type = d.get("offstreet_type", "None")
             if offstreet_type == "Multi-Use Path":
+                # Cap the base multiplier at the separated_path level since GIS confirms it's a dedicated off-street path
+                base_multiplier = min(base_multiplier, weights.get("separated_path", DEFAULT_WEIGHTS.get("separated_path", 0.5)))
                 offstreet_modifier = weights.get("offstreet_multiuse", DEFAULT_WEIGHTS.get("offstreet_multiuse", 0.8))
             elif offstreet_type == "Soft Surface Trail":
                 offstreet_modifier = weights.get("offstreet_soft_surface", DEFAULT_WEIGHTS.get("offstreet_soft_surface", 1.0))
@@ -3830,6 +3848,15 @@ def start_graph_initialization():
     print("[*] Starting regional graph initialization...")
     threading.Thread(target=build_all_region_graphs, name="region-graph-builder", daemon=True).start()
 
+def should_start_graph_initialization(reload_enabled=None, environ=None):
+    """Return whether this process owns graph initialization."""
+    if reload_enabled is None:
+        reload_enabled = backend_reload
+    if not reload_enabled:
+        return True
+    environ = os.environ if environ is None else environ
+    return environ.get("WERKZEUG_RUN_MAIN") == "true"
+
 def run_server():
     """Verify PocketBase connection and launch the Flask server."""
     # Verify PocketBase connection
@@ -3852,14 +3879,9 @@ if __name__ == "__main__":
     print("[*] Starting Multi-Region Bike Router backend...")
     
     # Under main, launch graph initialization only when reload is disabled or WERKZEUG_RUN_MAIN identifies the serving child
-    should_init = True
-    if backend_reload:
-        should_init = (os.environ.get("WERKZEUG_RUN_MAIN") == "true")
-
-    if should_init:
+    if should_start_graph_initialization():
         start_graph_initialization()
     else:
         print("[*] Gating graph initialization in supervisor process.")
 
     run_server()
-# Hot reload verification comment

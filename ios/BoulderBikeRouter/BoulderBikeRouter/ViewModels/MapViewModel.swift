@@ -49,7 +49,10 @@ class MapViewModel {
     var selectedStartName: String?
     var selectedDestinationName: String?
     var playgroundsList: [Playground] = []
-    var showOfficialRoutesLayer: Bool = false
+    var showOfficialRoutesLayer: Bool = UserDefaults.standard.bool(forKey: "show_official_bike_routes_layer")
+    var bikeRouteOverlays: [BikeRouteOverlay] = []
+    var isLoadingBikeRouteOverlays: Bool = false
+    var bikeRouteOverlayError: String?
 
     // App state
     var isConfigLoaded: Bool = false
@@ -166,17 +169,6 @@ class MapViewModel {
             weights = w
         }
 
-        // Listen for updates when a route ends
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("TelemetryRouteEnded"),
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task {
-                await self?.loadHistory()
-            }
-        }
-
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("RouteRerouted"),
             object: nil,
@@ -270,11 +262,46 @@ class MapViewModel {
         routeResponse = nil
         selectedPresetName = nil
         selectedPlayground = nil
+        bikeRouteOverlays = []
+        bikeRouteOverlayError = nil
         startPlaceSuggestions = []
         endPlaceSuggestions = []
         routingError = nil
         applyActiveRegionResources()
         Task { await reloadRegionResources() }
+    }
+
+    func setOfficialRoutesLayerEnabled(_ enabled: Bool) {
+        showOfficialRoutesLayer = enabled
+        UserDefaults.standard.set(enabled, forKey: "show_official_bike_routes_layer")
+        if !enabled {
+            bikeRouteOverlayError = nil
+        }
+    }
+
+    func loadBikeRouteOverlays() async {
+        guard showOfficialRoutesLayer else { return }
+        let requestedRegion = activeRegionId
+        await MainActor.run {
+            isLoadingBikeRouteOverlays = true
+            bikeRouteOverlayError = nil
+        }
+
+        do {
+            let overlays = try await apiService.fetchBikeRoutes(region: requestedRegion)
+            await MainActor.run {
+                guard activeRegionId == requestedRegion, showOfficialRoutesLayer else { return }
+                bikeRouteOverlays = overlays
+                isLoadingBikeRouteOverlays = false
+            }
+        } catch {
+            await MainActor.run {
+                guard activeRegionId == requestedRegion, showOfficialRoutesLayer else { return }
+                bikeRouteOverlays = []
+                isLoadingBikeRouteOverlays = false
+                bikeRouteOverlayError = error.localizedDescription
+            }
+        }
     }
 
     private func applyActiveRegionResources() {
@@ -1166,6 +1193,30 @@ class MapViewModel {
         self.pastRoutes = combinedMap.values.sorted(by: { $0.date > $1.date })
         debugLog("loadHistory completed. self.pastRoutes count: \(self.pastRoutes.count)")
         print("Loaded \(self.pastRoutes.count) past routes (Local: \(localRoutes.count), Server: \(serverRoutes.count)).")
+    }
+
+    /// Resolve a just-completed route from SwiftData without waiting for cloud history.
+    @MainActor
+    func loadCompletedRouteFromLocalStore(routeId: String) -> PastRoute? {
+        guard let context = modelContext else { return nil }
+
+        do {
+            let descriptor = FetchDescriptor<LocalRoute>()
+            guard let localRoute = try context.fetch(descriptor).first(where: {
+                $0.id == routeId || $0.serverId == routeId
+            }) else {
+                return nil
+            }
+
+            let completedRoute = localRoute.toPastRoute
+            pastRoutes.removeAll { $0.id == completedRoute.id }
+            pastRoutes.append(completedRoute)
+            pastRoutes.sort { $0.date > $1.date }
+            return completedRoute
+        } catch {
+            debugLog("loadCompletedRouteFromLocalStore failed for \(routeId): \(error.localizedDescription)")
+            return nil
+        }
     }
     
     func selectHistoryRoute(_ route: PastRoute) async {

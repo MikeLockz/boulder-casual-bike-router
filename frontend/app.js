@@ -4638,7 +4638,9 @@ async function resolveHistoryRouteDetails(route) {
     } catch (e) {}
 
     const cachedRoute = localRoute || route;
-    if (cachedRoute?.route_geojson || cachedRoute?.ticks?.length) {
+    // History list records may include the planned GeoJSON but omit server ticks.
+    // Only treat the cache as complete when it has the recorded GPS trace.
+    if (cachedRoute?.ticks?.length) {
         return cachedRoute;
     }
 
@@ -4689,15 +4691,15 @@ function collectGeoJsonLinePaths(geojson) {
 }
 
 function getHistoryPreviewPaths(route) {
-    const geoJsonPaths = collectGeoJsonLinePaths(route?.route_geojson);
-    if (geoJsonPaths.length) return geoJsonPaths;
-
     const tickPath = (route?.ticks || [])
         .slice()
         .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
         .filter(tick => Number.isFinite(Number(tick.lat)) && Number.isFinite(Number(tick.lon)))
         .map(tick => [Number(tick.lat), Number(tick.lon)]);
     if (tickPath.length >= 2) return [tickPath];
+
+    const geoJsonPaths = collectGeoJsonLinePaths(route?.route_geojson);
+    if (geoJsonPaths.length) return geoJsonPaths;
 
     if (Number.isFinite(Number(route?.start_lat)) && Number.isFinite(Number(route?.start_lon)) &&
         Number.isFinite(Number(route?.end_lat)) && Number.isFinite(Number(route?.end_lon))) {
@@ -4752,8 +4754,13 @@ async function renderHistoryMapPreview(route) {
             }).addTo(historyPreviewMap));
         });
 
-        const startLatLng = [Number(detailRoute.start_lat), Number(detailRoute.start_lon)];
-        const endLatLng = [Number(detailRoute.end_lat), Number(detailRoute.end_lon)];
+        const recordedPath = (detailRoute.ticks || [])
+            .slice()
+            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+            .filter(tick => Number.isFinite(Number(tick.lat)) && Number.isFinite(Number(tick.lon)))
+            .map(tick => [Number(tick.lat), Number(tick.lon)]);
+        const startLatLng = recordedPath[0] || [Number(detailRoute.start_lat), Number(detailRoute.start_lon)];
+        const endLatLng = recordedPath.at(-1) || [Number(detailRoute.end_lat), Number(detailRoute.end_lon)];
         if (startLatLng.every(Number.isFinite)) {
             historyPreviewLayers.push(L.circleMarker(startLatLng, {
                 radius: 6,
@@ -4826,7 +4833,13 @@ async function loadHistoryRouteOnMap(routeId) {
             route = await response.json();
         }
         
-        if (route.route_geojson) {
+        const tickCoords = (route.ticks || [])
+            .slice()
+            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+            .filter(tick => Number.isFinite(Number(tick.lat)) && Number.isFinite(Number(tick.lon)))
+            .map(tick => [Number(tick.lat), Number(tick.lon)]);
+
+        if (tickCoords.length < 2 && route.route_geojson) {
             const geojsonLayer = L.geoJSON(route.route_geojson, {
                 style: function (feature) {
                     return {
@@ -4853,12 +4866,7 @@ async function loadHistoryRouteOnMap(routeId) {
             .addTo(map);
         historyMarkers.push(endMarkerLoc);
         
-        if (route.ticks && route.ticks.length > 0) {
-            const tickCoords = route.ticks
-                .slice()
-                .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-                .map(tick => [tick.lat, tick.lon]);
-
+        if (tickCoords.length > 0) {
             if (tickCoords.length >= 2) {
                 const tickLine = L.polyline(tickCoords, {
                     color: "#f97316",

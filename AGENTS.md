@@ -70,7 +70,8 @@ Use this file as the first stop in fresh chats. It captures durable context from
 - Recommended local start: `./start.sh`; uses `./venv/bin/python3`, writes `backend.log` and `frontend.log`, opens `http://localhost:8081`.
 - Manual backend: `./venv/bin/python3 backend/app.py` or `python backend/app.py` after activating venv.
 - Manual frontend: `./venv/bin/python3 -m http.server 8081 --directory frontend`.
-- Docker stack: `docker compose up -d --build`.
+- Production-style Docker stack: `docker compose up -d --build` (reload disabled).
+- Local Docker development with backend hot reload: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.
 - PocketBase health through backend: `curl http://localhost:3001/api/pocketbase-status`.
 - Full proxied app locally: `http://localhost:8081`; direct backend: `http://localhost:3001`; PocketBase admin/API: `http://localhost:8090`.
 
@@ -79,7 +80,7 @@ Use this file as the first stop in fresh chats. It captures durable context from
 - Xcode project: `ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj`.
 - Scheme: `BoulderBikeRouter`.
 - Open in Xcode: `open ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj`.
-- Before running the iOS simulator against local services, start the local web/backend stack first with `./start.sh` or `docker compose up -d --build`.
+- Before running the iOS simulator against local services, start the local web/backend stack with `./start.sh` or `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.
 - Simulator API base URL is compiled as `http://localhost:8081`, so simulator builds should hit the local nginx proxy directly.
 - Physical iPhone/device API base URL is compiled as `https://boulder.lockdev.com`; a real phone will not use Mac `localhost` unless the code's base URL is overridden or changed.
 - List available simulators: `xcrun simctl list devices available`.
@@ -211,14 +212,14 @@ During backend startup or rebuilds, the server takes time to initialize and cons
 
 - There may be local uncommitted Swift/Xcode changes from the user. Check `git status` before edits and do not revert unrelated files.
 - Prefer small, targeted edits. Backend changes can affect web, iOS, and deployed Docker behavior.
-- After every backend code change, make sure the active local server is actually running the updated code before verification. Identify whether Flask is running directly or through Docker; for Docker, rebuild and recreate it with `docker compose up -d --build --force-recreate boulder-backend`. Verify the changed endpoint or behavior through `http://localhost:8081/api/...`, because that is the path used by the web app and iOS simulator. If the restart rebuilds routing graphs, wait for `GET /api/health` to return HTTP 200 and confirm every required region is ready. Do not treat source edits or a successful image build alone as proof that the live local backend was updated.
+- After every backend code change, make sure the active local server is actually running the updated code before verification. For local Docker development, use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --force-recreate boulder-backend`. Verify through `http://localhost:8081/api/...`, because that is the path used by the web app and iOS simulator. If the restart rebuilds routing graphs, wait for `GET /api/health` to return HTTP 200 and confirm every required region is ready.
 - Avoid committing generated local state like Xcode `UserInterfaceState.xcuserstate`, `pb_data/`, logs, or local venv files.
 - For frontend changes, verify at `http://localhost:8081` when practical.
 - For deployment changes, reason through both local `docker-compose.yml` and remote expectations in `update.sh`.
 
 ## Graph Caching & Development Reloader
 - Caching interface: [graph_cache.py](file:///Users/mbp/.gemini/antigravity/scratch/boulder-bike-router/backend/graph_cache.py).
-- Cache files: stored in the named volume `/app/.cache/graphs/` in Docker (or `backend/.graph_cache/` locally).
+- Cache files: mounted at `/app/.cache/graphs/` in Docker from `${GRAPH_CACHE_HOST_DIR:-./.docker-data/graph-cache}` on the host, or stored in `backend/.graph_cache/` for direct Python runs.
 - Gating logic: checks `os.environ.get("WERKZEUG_RUN_MAIN") == "true"` to prevent supervisor/child double initialization of graph building threads.
 - GIS data sync: `sync_gis_data.py` proactively invalidates the cached `.graph-cache.pkl` for modified regions.
-- Hot reload: python edits trigger automatic reload. Warm cache loads the entire graph under 1 second. If you change graph-building logic or defaults, bump `GRAPH_BUILD_VERSION` in `graph_cache.py` to force invalidation.
+- Hot reload: use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`; the base production Compose file never enables reload. Warm cache loads each regional graph in a few seconds. If graph-building logic or defaults change, bump `GRAPH_BUILD_VERSION` in `graph_cache.py`.

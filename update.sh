@@ -13,6 +13,8 @@ git pull
 
 echo "🏗️ Rebuilding and restarting containers..."
 cd "$DOCKER_DIR"
+export GRAPH_CACHE_HOST_DIR="${GRAPH_CACHE_HOST_DIR:-/root/lockdev-home/data/boulder-graph-cache}"
+mkdir -p "$GRAPH_CACHE_HOST_DIR"
 docker compose up -d --build --force-recreate boulder-backend boulder-frontend
 
 echo "✅ Update complete!"

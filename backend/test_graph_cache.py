@@ -266,7 +266,7 @@ class GraphCacheTests(unittest.TestCase):
     def test_cache_write_failure_leaves_region_ready(self):
         """7. Cache-write failure still leaves the region ready in memory."""
         # Mock save_graph_bundle to fail
-        with patch("graph_cache.save_graph_bundle", return_value=(False, "disk full")):
+        with patch("app.save_graph_bundle", return_value=(False, "disk full")):
             # Clear test state
             router.graphs_by_region.clear()
             router.graph_build_statuses.clear()
@@ -281,8 +281,26 @@ class GraphCacheTests(unittest.TestCase):
             self.assertEqual(status["state"], "ready")
             self.assertIsNotNone(router.graphs_by_region.get("boulder"))
 
+    def test_successful_build_reports_cache_creation_time(self):
+        """8. A successful cold build exposes the cache publication timestamp."""
+        router.graphs_by_region.clear()
+        router.graph_build_statuses.clear()
+        with patch("app.load_graph_bundle", return_value=(None, "cache_missing")), \
+             patch("app.get_source_hashes", return_value={}), \
+             patch("app.fetch_osm_data", return_value={"elements": []}), \
+             patch("app.fetch_stress_data", return_value={"features": []}), \
+             patch("app.fetch_offstreet_data", return_value={"features": []}), \
+             patch("app.build_bike_routes_geojson", return_value={"type": "FeatureCollection", "features": []}), \
+             patch("app.save_graph_bundle", return_value=(True, "success")):
+            router.build_graph("boulder")
+
+        status = router.get_graph_build_status("boulder")
+        self.assertTrue(status["ready"])
+        self.assertEqual(status["source"], "build")
+        self.assertIsNotNone(status["cache_creation_time"])
+
     def test_sync_invalidation(self):
-        """8. GIS sync invalidates only regions whose files were replaced, including partial-sync failure after one successful replacement."""
+        """9. GIS sync invalidates only regions whose files were replaced, including partial-sync failure after one successful replacement."""
         # Write dummy files representing cached bundles
         for r_id in ["boulder", "broomfield"]:
             cache_path = graph_cache.get_cache_path(r_id)
@@ -323,57 +341,47 @@ class GraphCacheTests(unittest.TestCase):
         self.assertFalse(os.path.exists(graph_cache.get_cache_path("boulder")))
         self.assertFalse(os.path.exists(graph_cache.get_cache_path("broomfield")))
 
+    def test_source_change_during_save_does_not_replace_cache(self):
+        """10. A source update during serialization leaves the previous cache intact."""
+        osm_path = self.create_dummy_file("original")
+        region_config = {
+            "name": "Test Region",
+            "bbox": (39.9, -105.2, 40.2, -104.9),
+            "capabilities": {},
+            "osm_cache_file": osm_path,
+            "stress_cache_file": None,
+            "offstreet_cache_file": None,
+        }
+        graph_cache.save_graph_bundle("test_region", nx.DiGraph(), {"old": True}, set(), set(), {}, region_config, graph_cache.DEFAULT_WEIGHTS)
+        expected_hashes = graph_cache.get_source_hashes(region_config)
+        original_dump = pickle.dump
+
+        def mutate_source(*args, **kwargs):
+            result = original_dump(*args, **kwargs)
+            with open(osm_path, "w") as handle:
+                handle.write("changed")
+            return result
+
+        with patch("pickle.dump", side_effect=mutate_source):
+            success, reason = graph_cache.save_graph_bundle(
+                "test_region", nx.DiGraph(), {"new": True}, set(), set(), {}, region_config,
+                graph_cache.DEFAULT_WEIGHTS, expected_source_hashes=expected_hashes,
+            )
+
+        self.assertFalse(success)
+        self.assertEqual(reason, "source_files_changed_during_build")
+        with open(osm_path, "w") as handle:
+            handle.write("original")
+        bundle, hit_reason = graph_cache.load_graph_bundle("test_region", region_config, graph_cache.DEFAULT_WEIGHTS)
+        self.assertEqual(hit_reason, "hit")
+        self.assertEqual(bundle["nodes"], {"old": True})
+
     def test_reload_startup_gating(self):
-        """9. Reload startup gating starts initialization in the serving child only."""
-        with patch("app.start_graph_initialization") as mock_init:
-            with patch("app.run_server") as mock_run:
-                # Case A: Reload disabled (BACKEND_RELOAD=False). Init should run immediately.
-                with patch("app.backend_reload", False):
-                    # Trigger app execution block
-                    # Directly call the main gating logic
-                    should_init = True
-                    if False: # backend_reload
-                        should_init = False
-                    if should_init:
-                        router.start_graph_initialization()
-                    router.run_server()
-
-                    mock_init.assert_called_once()
-                    mock_run.assert_called_once()
-
-                mock_init.reset_mock()
-                mock_run.reset_mock()
-
-                # Case B: Reload enabled (BACKEND_RELOAD=True), supervisor process (WERKZEUG_RUN_MAIN is not true)
-                with patch("app.backend_reload", True):
-                    with patch.dict(os.environ, {}, clear=True):
-                        # Gated main logic
-                        should_init = False
-                        if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-                            should_init = True
-                        if should_init:
-                            router.start_graph_initialization()
-                        router.run_server()
-
-                        mock_init.assert_not_called()
-                        mock_run.assert_called_once()
-
-                mock_init.reset_mock()
-                mock_run.reset_mock()
-
-                # Case C: Reload enabled (BACKEND_RELOAD=True), serving child process (WERKZEUG_RUN_MAIN == "true")
-                with patch("app.backend_reload", True):
-                    with patch.dict(os.environ, {"WERKZEUG_RUN_MAIN": "true"}):
-                        # Gated main logic
-                        should_init = False
-                        if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-                            should_init = True
-                        if should_init:
-                            router.start_graph_initialization()
-                        router.run_server()
-
-                        mock_init.assert_called_once()
-                        mock_run.assert_called_once()
+        """11. Reload startup gating starts initialization in the serving child only."""
+        self.assertTrue(router.should_start_graph_initialization(False, {}))
+        self.assertFalse(router.should_start_graph_initialization(True, {}))
+        self.assertTrue(router.should_start_graph_initialization(True, {"WERKZEUG_RUN_MAIN": "true"}))
+        self.assertFalse(router.should_start_graph_initialization(True, {"WERKZEUG_RUN_MAIN": "false"}))
 
 if __name__ == "__main__":
     unittest.main()

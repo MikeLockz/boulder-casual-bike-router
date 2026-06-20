@@ -127,7 +127,7 @@ struct SettingsTabView: View {
                 homeSection
             }
             weightsNavSection
-            layersPlaceholder
+            layersSection
         }
     }
 
@@ -354,8 +354,33 @@ struct SettingsTabView: View {
         }
     }
 
-    private var layersPlaceholder: some View {
-        EmptyView()
+    private var layersSection: some View {
+        settingsGroup(title: "MAP LAYERS") {
+            HStack(spacing: 12) {
+                Image(systemName: "bicycle")
+                    .foregroundColor(.primaryMint)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Official Bike Routes")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.onSurface)
+                    Text("Show designated routes, bike lanes, and multi-use paths on the map.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.onSurfaceVariant)
+                }
+
+                Spacer()
+
+                Toggle("Official Bike Routes", isOn: Binding(
+                    get: { viewModel.showOfficialRoutesLayer },
+                    set: { viewModel.setOfficialRoutesLayerEnabled($0) }
+                ))
+                .labelsHidden()
+                .tint(.primaryMint)
+            }
+            .padding(16)
+        }
     }
 
     private var weightsListContent: some View {
