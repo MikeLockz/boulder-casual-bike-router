@@ -1,87 +1,5 @@
 import Foundation
 import CoreLocation
-import Security
-
-struct GuestCredential {
-    let id: String
-    let token: String
-}
-
-enum GuestCredentialStore {
-    private static let idKey = "guest_installation_id"
-    private static let keychainService = "com.bikingboulder.BoulderBikeRouter.guest"
-    private static let keychainAccount = "guest_token"
-    private static let lock = NSLock()
-
-    static func apply(to request: inout URLRequest) {
-        let value = credential()
-        request.setValue(value.id, forHTTPHeaderField: "X-Guest-Id")
-        request.setValue(value.token, forHTTPHeaderField: "X-Guest-Token")
-    }
-
-    static func credential() -> GuestCredential {
-        lock.lock()
-        defer { lock.unlock() }
-
-        let defaults = UserDefaults.standard
-        let id: String
-        if let existing = defaults.string(forKey: idKey), !existing.isEmpty {
-            id = existing
-        } else {
-            id = UUID().uuidString.lowercased()
-            defaults.set(id, forKey: idKey)
-        }
-
-        if let token = readToken() {
-            return GuestCredential(id: id, token: token)
-        }
-
-        let token = makeToken()
-        saveToken(token)
-        return GuestCredential(id: id, token: token)
-    }
-
-    private static func readToken() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else {
-            return nil
-        }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private static func saveToken(_ token: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount
-        ]
-        SecItemDelete(query as CFDictionary)
-        var item = query
-        item[kSecValueData as String] = Data(token.utf8)
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(item as CFDictionary, nil)
-    }
-
-    private static func makeToken() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
-            return UUID().uuidString.replacingOccurrences(of: "-", with: "")
-                + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        }
-        return Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
-}
 
 /// Errors that can occur when calling the Biking Boulder routing API.
 enum APIError: Error, LocalizedError {
@@ -197,9 +115,7 @@ class APIService {
         request.setValue("ios", forHTTPHeaderField: "X-Client-Source")
         request.setValue(analyticsSessionId, forHTTPHeaderField: "X-Client-Session-Id")
         request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Client-Event-Id")
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &request)
     }
 
     /// Set a custom base URL (e.g. localhost for simulator testing)
@@ -259,6 +175,8 @@ class APIService {
                 throw APIError.serverError(apiError)
             }
             return routeResponse
+        } catch let apiError as APIError {
+            throw apiError
         } catch {
             throw APIError.decodingError(error)
         }
@@ -603,9 +521,7 @@ class APIService {
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         GuestCredentialStore.apply(to: &urlRequest)
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         do {
             let encoder = JSONEncoder()
@@ -689,9 +605,7 @@ class APIService {
         urlRequest.httpMethod = "GET"
         GuestCredentialStore.apply(to: &urlRequest)
         
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         let data: Data
         let response: URLResponse
@@ -727,9 +641,7 @@ class APIService {
 
         var urlRequest = URLRequest(url: profilesURL)
         urlRequest.httpMethod = "GET"
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         let (data, response): (Data, URLResponse)
         do {
@@ -769,9 +681,7 @@ class APIService {
 
         var urlRequest = URLRequest(url: profileURL)
         urlRequest.httpMethod = "DELETE"
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         let (_, response): (Data, URLResponse)
         do {
@@ -799,9 +709,7 @@ class APIService {
         var urlRequest = URLRequest(url: profileURL)
         urlRequest.httpMethod = method
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         do {
             urlRequest.httpBody = try JSONEncoder().encode(profile)
@@ -839,9 +747,7 @@ class APIService {
 
         var urlRequest = URLRequest(url: homeURL)
         urlRequest.httpMethod = "GET"
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         let (data, response): (Data, URLResponse)
         do {
@@ -874,9 +780,7 @@ class APIService {
         var urlRequest = URLRequest(url: homeURL)
         urlRequest.httpMethod = "PUT"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         do {
             urlRequest.httpBody = try JSONEncoder().encode(HomeLocationRequest(lat: coordinate.latitude, lng: coordinate.longitude))
@@ -914,9 +818,7 @@ class APIService {
 
         var urlRequest = URLRequest(url: homeURL)
         urlRequest.httpMethod = "DELETE"
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         let (_, response): (Data, URLResponse)
         do {
@@ -944,9 +846,7 @@ class APIService {
         var urlRequest = URLRequest(url: detailURL)
         urlRequest.httpMethod = "GET"
         GuestCredentialStore.apply(to: &urlRequest)
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         let data: Data
         let response: URLResponse
@@ -980,9 +880,7 @@ class APIService {
         urlRequest.httpMethod = "PATCH"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         GuestCredentialStore.apply(to: &urlRequest)
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         do {
             urlRequest.httpBody = try JSONEncoder().encode(request)
@@ -1021,9 +919,7 @@ class APIService {
         var urlRequest = URLRequest(url: routeURL)
         urlRequest.httpMethod = "DELETE"
         GuestCredentialStore.apply(to: &urlRequest)
-        if let token = UserDefaults.standard.string(forKey: "pocketbase_token") {
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
 
         let (_, response): (Data, URLResponse)
         do {

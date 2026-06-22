@@ -16,8 +16,8 @@ class SyncService {
             print("[SyncService] Cloud sync disabled, skipping profile sync.")
             return
         }
-        guard UserDefaults.standard.string(forKey: "pocketbase_token") != nil,
-              let userId = UserDefaults.standard.string(forKey: "logged_in_user_id") else {
+        guard AuthSessionStore.shared.isAuthenticated,
+              let userId = AuthSessionStore.shared.userId else {
             print("[SyncService] User is not authenticated, skipping profile sync.")
             return
         }
@@ -92,8 +92,8 @@ class SyncService {
             print("[SyncService] Cloud sync disabled, skipping route sync.")
             return
         }
-        guard let token = UserDefaults.standard.string(forKey: "pocketbase_token"),
-              let userId = UserDefaults.standard.string(forKey: "logged_in_user_id") else {
+        guard AuthSessionStore.shared.isAuthenticated,
+              let userId = AuthSessionStore.shared.userId else {
             print("[SyncService] User is not authenticated, skipping sync.")
             return
         }
@@ -180,7 +180,7 @@ class SyncService {
             var urlRequest = URLRequest(url: syncURL)
             urlRequest.httpMethod = "POST"
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
             GuestCredentialStore.apply(to: &urlRequest)
             
             let encoder = JSONEncoder()

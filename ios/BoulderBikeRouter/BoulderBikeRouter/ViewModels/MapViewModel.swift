@@ -2,9 +2,13 @@ import Foundation
 import CoreLocation
 import SwiftUI
 import SwiftData
+import OSLog
 
+@MainActor
 @Observable
 class MapViewModel {
+    private let logger = Logger(subsystem: "com.bikingboulder.BoulderBikeRouter", category: "MapViewModel")
+
     // Dynamic configurations loaded from server
     var presets: [PresetConfig] = []
     var routingRegions: [RoutingRegion] = []
@@ -59,13 +63,10 @@ class MapViewModel {
     var isWeightsLocked: Bool = false
 
     // User session properties
-    var currentUserEmail: String? = UserDefaults.standard.string(forKey: "logged_in_user_email")
-    var currentUserId: String? = UserDefaults.standard.string(forKey: "logged_in_user_id")
-    var pocketbaseToken: String? = UserDefaults.standard.string(forKey: "pocketbase_token")
-    var isSessionExpired: Bool = {
-        UserDefaults.standard.string(forKey: "pocketbase_token") == nil
-            && UserDefaults.standard.string(forKey: "logged_in_user_id") != nil
-    }()
+    var currentUserEmail: String? = AuthSessionStore.shared.email
+    var currentUserId: String? = AuthSessionStore.shared.userId
+    var pocketbaseToken: String? = AuthSessionStore.shared.token
+    var isSessionExpired: Bool = AuthSessionStore.shared.isSessionExpired
     var isRefreshingSession: Bool = false
     
     var isUserLoggedIn: Bool {
@@ -139,19 +140,7 @@ class MapViewModel {
     }
 
     private func debugLog(_ message: String) {
-        print("DEBUG_LOG: \(message)")
-        let path = "/Users/mbp/.gemini/antigravity/scratch/debug_log.txt"
-        let fileURL = URL(fileURLWithPath: path)
-        let logMessage = "[\(Date())] \(message)\n"
-        if let data = logMessage.data(using: .utf8) {
-            if let fileHandle = try? FileHandle(forWritingTo: fileURL) {
-                fileHandle.seekToEndOfFile()
-                fileHandle.write(data)
-                fileHandle.closeFile()
-            } else {
-                try? data.write(to: fileURL)
-            }
-        }
+        logger.debug("\(message, privacy: .public)")
     }
 
     init() {
@@ -175,7 +164,9 @@ class MapViewModel {
             queue: .main
         ) { [weak self] notification in
             if let newRoute = notification.object as? RouteResponse {
-                self?.routeResponse = newRoute
+                Task { @MainActor in
+                    self?.routeResponse = newRoute
+                }
             }
         }
         
@@ -748,7 +739,7 @@ class MapViewModel {
 
     @MainActor
     func loadRouteTuningProfiles() async {
-        let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
+        let currentUserId = AuthSessionStore.shared.userId
         let isSyncActive = isUserLoggedIn && isCloudSyncEnabled
 
         if isSyncActive {
@@ -901,7 +892,7 @@ class MapViewModel {
 
     @MainActor
     func deleteActiveRouteTuningProfile() async {
-        guard let context = modelContext, let activeId = activeRouteTuningProfileId else { return }
+        guard modelContext != nil, let activeId = activeRouteTuningProfileId else { return }
         await deleteRouteTuningProfile(id: activeId)
     }
 
@@ -1116,7 +1107,7 @@ class MapViewModel {
     /// Load telemetry route history from both remote server (if sync is enabled) and SwiftData.
     @MainActor
     func loadHistory() async {
-        let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
+        let currentUserId = AuthSessionStore.shared.userId
         let isSyncActive = isUserLoggedIn && isCloudSyncEnabled
 
         debugLog("loadHistory started. isUserLoggedIn: \(isUserLoggedIn), isCloudSyncEnabled: \(isCloudSyncEnabled), currentUserId: \(currentUserId ?? "nil")")
@@ -1487,8 +1478,10 @@ class MapViewModel {
         guard pocketbaseToken != nil else { return }
         sessionRefreshTask?.cancel()
         sessionRefreshTask = nil
-        UserDefaults.standard.removeObject(forKey: "pocketbase_token")
+        AuthSessionStore.shared.clear()
         pocketbaseToken = nil
+        currentUserEmail = nil
+        currentUserId = nil
         isSessionExpired = true
         debugLog("Authentication token rejected by server; local session marked expired.")
     }
@@ -1509,9 +1502,7 @@ class MapViewModel {
 
         do {
             let auth = try await apiService.refreshAuthentication(token: token)
-            UserDefaults.standard.set(auth.token, forKey: "pocketbase_token")
-            UserDefaults.standard.set(auth.record.email, forKey: "logged_in_user_email")
-            UserDefaults.standard.set(auth.record.id, forKey: "logged_in_user_id")
+            AuthSessionStore.shared.save(token: auth.token, userId: auth.record.id, email: auth.record.email)
             pocketbaseToken = auth.token
             currentUserEmail = auth.record.email
             currentUserId = auth.record.id
@@ -1609,9 +1600,7 @@ class MapViewModel {
     func signIn(email: String, password: String) async throws {
         let auth = try await apiService.signIn(email: email, password: password)
         
-        UserDefaults.standard.set(auth.token, forKey: "pocketbase_token")
-        UserDefaults.standard.set(auth.record.email, forKey: "logged_in_user_email")
-        UserDefaults.standard.set(auth.record.id, forKey: "logged_in_user_id")
+        AuthSessionStore.shared.save(token: auth.token, userId: auth.record.id, email: auth.record.email)
         
         // Enable Cloud Sync by default on sign-in
         UserDefaults.standard.set(true, forKey: "cloud_sync_enabled")
@@ -1653,9 +1642,7 @@ class MapViewModel {
             sync.clearUserSyncedData()
         }
         
-        UserDefaults.standard.removeObject(forKey: "pocketbase_token")
-        UserDefaults.standard.removeObject(forKey: "logged_in_user_email")
-        UserDefaults.standard.removeObject(forKey: "logged_in_user_id")
+        AuthSessionStore.shared.clear()
         UserDefaults.standard.removeObject(forKey: "cloud_sync_enabled") // Reset toggle
         UserDefaults.standard.removeObject(forKey: "active_route_tuning_profile_id")
         

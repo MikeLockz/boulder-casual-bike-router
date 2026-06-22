@@ -75,7 +75,7 @@ class NavigationManager: NSObject, @preconcurrency AVSpeechSynthesizerDelegate {
     }
 
     private var isSyncActive: Bool {
-        let hasToken = UserDefaults.standard.string(forKey: "pocketbase_token") != nil
+        let hasToken = AuthSessionStore.shared.isAuthenticated
         let isSyncEnabled = UserDefaults.standard.object(forKey: "cloud_sync_enabled") as? Bool ?? true
         return hasToken && isSyncEnabled
     }
@@ -293,7 +293,7 @@ class NavigationManager: NSObject, @preconcurrency AVSpeechSynthesizerDelegate {
         
         // 2. Save locally to SwiftData
         if let startReq = localStartRequest, let context = modelContext {
-            let currentUserId = UserDefaults.standard.string(forKey: "logged_in_user_id")
+            let currentUserId = AuthSessionStore.shared.userId
             let localRoute = LocalRoute(
                 id: rId,
                 serverId: isSyncActive ? rId : nil,

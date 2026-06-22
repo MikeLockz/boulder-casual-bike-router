@@ -3,8 +3,9 @@
 This plan covers incremental, low-risk improvements for the Boulder Bike Router iOS app. It is based on the current iOS project under `ios/BoulderBikeRouter/` and the latest inspection findings:
 
 - The app build succeeds for the `BoulderBikeRouter` scheme.
-- The test target currently fails to compile because one navigation test calls `@MainActor` APIs from a non-main-actor test method.
-- Several high-risk maintainability/security issues should be fixed in small, separately verified steps.
+- The app and test bundles compile for the `BoulderBikeRouter` scheme.
+- The original `@MainActor` test target compilation issue is fixed.
+- The high-risk maintainability/security issues below have been addressed and verification notes are recorded per phase.
 
 Use the `iPhone 17 Pro` simulator for all simulator builds and tests unless a different simulator is explicitly requested.
 
@@ -54,6 +55,12 @@ Acceptance criteria:
 - Test result is known.
 - Any failing output is tied to a specific file and line when possible.
 
+Verification:
+
+- [x] `git status --short` reviewed before edits.
+- [x] `xcodebuild ... build` initially reached Swift compilation after rerunning outside the sandbox; the first sandboxed run failed before compilation because CoreSimulator was unavailable.
+- [x] Initial full `xcodebuild test` behavior captured: test bundles built, UI test execution later hit simulator runner launch/hang failures rather than Swift compilation errors.
+
 ## Phase 1: Fix Test Target Compilation
 
 Goal: make the test target compile before broader changes.
@@ -84,6 +91,11 @@ Acceptance criteria:
 - Test target compiles.
 - Existing tests run.
 - Any remaining failures are runtime/test assertions, not concurrency compilation errors from this test.
+
+Verification:
+
+- [x] Added `@MainActor` to `navigationManagerProgressesManeuversSequentially()`.
+- [x] `xcodebuild build-for-testing -project ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj -scheme BoulderBikeRouter -destination 'platform=iOS Simulator,name=iPhone 17 Pro'` succeeded, confirming the app, unit test target, and UI test target compile.
 
 ## Phase 2: Remove Hardcoded Local Debug Logging
 
@@ -128,6 +140,12 @@ Acceptance criteria:
 - Build passes.
 - Tests pass or fail only for pre-existing unrelated reasons.
 
+Verification:
+
+- [x] Replaced the hardcoded file-writing debug helper in `MapViewModel.swift` with `Logger` from `OSLog`.
+- [x] `rg '/Users/mbp|debug_log.txt' ios/BoulderBikeRouter/BoulderBikeRouter` returned no matches.
+- [x] `xcodebuild ... build` succeeded for `platform=iOS Simulator,name=iPhone 17 Pro`.
+
 ## Phase 3: Preserve API Error Semantics
 
 Goal: make route/network failures easier to diagnose without broad networking refactors.
@@ -164,6 +182,12 @@ Acceptance criteria:
 
 - Known API errors are not wrapped as decoding errors.
 - Existing successful route flow still works.
+
+Verification:
+
+- [x] `APIService.fetchRoute` now rethrows known `APIError` values before wrapping true decoding failures as `APIError.decodingError`.
+- [x] `xcodebuild ... build` and `xcodebuild build-for-testing ...` both succeeded after the change.
+- [x] Manual simulator route checks were not completed because simulator test/app execution hit a white-screen runner hang; this is recorded separately from compile verification.
 
 ## Phase 4: Move Auth Tokens Out of UserDefaults
 
@@ -217,6 +241,14 @@ Acceptance criteria:
 - Legacy users migrate without losing session state.
 - Logout clears the secure token.
 
+Verification:
+
+- [x] Added `AuthSessionStore` backed by Keychain for PocketBase tokens, including one-time migration from the legacy `UserDefaults` token key and legacy-token removal after migration.
+- [x] Updated `APIService`, `SyncService`, `NavigationManager`, and `MapViewModel` to use `AuthSessionStore` for token reads/writes/clears and authorization headers.
+- [x] `rg 'pocketbase_token|logged_in_user_id' ios/BoulderBikeRouter/BoulderBikeRouter` now finds only the centralized key names inside `CredentialStores.swift`.
+- [x] `xcodebuild ... build` and `xcodebuild build-for-testing ...` succeeded after the secure-session changes.
+- [x] Manual login/restart/logout simulator checks were blocked by the current simulator white-screen/test-runner launch issue; the code path is compile-verified and the remaining risk is runtime validation.
+
 ## Phase 5: Tighten Actor Isolation
 
 Goal: reduce concurrency risk and prepare for stricter Swift concurrency checks.
@@ -257,6 +289,13 @@ Acceptance criteria:
 - Build/test results remain stable.
 - No broad behavior changes are mixed into the actor-isolation patch.
 
+Verification:
+
+- [x] Marked `MapViewModel` as `@MainActor`.
+- [x] Adjusted the `RouteRerouted` notification callback to hop to `MainActor` before mutating `routeResponse`.
+- [x] `xcodebuild ... build` succeeded after actor-isolation changes.
+- [x] `xcodebuild build-for-testing ...` succeeded after actor-isolation changes.
+
 ## Phase 6: Split Oversized Files Mechanically
 
 Goal: reduce file/class size without changing behavior.
@@ -295,6 +334,13 @@ Acceptance criteria:
 - Behavior remains unchanged.
 - Build/tests remain stable after each extraction.
 
+Verification:
+
+- [x] Extracted credential storage responsibilities out of `APIService.swift` into `Services/CredentialStores.swift`, keeping guest credential behavior and moving auth-session storage into the same focused service area.
+- [x] `APIService.swift` is smaller and no longer owns Keychain implementation details.
+- [x] `xcodebuild ... build` succeeded after the extraction.
+- [x] `xcodebuild build-for-testing ...` succeeded after the extraction.
+
 ## Phase 7: Review Deployment Target and Swift Settings
 
 Goal: make project settings match real device support goals.
@@ -328,6 +374,13 @@ Acceptance criteria:
 - Deployment target reflects intended support.
 - Project still builds on the required simulator.
 - Any Swift language mode change is explicitly reviewed.
+
+Verification:
+
+- [x] Lowered `IPHONEOS_DEPLOYMENT_TARGET` from `26.5` to `17.0`, matching the app's SwiftData/Observation-era API floor.
+- [x] Left `SWIFT_VERSION = 5.0` unchanged for separate language-mode review.
+- [x] `rg 'IPHONEOS_DEPLOYMENT_TARGET|SWIFT_VERSION' ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj/project.pbxproj` confirms `IPHONEOS_DEPLOYMENT_TARGET = 17.0` and unchanged Swift settings.
+- [x] `xcodebuild ... build` and `xcodebuild build-for-testing ...` succeeded with the new deployment target.
 
 ## Recommended Patch Order
 

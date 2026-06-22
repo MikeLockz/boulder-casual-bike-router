@@ -48,7 +48,7 @@ struct BoulderBikeRouterTests {
         #expect(WatchNavigationDistanceFormatter.shortDistance(1609.34) == "1.0 mi")
     }
 
-    @Test func navigationManagerProgressesManeuversSequentially() throws {
+    @MainActor @Test func navigationManagerProgressesManeuversSequentially() throws {
         let manager = NavigationManager()
         
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
