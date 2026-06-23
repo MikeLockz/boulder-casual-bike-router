@@ -13,7 +13,7 @@ import networkx as nx
 GRAPH_CACHE_FORMAT_VERSION = 1
 
 # GRAPH_BUILD_VERSION should be bumped whenever the graph building or weighting logic in app.py changes.
-GRAPH_BUILD_VERSION = 2
+GRAPH_BUILD_VERSION = 7
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 GRAPH_CACHE_DIR = os.path.join(BACKEND_DIR, ".graph_cache")
@@ -98,6 +98,7 @@ def make_config_fingerprint(region_id, region_config, weights):
         "name": region_config.get("name"),
         "bbox": region_config.get("bbox"),
         "capabilities": region_config.get("capabilities"),
+        "bike_route_simplification_tolerance_meters": os.environ.get("BIKE_ROUTE_SIMPLIFICATION_TOLERANCE_METERS", "0"),
     }
     payload = {
         "region_id": region_id,

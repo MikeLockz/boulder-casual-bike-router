@@ -111,6 +111,54 @@ class MultiRegionContractTests(unittest.TestCase):
         self.assertIsNone(sync_gis_data.normalize_broomfield_trail(prohibited))
         self.assertIsNone(sync_gis_data.normalize_broomfield_trail(driveway))
 
+    def test_bike_edge_direction_honors_oneway_without_bicycle_exception(self):
+        tags = {
+            "highway": "residential",
+            "name": "Grandview Avenue",
+            "oneway": "yes",
+        }
+        self.assertEqual(router._bike_edge_direction(tags, "residential"), "forward")
+
+    def test_bike_edge_direction_allows_explicit_bicycle_contraflow(self):
+        tags = {
+            "highway": "residential",
+            "oneway": "yes",
+            "cycleway": "opposite_lane",
+        }
+        self.assertEqual(router._bike_edge_direction(tags, "residential"), "both")
+
+    def test_bike_edge_direction_allows_gis_contraflow_facility(self):
+        tags = {
+            "highway": "residential",
+            "oneway": "yes",
+            "cycleway": "shared_lane",
+        }
+        self.assertEqual(router._bike_edge_direction(tags, "residential", "Contra Flow Bike Lane"), "both")
+
+    def test_nearby_contraflow_facility_is_detected(self):
+        nodes = {
+            "a": {"lat": 40.0170, "lon": -105.2782},
+            "b": {"lat": 40.0180, "lon": -105.2786},
+        }
+        index = router.SpatialGridIndex(cell_size=0.001)
+        index.add_segment(
+            40.0170,
+            -105.27825,
+            40.0180,
+            -105.27865,
+            1,
+            {"FACILITYTYPE": "Contra Flow Bike Lane"},
+        )
+        self.assertTrue(
+            router.has_nearby_stress_facility_for_edge(
+                "a", "b", nodes, index, "Contra Flow Bike Lane"
+            )
+        )
+
+    def test_bike_edge_direction_honors_reverse_oneway(self):
+        tags = {"highway": "service", "oneway": "-1"}
+        self.assertEqual(router._bike_edge_direction(tags, "residential"), "reverse")
+
 
 if __name__ == "__main__":
     unittest.main()

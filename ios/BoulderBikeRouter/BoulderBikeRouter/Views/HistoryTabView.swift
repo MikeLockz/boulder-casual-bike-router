@@ -282,12 +282,16 @@ struct RouteHistoryDetailView: View {
                     .stroke(Color.mintGlow, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
             }
 
-            Annotation("Start", coordinate: startCoordinate, anchor: .bottom) {
-                previewMarker(color: .primaryMint)
+            if let startCoordinate {
+                Annotation("Start", coordinate: startCoordinate, anchor: .bottom) {
+                    previewMarker(color: .primaryMint)
+                }
             }
 
-            Annotation("End", coordinate: endCoordinate, anchor: .bottom) {
-                previewMarker(color: .errorRose)
+            if let endCoordinate {
+                Annotation("End", coordinate: endCoordinate, anchor: .bottom) {
+                    previewMarker(color: .errorRose)
+                }
             }
         }
         .frame(height: 170)
@@ -304,47 +308,33 @@ struct RouteHistoryDetailView: View {
         }
     }
 
-    private var startCoordinate: CLLocationCoordinate2D {
-        if viewModel.selectedHistoryRouteDetails?.id == route.id,
-           let firstRecordedCoordinate = viewModel.selectedHistoryRouteDetails?.actualRouteCoordinatePath.first {
-            return firstRecordedCoordinate
-        }
-        return CLLocationCoordinate2D(latitude: route.startLat, longitude: route.startLon)
+    private var recordedCoordinates: [CLLocationCoordinate2D] {
+        guard viewModel.selectedHistoryRouteDetails?.id == route.id else { return [] }
+        return viewModel.selectedHistoryRouteDetails?.actualRouteCoordinatePath ?? []
     }
 
-    private var endCoordinate: CLLocationCoordinate2D {
-        if viewModel.selectedHistoryRouteDetails?.id == route.id,
-           let lastRecordedCoordinate = viewModel.selectedHistoryRouteDetails?.actualRouteCoordinatePath.last {
-            return lastRecordedCoordinate
-        }
-        return CLLocationCoordinate2D(latitude: route.endLat, longitude: route.endLon)
+    private var startCoordinate: CLLocationCoordinate2D? {
+        recordedCoordinates.first
+    }
+
+    private var endCoordinate: CLLocationCoordinate2D? {
+        guard recordedCoordinates.count >= 2 else { return nil }
+        return recordedCoordinates.last
     }
 
     private var previewRouteCoordinates: [[CLLocationCoordinate2D]] {
-        if viewModel.selectedHistoryRouteDetails?.id == route.id,
-           let details = viewModel.selectedHistoryRouteDetails {
-            let actualCoordinates = details.actualRouteCoordinatePath
-            if actualCoordinates.count >= 2 {
-                return [actualCoordinates]
-            }
-
-            let plannedCoordinates = details.plannedRouteCoordinates.filter { $0.count >= 2 }
-            if !plannedCoordinates.isEmpty {
-                return plannedCoordinates
-            }
-        }
-
-        return [[startCoordinate, endCoordinate]]
+        recordedCoordinates.count >= 2 ? [recordedCoordinates] : []
     }
 
     private var previewRegion: MKCoordinateRegion {
-        let coords = previewRouteCoordinates.flatMap { $0 } + [startCoordinate, endCoordinate]
+        let fallbackCoordinate = CLLocationCoordinate2D(latitude: route.startLat, longitude: route.startLon)
+        let coords = recordedCoordinates
         return RouteMapCamera.region(
-            for: coords,
+            for: coords.isEmpty ? [fallbackCoordinate] : coords,
             screenSize: CGSize(width: UIScreen.main.bounds.width - 32, height: 170),
             insets: .previewCard
         ) ?? MKCoordinateRegion(
-            center: startCoordinate,
+            center: coords.first ?? fallbackCoordinate,
             span: MKCoordinateSpan(latitudeDelta: 0.006, longitudeDelta: 0.006)
         )
     }
@@ -373,8 +363,8 @@ struct RouteHistoryDetailView: View {
 
     private var statsGrid: some View {
         HStack(spacing: 10) {
-            statCard(icon: "map", label: "Distance", value: String(format: "%.2f mi", route.distanceMiles))
-            statCard(icon: "timer", label: "Duration", value: formatDuration(route.durationSeconds))
+            statCard(icon: "map", label: "Distance", value: String(format: "%.2f mi", detailDistanceMiles))
+            statCard(icon: "timer", label: "Duration", value: formatDuration(detailDurationSeconds))
             statCard(icon: "speedometer", label: "Speed", value: averageSpeed)
         }
     }
@@ -423,8 +413,32 @@ struct RouteHistoryDetailView: View {
     }
 
     private var averageSpeed: String {
-        guard let metersPerSecond = route.displayedAverageSpeedMetersPerSecond else { return "—" }
+        let metersPerSecond = detailAverageSpeedMetersPerSecond
         return String(format: "%.1f mph", metersPerSecond * 2.23694)
+    }
+
+    private var currentDetails: DetailedRouteResponse? {
+        guard viewModel.selectedHistoryRouteDetails?.id == route.id else { return nil }
+        return viewModel.selectedHistoryRouteDetails
+    }
+
+    private var detailDistanceMeters: Double {
+        currentDetails?.actualDistanceMeters ?? route.displayedDistanceMeters
+    }
+
+    private var detailDistanceMiles: Double {
+        detailDistanceMeters / 1609.34
+    }
+
+    private var detailDurationSeconds: Int {
+        Int((currentDetails?.actualDurationSeconds ?? route.displayedDurationSeconds).rounded())
+    }
+
+    private var detailAverageSpeedMetersPerSecond: Double {
+        if let speed = currentDetails?.averageSpeed {
+            return speed
+        }
+        return route.displayedAverageSpeedMetersPerSecond ?? 0
     }
 
     private var dateFormatter: DateFormatter {

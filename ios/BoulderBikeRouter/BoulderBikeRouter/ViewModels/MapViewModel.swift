@@ -7,6 +7,7 @@ import OSLog
 @MainActor
 @Observable
 class MapViewModel {
+    private static let officialRoutesLayerPreferenceKey = "show_official_bike_routes_layer"
     private let logger = Logger(subsystem: "com.bikingboulder.BoulderBikeRouter", category: "MapViewModel")
 
     // Dynamic configurations loaded from server
@@ -37,6 +38,8 @@ class MapViewModel {
     private var startGeocodeTask: Task<Void, Never>?
     private var endGeocodeTask: Task<Void, Never>?
     @ObservationIgnored private var sessionRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var bikeRouteOverlayLoadTask: Task<Void, Never>?
+    private var loadedBikeRouteOverlayRegion: String?
 
     // Map markers and route state
     var startLocation: CLLocationCoordinate2D?
@@ -53,8 +56,8 @@ class MapViewModel {
     var selectedStartName: String?
     var selectedDestinationName: String?
     var playgroundsList: [Playground] = []
-    var showOfficialRoutesLayer: Bool = UserDefaults.standard.bool(forKey: "show_official_bike_routes_layer")
-    var bikeRouteOverlays: [BikeRouteOverlay] = []
+    var showOfficialRoutesLayer: Bool = UserDefaults.standard.bool(forKey: officialRoutesLayerPreferenceKey)
+    var bikeRouteOverlays: [BikeRouteOverlayGroup] = []
     var isLoadingBikeRouteOverlays: Bool = false
     var bikeRouteOverlayError: String?
 
@@ -86,6 +89,7 @@ class MapViewModel {
                     }
                     await loadRouteTuningProfiles()
                     await loadHomeLocation()
+                    await loadMapLayerSettings()
                     await loadHistory()
                 }
             }
@@ -185,6 +189,7 @@ class MapViewModel {
                 }
                 await self.loadRouteTuningProfiles()
                 await self.loadHomeLocation()
+                await self.loadMapLayerSettings()
                 await self.loadHistory()
             }
         }
@@ -253,46 +258,112 @@ class MapViewModel {
         routeResponse = nil
         selectedPresetName = nil
         selectedPlayground = nil
+        bikeRouteOverlayLoadTask?.cancel()
+        loadedBikeRouteOverlayRegion = nil
         bikeRouteOverlays = []
         bikeRouteOverlayError = nil
         startPlaceSuggestions = []
         endPlaceSuggestions = []
         routingError = nil
         applyActiveRegionResources()
-        Task { await reloadRegionResources() }
+        Task {
+            await reloadRegionResources()
+            if showOfficialRoutesLayer {
+                await loadBikeRouteOverlays()
+            }
+        }
     }
 
     func setOfficialRoutesLayerEnabled(_ enabled: Bool) {
+        guard showOfficialRoutesLayer != enabled else { return }
+        applyOfficialRoutesLayerPreference(enabled)
+        persistMapLayerSettingsIfAuthenticated(showOfficialBikeRoutes: enabled)
+    }
+
+    private func applyOfficialRoutesLayerPreference(_ enabled: Bool) {
         showOfficialRoutesLayer = enabled
-        UserDefaults.standard.set(enabled, forKey: "show_official_bike_routes_layer")
+        UserDefaults.standard.set(enabled, forKey: Self.officialRoutesLayerPreferenceKey)
         if !enabled {
             bikeRouteOverlayError = nil
+            return
+        }
+
+        Task {
+            await loadBikeRouteOverlays()
+        }
+    }
+
+    private func persistMapLayerSettingsIfAuthenticated(showOfficialBikeRoutes: Bool) {
+        guard isUserLoggedIn else { return }
+        Task {
+            do {
+                _ = try await apiService.saveMapLayerSettings(showOfficialBikeRoutes: showOfficialBikeRoutes)
+            } catch APIError.unauthorized {
+                await MainActor.run {
+                    self.expireAuthenticationSession()
+                }
+            } catch {
+                await MainActor.run {
+                    self.bikeRouteOverlayError = "Could not save map layer setting: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
     func loadBikeRouteOverlays() async {
-        guard showOfficialRoutesLayer else { return }
+        await loadBikeRouteOverlays(requireVisible: true)
+    }
+
+    private func loadBikeRouteOverlays(requireVisible: Bool) async {
+        if requireVisible {
+            guard showOfficialRoutesLayer else { return }
+        }
         let requestedRegion = activeRegionId
-        await MainActor.run {
-            isLoadingBikeRouteOverlays = true
-            bikeRouteOverlayError = nil
+        if loadedBikeRouteOverlayRegion == requestedRegion, !bikeRouteOverlays.isEmpty {
+            return
+        }
+        if isLoadingBikeRouteOverlays {
+            return
         }
 
-        do {
-            let overlays = try await apiService.fetchBikeRoutes(region: requestedRegion)
-            await MainActor.run {
-                guard activeRegionId == requestedRegion, showOfficialRoutesLayer else { return }
-                bikeRouteOverlays = overlays
-                isLoadingBikeRouteOverlays = false
-            }
-        } catch {
-            await MainActor.run {
-                guard activeRegionId == requestedRegion, showOfficialRoutesLayer else { return }
-                bikeRouteOverlays = []
-                isLoadingBikeRouteOverlays = false
-                bikeRouteOverlayError = error.localizedDescription
+        isLoadingBikeRouteOverlays = true
+        bikeRouteOverlayError = nil
+        bikeRouteOverlayLoadTask?.cancel()
+
+        let task = Task { [apiService] in
+            do {
+                let overlays = try await apiService.fetchBikeRoutes(region: requestedRegion)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard activeRegionId == requestedRegion else { return }
+                    guard !requireVisible || showOfficialRoutesLayer else { return }
+                    bikeRouteOverlays = overlays
+                    loadedBikeRouteOverlayRegion = requestedRegion
+                    isLoadingBikeRouteOverlays = false
+                    bikeRouteOverlayLoadTask = nil
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard activeRegionId == requestedRegion else { return }
+                    isLoadingBikeRouteOverlays = false
+                    bikeRouteOverlayLoadTask = nil
+                }
+            } catch {
+                await MainActor.run {
+                    guard activeRegionId == requestedRegion else { return }
+                    bikeRouteOverlays = []
+                    loadedBikeRouteOverlayRegion = nil
+                    isLoadingBikeRouteOverlays = false
+                    bikeRouteOverlayLoadTask = nil
+                    if requireVisible && showOfficialRoutesLayer {
+                        bikeRouteOverlayError = error.localizedDescription
+                    }
+                }
             }
         }
+
+        bikeRouteOverlayLoadTask = task
+        await task.value
     }
 
     private func applyActiveRegionResources() {
@@ -678,6 +749,29 @@ class MapViewModel {
         } catch {
             await MainActor.run {
                 self.homeLocationError = error.localizedDescription
+            }
+        }
+    }
+
+    func loadMapLayerSettings() async {
+        guard isUserLoggedIn else { return }
+
+        do {
+            if let settings = try await apiService.fetchMapLayerSettings() {
+                await MainActor.run {
+                    self.applyOfficialRoutesLayerPreference(settings.showOfficialBikeRoutes)
+                    self.bikeRouteOverlayError = nil
+                }
+            } else {
+                _ = try await apiService.saveMapLayerSettings(showOfficialBikeRoutes: showOfficialRoutesLayer)
+            }
+        } catch APIError.unauthorized {
+            await MainActor.run {
+                self.expireAuthenticationSession()
+            }
+        } catch {
+            await MainActor.run {
+                self.bikeRouteOverlayError = "Could not load map layer setting: \(error.localizedDescription)"
             }
         }
     }
@@ -1621,6 +1715,7 @@ class MapViewModel {
         // Reload telemetry history for the logged-in user
         await loadRouteTuningProfiles()
         await loadHomeLocation()
+        await loadMapLayerSettings()
         await loadHistory()
     }
     

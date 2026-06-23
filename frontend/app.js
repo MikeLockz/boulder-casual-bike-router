@@ -25,6 +25,7 @@ let allCrossings = [];
 let activeCrossingMarkers = [];
 let bikeRoutesLayer = null;
 let cachedBikeRoutesGeoJSON = null;
+let cachedBikeRoutesDetail = null;
 let debugModeEnabled = false;
 let inspectModeActive = false;
 let inspectHighlightLayer = null;
@@ -44,6 +45,7 @@ let currentRouteTitle = "Custom Route";
 const ANALYTICS_SESSION_KEY = "boulder_analytics_session_id";
 const GUEST_INSTALLATION_ID_KEY = "boulder_guest_installation_id";
 const GUEST_TOKEN_KEY = "boulder_guest_token";
+const OFFICIAL_ROUTES_LAYER_KEY = "show_official_bike_routes_layer";
 let analyticsSessionId = localStorage.getItem(ANALYTICS_SESSION_KEY);
 if (!analyticsSessionId) {
     analyticsSessionId = (window.crypto?.randomUUID && window.crypto.randomUUID()) || `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -130,14 +132,28 @@ function summarizeRouteSegments(segments = []) {
 }
 
 const OFFICIAL_ROUTE_COLORS = {
+    paths: "#00e676",
+    protected: "#00e5ff",
+    lanes: "#2979ff",
+    designated: "#b388ff",
+    other: "#90a4ae",
     "Multi-Use Path": "#00e676",
     "Bike Park Path": "#00e676",
+    "Soft Surface Trail": "#00e676",
     "Protected Bike Lane": "#00e5ff",
     "Separated Bike Lane": "#00e5ff",
     "Contra Flow Bike Lane": "#00e5ff",
     "On-Street Bike Lane": "#2979ff",
     "Designated Bike Route": "#b388ff",
     "Bikeable Shoulder": "#90a4ae"
+};
+
+const OFFICIAL_ROUTE_CATEGORY_WEIGHTS = {
+    paths: 4.5,
+    protected: 4,
+    lanes: 3.5,
+    designated: 3.5,
+    other: 3
 };
 
 // Infrastructure type to color mapping
@@ -232,7 +248,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     initializeHistoryDetailControls();
     loadCrossings();
     loadPlaygrounds();
-    initAuth();
+    await initAuth();
     updateLocateButtonVisuals();
 });
 
@@ -2235,6 +2251,7 @@ function switchRegion(regionId, { manual = false } = {}) {
     }
     bikeRoutesLayer = null;
     cachedBikeRoutesGeoJSON = null;
+    cachedBikeRoutesDetail = null;
     
     const officialRoutesToggle = document.getElementById("toggle-official-routes");
     if (officialRoutesToggle && officialRoutesToggle.checked) {
@@ -2886,23 +2903,56 @@ function createCrossingIcon(type) {
 
 // Toggle logic for the official bike routes layer
 async function handleOfficialRoutesToggle(e) {
-    const isChecked = e.target.checked;
+    await applyOfficialRoutesPreference(e.target.checked);
+}
+
+function getOfficialRoutesPreference() {
+    return localStorage.getItem(OFFICIAL_ROUTES_LAYER_KEY) === "true";
+}
+
+async function applyOfficialRoutesPreference(isChecked, options = {}) {
+    const { persistRemote = true } = options;
+    localStorage.setItem(OFFICIAL_ROUTES_LAYER_KEY, isChecked ? "true" : "false");
+
+    const toggle = document.getElementById("toggle-official-routes");
+    if (toggle) toggle.checked = isChecked;
+
     const legend = document.getElementById("layer-legend-routes");
-    
+
     if (isChecked) {
         if (legend) legend.classList.remove("hidden");
-        await showOfficialRoutes();
+        const shown = await showOfficialRoutes();
+        if (!shown) {
+            isChecked = false;
+            localStorage.setItem(OFFICIAL_ROUTES_LAYER_KEY, "false");
+            if (toggle) toggle.checked = false;
+            if (legend) legend.classList.add("hidden");
+        }
     } else {
         if (legend) legend.classList.add("hidden");
         hideOfficialRoutes();
+    }
+
+    if (persistRemote) {
+        await saveMapLayerSettings(isChecked);
     }
 }
 
 // Fetch and draw official bike routes
 async function showOfficialRoutes() {
-    if (bikeRoutesLayer) {
+    const requestedDetail = debugModeEnabled ? "full" : "display";
+
+    if (bikeRoutesLayer && cachedBikeRoutesDetail === requestedDetail) {
         map.addLayer(bikeRoutesLayer);
-        return;
+        return true;
+    }
+
+    if (cachedBikeRoutesDetail !== requestedDetail) {
+        if (bikeRoutesLayer && map.hasLayer(bikeRoutesLayer)) {
+            map.removeLayer(bikeRoutesLayer);
+        }
+        bikeRoutesLayer = null;
+        cachedBikeRoutesGeoJSON = null;
     }
     
     // If not cached, fetch from API
@@ -2910,11 +2960,16 @@ async function showOfficialRoutes() {
         const generation = regionSwitchGeneration;
         const regionId = activeRegionId;
         try {
-            console.log("Fetching official bike routes GeoJSON...");
-            const response = await fetch(`${API_BASE}/api/bike-routes?region=${regionId}`);
+            const params = new URLSearchParams({ region: regionId });
+            if (requestedDetail === "full") {
+                params.set("detail", "full");
+            }
+            console.log(`Fetching official bike routes GeoJSON (${requestedDetail})...`);
+            const response = await fetch(`${API_BASE}/api/bike-routes?${params.toString()}`);
             const geojson = await response.json();
-            if (generation !== regionSwitchGeneration || regionId !== activeRegionId) return;
+            if (generation !== regionSwitchGeneration || regionId !== activeRegionId) return false;
             cachedBikeRoutesGeoJSON = geojson;
+            cachedBikeRoutesDetail = requestedDetail;
         } catch (err) {
             console.error("Failed to fetch official bike routes:", err);
             alert("Failed to load official bike routes layer from backend.");
@@ -2923,21 +2978,20 @@ async function showOfficialRoutes() {
             if (toggle) toggle.checked = false;
             const legend = document.getElementById("layer-legend-routes");
             if (legend) legend.classList.add("hidden");
-            return;
+            return false;
         }
     }
     
     // Draw GeoJSON layer
     bikeRoutesLayer = L.geoJSON(cachedBikeRoutesGeoJSON, {
         style: function (feature) {
-            const type = feature.properties.FACILITYTYPE;
-            const color = OFFICIAL_ROUTE_COLORS[type] || "#b0bec5";
-            let weight = 3.5;
-            
-            // Paths get slightly thicker lines
-            if (type === "Multi-Use Path" || type === "Bike Park Path") {
-                weight = 4.5;
-            }
+            const props = feature.properties || {};
+            const routeCategory = props.route_category;
+            const type = props.FACILITYTYPE;
+            const styleKey = routeCategory || type;
+            const color = OFFICIAL_ROUTE_COLORS[styleKey] || "#b0bec5";
+            const weight = OFFICIAL_ROUTE_CATEGORY_WEIGHTS[routeCategory]
+                || ((type === "Multi-Use Path" || type === "Bike Park Path" || type === "Soft Surface Trail") ? 4.5 : 3.5);
             
             return {
                 color: color,
@@ -2949,28 +3003,32 @@ async function showOfficialRoutes() {
             };
         },
         onEachFeature: function (feature, layer) {
-            const props = feature.properties;
-            const cleanType = props.FACILITYTYPE.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-            
-            layer.bindTooltip(`
-                <strong>${props.name}</strong><br>
-                Designation: ${cleanType}
-            `, {
-                sticky: true,
-                opacity: 0.9
-            });
+            const props = feature.properties || {};
+            const routeCategory = props.route_category;
+            const type = props.FACILITYTYPE;
+            const baseWeight = OFFICIAL_ROUTE_CATEGORY_WEIGHTS[routeCategory]
+                || ((type === "Multi-Use Path" || type === "Bike Park Path" || type === "Soft Surface Trail") ? 4.5 : 3.5);
+
+            if (requestedDetail === "full" && props.FACILITYTYPE) {
+                const cleanType = props.FACILITYTYPE.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                layer.bindTooltip(`
+                    <strong>${props.name || "Official Bike Route"}</strong><br>
+                    Designation: ${cleanType}
+                `, {
+                    sticky: true,
+                    opacity: 0.9
+                });
+            }
             
             // Hover effect
             layer.on("mouseover", function () {
                 layer.setStyle({
-                    weight: (props.FACILITYTYPE === "Multi-Use Path" || props.FACILITYTYPE === "Bike Park Path") ? 6.5 : 5.5,
+                    weight: baseWeight + 2,
                     opacity: 1.0
                 });
             });
             
             layer.on("mouseout", function () {
-                const type = props.FACILITYTYPE;
-                const baseWeight = (type === "Multi-Use Path" || type === "Bike Park Path") ? 4.5 : 3.5;
                 layer.setStyle({
                     weight: baseWeight,
                     opacity: 0.75
@@ -2981,6 +3039,7 @@ async function showOfficialRoutes() {
     
     // Add to map
     bikeRoutesLayer.addTo(map);
+    return true;
 }
 
 // Remove official bike routes from map
@@ -3256,6 +3315,7 @@ async function initAuth() {
     updateAuthUI();
     initAuthEventListeners();
     await loadHomeLocation();
+    await loadMapLayerSettings();
 }
 
 async function detectPocketBaseUrl() {
@@ -3548,6 +3608,7 @@ async function performLogin(email, password) {
     await syncPendingRouteTuningProfiles();
     await loadRouteTuningProfiles();
     await loadHomeLocation();
+    await loadMapLayerSettings();
 }
 
 function parsePocketBaseError(data) {
@@ -3623,6 +3684,63 @@ function renderHomeLocation() {
     }
     if (routeFromHomeBtn) {
         routeFromHomeBtn.classList.toggle("active", Boolean(homeLocation));
+    }
+}
+
+async function loadMapLayerSettings() {
+    if (!currentUser) {
+        await applyOfficialRoutesPreference(getOfficialRoutesPreference(), { persistRemote: false });
+        return;
+    }
+
+    const token = getAuthToken();
+    if (!token) {
+        await applyOfficialRoutesPreference(getOfficialRoutesPreference(), { persistRemote: false });
+        return;
+    }
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/map-layers`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        if (!resp.ok) {
+            throw new Error("Failed to load map layer settings.");
+        }
+        const data = await resp.json();
+        if (data.map_layers) {
+            await applyOfficialRoutesPreference(Boolean(data.map_layers.show_official_bike_routes), { persistRemote: false });
+        } else {
+            const localPreference = getOfficialRoutesPreference();
+            await applyOfficialRoutesPreference(localPreference, { persistRemote: false });
+            await saveMapLayerSettings(localPreference);
+        }
+    } catch (err) {
+        console.warn("[Settings] Failed to load map layer settings:", err);
+        await applyOfficialRoutesPreference(getOfficialRoutesPreference(), { persistRemote: false });
+    }
+}
+
+async function saveMapLayerSettings(showOfficialBikeRoutes) {
+    if (!currentUser) return;
+    const token = getAuthToken();
+    if (!token) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/settings/map-layers`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({ show_official_bike_routes: Boolean(showOfficialBikeRoutes) })
+        });
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            throw new Error(data.error || "Failed to save map layer settings.");
+        }
+    } catch (err) {
+        console.warn("[Settings] Failed to save map layer settings:", err);
+        showToast("Could not save map layer setting.");
     }
 }
 
@@ -4165,21 +4283,17 @@ function getPositiveNumber(value) {
 }
 
 function getHistoryDisplayDistanceMeters(route) {
-    return getPositiveNumber(route.display_distance_meters)
-        ?? getPositiveNumber(route.actual_distance_meters)
-        ?? getPositiveNumber(route.total_length_meters)
+    return getPositiveNumber(route.actual_distance_meters)
         ?? 0;
 }
 
 function getHistoryDisplayDurationSeconds(route) {
-    return getPositiveNumber(route.display_duration_seconds)
-        ?? getPositiveNumber(route.actual_duration_seconds)
-        ?? getPositiveNumber(route.total_estimated_time_seconds)
+    return getPositiveNumber(route.actual_duration_seconds)
         ?? 0;
 }
 
 function getHistoryDisplayAverageSpeedMps(route) {
-    return getPositiveNumber(route.display_average_speed)
+    return getPositiveNumber(route.average_speed)
         ?? (getHistoryDisplayDurationSeconds(route) > 0
             ? getHistoryDisplayDistanceMeters(route) / getHistoryDisplayDurationSeconds(route)
             : 0);
@@ -4698,14 +4812,6 @@ function getHistoryPreviewPaths(route) {
         .map(tick => [Number(tick.lat), Number(tick.lon)]);
     if (tickPath.length >= 2) return [tickPath];
 
-    const geoJsonPaths = collectGeoJsonLinePaths(route?.route_geojson);
-    if (geoJsonPaths.length) return geoJsonPaths;
-
-    if (Number.isFinite(Number(route?.start_lat)) && Number.isFinite(Number(route?.start_lon)) &&
-        Number.isFinite(Number(route?.end_lat)) && Number.isFinite(Number(route?.end_lon))) {
-        return [[[Number(route.start_lat), Number(route.start_lon)], [Number(route.end_lat), Number(route.end_lon)]]];
-    }
-
     return [];
 }
 
@@ -4759,9 +4865,18 @@ async function renderHistoryMapPreview(route) {
             .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
             .filter(tick => Number.isFinite(Number(tick.lat)) && Number.isFinite(Number(tick.lon)))
             .map(tick => [Number(tick.lat), Number(tick.lon)]);
-        const startLatLng = recordedPath[0] || [Number(detailRoute.start_lat), Number(detailRoute.start_lon)];
-        const endLatLng = recordedPath.at(-1) || [Number(detailRoute.end_lat), Number(detailRoute.end_lon)];
-        if (startLatLng.every(Number.isFinite)) {
+        const startLatLng = recordedPath[0];
+        const endLatLng = recordedPath.at(-1);
+        if (recordedPath.length === 1 && startLatLng.every(Number.isFinite)) {
+            historyPreviewLayers.push(L.circleMarker(startLatLng, {
+                radius: 6,
+                color: "#ffffff",
+                weight: 2,
+                fillColor: "#64ffda",
+                fillOpacity: 1,
+                interactive: false
+            }).addTo(historyPreviewMap));
+        } else if (recordedPath.length >= 2 && startLatLng.every(Number.isFinite)) {
             historyPreviewLayers.push(L.circleMarker(startLatLng, {
                 radius: 6,
                 color: "#ffffff",
@@ -4771,7 +4886,7 @@ async function renderHistoryMapPreview(route) {
                 interactive: false
             }).addTo(historyPreviewMap));
         }
-        if (endLatLng.every(Number.isFinite)) {
+        if (recordedPath.length >= 2 && endLatLng.every(Number.isFinite)) {
             historyPreviewLayers.push(L.circleMarker(endLatLng, {
                 radius: 6,
                 color: "#ffffff",
@@ -4782,7 +4897,7 @@ async function renderHistoryMapPreview(route) {
             }).addTo(historyPreviewMap));
         }
 
-        const boundsPoints = paths.flat().concat([startLatLng, endLatLng].filter(point => point.every(Number.isFinite)));
+        const boundsPoints = paths.flat().concat(recordedPath.filter(point => point.every(Number.isFinite)));
         if (boundsPoints.length) {
             historyPreviewMap.fitBounds(L.latLngBounds(boundsPoints), { padding: [20, 20], animate: false });
         } else {
@@ -4839,35 +4954,21 @@ async function loadHistoryRouteOnMap(routeId) {
             .filter(tick => Number.isFinite(Number(tick.lat)) && Number.isFinite(Number(tick.lon)))
             .map(tick => [Number(tick.lat), Number(tick.lon)]);
 
-        if (tickCoords.length < 2 && route.route_geojson) {
-            const geojsonLayer = L.geoJSON(route.route_geojson, {
-                style: function (feature) {
-                    return {
-                        color: "#94a3b8",
-                        weight: 4,
-                        opacity: 0.6,
-                        dashArray: "6, 6"
-                    };
-                }
-            }).addTo(map);
-            historyPolylines.push(geojsonLayer);
-        }
-        
         const startIcon = createCustomIcon("green");
         const endIcon = createCustomIcon("red");
-        
-        const startMarkerLoc = L.marker([route.start_lat, route.start_lon], { icon: startIcon, interactive: true })
-            .bindPopup(`<strong>Start point:</strong> ${route.start_point_name}`)
-            .addTo(map);
-        historyMarkers.push(startMarkerLoc);
-        
-        const endMarkerLoc = L.marker([route.end_lat, route.end_lon], { icon: endIcon, interactive: true })
-            .bindPopup(`<strong>Destination:</strong> ${route.end_point_name}`)
-            .addTo(map);
-        historyMarkers.push(endMarkerLoc);
-        
+
         if (tickCoords.length > 0) {
             if (tickCoords.length >= 2) {
+                const startMarkerLoc = L.marker(tickCoords[0], { icon: startIcon, interactive: true })
+                    .bindPopup(`<strong>Recorded start:</strong> ${tickCoords[0][0].toFixed(5)}, ${tickCoords[0][1].toFixed(5)}`)
+                    .addTo(map);
+                historyMarkers.push(startMarkerLoc);
+
+                const endMarkerLoc = L.marker(tickCoords.at(-1), { icon: endIcon, interactive: true })
+                    .bindPopup(`<strong>Recorded end:</strong> ${tickCoords.at(-1)[0].toFixed(5)}, ${tickCoords.at(-1)[1].toFixed(5)}`)
+                    .addTo(map);
+                historyMarkers.push(endMarkerLoc);
+
                 const tickLine = L.polyline(tickCoords, {
                     color: "#f97316",
                     weight: 5,
@@ -4885,24 +4986,19 @@ async function loadHistoryRouteOnMap(routeId) {
                 historyMarkers.push(dotMarker);
             }
 
-            const bounds = L.latLngBounds(tickCoords.concat([[route.start_lat, route.start_lon], [route.end_lat, route.end_lon]]));
+            const bounds = L.latLngBounds(tickCoords);
             map.fitBounds(bounds, { padding: [40, 40] });
         } else {
-            const bounds = L.latLngBounds([[route.start_lat, route.start_lon], [route.end_lat, route.end_lon]]);
-            map.fitBounds(bounds, { padding: [40, 40] });
+            map.setView(BOULDER_CO, ZOOM_LEVEL);
         }
         
         const distanceMiles = (getHistoryDisplayDistanceMeters(route) / 1609.34).toFixed(2);
-        const estimatedMiles = (route.total_length_meters / 1609.34).toFixed(2);
-        
         const duration = formatHistoryDuration(getHistoryDisplayDurationSeconds(route));
-        const estimatedMin = Math.ceil(route.total_estimated_time_seconds / 60);
-        
         const avgSpeedMph = (getHistoryDisplayAverageSpeedMps(route) * 2.23694).toFixed(1);
         
         document.getElementById("info-distance").innerHTML = `
-            <strong>Actual:</strong> ${distanceMiles} mi <span style="font-size:11px; color:var(--text-secondary);">(Est: ${estimatedMiles} mi)</span><br>
-            <strong>Duration:</strong> ${duration} <span style="font-size:11px; color:var(--text-secondary);">(Est: ${estimatedMin} min)</span><br>
+            <strong>Actual:</strong> ${distanceMiles} mi<br>
+            <strong>Duration:</strong> ${duration}<br>
             <strong>Avg Speed:</strong> ${avgSpeedMph} mph
         `;
         

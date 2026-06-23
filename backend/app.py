@@ -268,13 +268,6 @@ def calculate_tick_distance_meters(ticks):
     return filtered_navigation_tick_summary(ticks).get("distance_meters", 0.0)
 
 def calculate_route_duration_seconds(route, ended_at=None, ticks=None):
-    start_time = parse_navigation_date(route.get("started_at"))
-    end_time = parse_navigation_date(ended_at or route.get("ended_at"))
-    if start_time and end_time:
-        duration = (end_time - start_time).total_seconds()
-        if duration > 0:
-            return duration
-
     sorted_ticks = sorted_navigation_ticks(ticks or [])
     if len(sorted_ticks) >= 2:
         first_tick = parse_navigation_date(sorted_ticks[0].get("timestamp"))
@@ -297,29 +290,12 @@ def calculate_navigation_metrics(route, ticks=None, ended_at=None, status=None):
             effective_ended_at = tick_summary["idle_cutoff_at"].isoformat().replace("+00:00", "Z")
     actual_duration = calculate_route_duration_seconds(route, ended_at=effective_ended_at or ended_at, ticks=tick_summary["ticks"])
 
-    total_length = float(route.get("total_length_meters") or 0.0)
-    total_duration = float(route.get("total_estimated_time_seconds") or 0.0)
-    route_status = status or route.get("status")
-
-    if route_status == "completed" and total_length > 0 and actual_distance < total_length * 0.25:
-        actual_distance = total_length
-
     average_speed = actual_distance / actual_duration if actual_duration > 0 else 0.0
 
     stored_actual_distance = float(route.get("actual_distance_meters") or 0.0)
     stored_actual_duration = float(route.get("actual_duration_seconds") or 0.0)
-    display_distance = actual_distance if actual_distance > 0 else (stored_actual_distance if stored_actual_distance > 0 else total_length)
-    display_duration = actual_duration if actual_duration > 0 else (stored_actual_duration if stored_actual_duration > 0 else total_duration)
-    if (
-        display_distance > 500
-        and total_duration > 0
-        and (
-            display_duration <= 0
-            or display_duration < 60
-            or (display_distance / display_duration) > 15.0
-        )
-    ):
-        display_duration = total_duration
+    display_distance = actual_distance if actual_distance > 0 else stored_actual_distance
+    display_duration = actual_duration if actual_duration > 0 else stored_actual_duration
     display_average_speed = display_distance / display_duration if display_duration > 0 else 0.0
 
     return {
@@ -338,29 +314,23 @@ def navigation_metrics_payload(metrics):
 def route_with_display_metrics(route):
     route_copy = dict(route)
     route_copy.pop("guest_owner_hash", None)
-    display_distance = route_copy.get("display_distance_meters")
-    if not display_distance or float(display_distance or 0) <= 0:
-        display_distance = route_copy.get("actual_distance_meters") or route_copy.get("total_length_meters") or 0.0
 
-    display_duration = route_copy.get("display_duration_seconds")
-    if not display_duration or float(display_duration or 0) <= 0:
-        display_duration = route_copy.get("actual_duration_seconds") or route_copy.get("total_estimated_time_seconds") or 0.0
-
-    display_average_speed = route_copy.get("display_average_speed")
-    total_duration = float(route_copy.get("total_estimated_time_seconds") or 0.0)
-    if (
-        float(display_distance or 0.0) > 500
-        and total_duration > 0
-        and (
-            float(display_duration or 0.0) <= 0
-            or float(display_duration or 0.0) < 60
-            or (float(display_distance or 0.0) / float(display_duration or 1.0)) > 15.0
+    if isinstance(route_copy.get("ticks"), list):
+        metrics = navigation_metrics_payload(
+            calculate_navigation_metrics(
+                route_copy,
+                ticks=route_copy.get("ticks") or [],
+                ended_at=route_copy.get("ended_at"),
+                status=route_copy.get("status")
+            )
         )
-    ):
-        display_duration = total_duration
-        display_average_speed = float(display_distance or 0.0) / total_duration
-    if display_average_speed is None:
-        display_average_speed = float(display_distance or 0.0) / float(display_duration or 0.0) if float(display_duration or 0.0) > 0 else 0.0
+        route_copy.update(metrics)
+
+    display_distance = float(route_copy.get("actual_distance_meters") or 0.0)
+    display_duration = float(route_copy.get("actual_duration_seconds") or 0.0)
+    display_average_speed = float(route_copy.get("average_speed") or 0.0)
+    if display_average_speed <= 0 and display_duration > 0:
+        display_average_speed = display_distance / display_duration
 
     route_copy["display_distance_meters"] = display_distance
     route_copy["display_duration_seconds"] = display_duration
@@ -806,6 +776,40 @@ def match_stress_for_edge(u, v, nodes, spatial_index):
         return stress, facility
     return "None", "None"
 
+
+def has_nearby_stress_facility_for_edge(u, v, nodes, spatial_index, facility_type, max_dist_meters=15.0, bearing_tolerance=30.0):
+    """Return True when any nearby parallel stress feature has the requested facility type."""
+    if not spatial_index or u not in nodes or v not in nodes:
+        return False
+
+    lat_u, lon_u = nodes[u]["lat"], nodes[u]["lon"]
+    lat_v, lon_v = nodes[v]["lat"], nodes[v]["lon"]
+    midpoint = ((lat_u + lat_v) / 2.0, (lon_u + lon_v) / 2.0)
+    osm_bearing = get_segment_bearing(lat_u, lon_u, lat_v, lon_v)
+    cell_x, cell_y = spatial_index._get_cell(midpoint[0], midpoint[1])
+    checked_segments = set()
+
+    for dx in [-1, 0, 1]:
+        for dy in [-1, 0, 1]:
+            for lat1, lon1, lat2, lon2, feat_idx, props, gis_bearing in spatial_index.grid.get((cell_x + dx, cell_y + dy), []):
+                if props.get("FACILITYTYPE") != facility_type:
+                    continue
+
+                seg_key = (lat1, lon1, lat2, lon2, feat_idx)
+                if seg_key in checked_segments:
+                    continue
+                checked_segments.add(seg_key)
+
+                if bearing_difference_undirected(osm_bearing, gis_bearing) > bearing_tolerance:
+                    continue
+
+                dist = point_to_segment_distance(midpoint, (lat1, lon1), (lat2, lon2))
+                if dist <= max_dist_meters:
+                    return True
+
+    return False
+
+
 def match_offstreet_for_edge(u, v, nodes, spatial_index):
     if not spatial_index or u not in nodes or v not in nodes:
         return "None", "Yes", "Yes"
@@ -839,17 +843,49 @@ def match_offstreet_for_edge(u, v, nodes, spatial_index):
     return "None", "Yes", "Yes"
 
 
-def _bike_edge_direction(tags, infra_type):
+def _bike_edge_direction(tags, infra_type, facility_type="None"):
     """
     Determines valid travel direction(s) for a bike on this OSM way.
     Returns: "both" | "forward" | "reverse"
     """
-    oneway = tags.get("oneway", "")
-    bike_oneway = tags.get("oneway:bicycle", "")
+    def tag_value(key):
+        return str(tags.get(key, "") or "").strip().lower()
 
-    # Dedicated bike infrastructure is bidirectional unless explicitly one-way for bikes.
-    if infra_type == "separated_path":
-        return "forward" if bike_oneway == "yes" else "both"
+    def is_no(value):
+        return value in {"no", "0", "false"}
+
+    def is_yes(value):
+        return value in {"yes", "1", "true"}
+
+    oneway = tag_value("oneway")
+    bike_oneway = tag_value("oneway:bicycle") or tag_value("bicycle:oneway")
+    facility_type = facility_type or "None"
+
+    # OSM contraflow tags explicitly permit bicycle travel against a motor-vehicle one-way.
+    cycleway_values = {
+        tag_value("cycleway"),
+        tag_value("cycleway:left"),
+        tag_value("cycleway:right"),
+        tag_value("cycleway:both"),
+    }
+    has_contraflow = any(value in {"opposite", "opposite_lane", "opposite_track", "opposite_share_busway"} for value in cycleway_values)
+    has_contraflow = has_contraflow or tag_value("cycleway:oneway") == "no"
+    has_contraflow = has_contraflow or tag_value("cycleway:left:oneway") == "no"
+    has_contraflow = has_contraflow or tag_value("cycleway:right:oneway") == "no"
+    has_contraflow = has_contraflow or tag_value("cycleway:both:oneway") == "no"
+    has_contraflow = has_contraflow or tag_value("bicycle:backward") in {"yes", "designated", "permissive"}
+
+    if facility_type == "Contra Flow Bike Lane" or is_no(bike_oneway) or has_contraflow:
+        return "both"
+    if bike_oneway == "-1":
+        return "reverse"
+    if is_yes(bike_oneway):
+        return "forward"
+
+    if oneway == "-1":
+        return "reverse"
+    if is_yes(oneway):
+        return "forward"
 
     return "both"
 
@@ -1070,6 +1106,12 @@ def build_graph(region_id="boulder", weights=None):
                             
                             dist = haversine_distance((nodes[u]["lat"], nodes[u]["lon"]), (nodes[v]["lat"], nodes[v]["lon"]))
                             stress_level, facility_type = match_stress_for_edge(u, v, nodes, spatial_index)
+                            if (
+                                facility_type != "Contra Flow Bike Lane"
+                                and tags.get("oneway") in {"yes", "1", "true"}
+                                and has_nearby_stress_facility_for_edge(u, v, nodes, spatial_index, "Contra Flow Bike Lane")
+                            ):
+                                facility_type = "Contra Flow Bike Lane"
                             offstreet_type, bicycles_allowed, ebike_allowed = match_offstreet_for_edge(u, v, nodes, offstreet_spatial_index)
                             
                             # Apply Boulder GIS facility type bonus on top of base multiplier
@@ -1086,7 +1128,7 @@ def build_graph(region_id="boulder", weights=None):
                                 edge_multiplier = multiplier * FACILITY_BONUS[facility_type]
                             weight = dist * edge_multiplier
 
-                            direction = _bike_edge_direction(tags, infra_type)
+                            direction = _bike_edge_direction(tags, infra_type, facility_type)
                             edge_attrs = dict(
                                 weight=weight,
                                 length=dist,
@@ -1186,6 +1228,12 @@ def build_graph(region_id="boulder", weights=None):
                         
                         dist = haversine_distance((nodes[u]["lat"], nodes[u]["lon"]), (nodes[v]["lat"], nodes[v]["lon"]))
                         stress_level, facility_type = match_stress_for_edge(u, v, nodes, spatial_index)
+                        if (
+                            facility_type != "Contra Flow Bike Lane"
+                            and tags.get("oneway") in {"yes", "1", "true"}
+                            and has_nearby_stress_facility_for_edge(u, v, nodes, spatial_index, "Contra Flow Bike Lane")
+                        ):
+                            facility_type = "Contra Flow Bike Lane"
                         offstreet_type, bicycles_allowed, ebike_allowed = match_offstreet_for_edge(u, v, nodes, offstreet_spatial_index)
                         
                         # Apply Boulder GIS facility type bonus on top of base multiplier
@@ -1202,7 +1250,7 @@ def build_graph(region_id="boulder", weights=None):
                             edge_multiplier = multiplier * FACILITY_BONUS[facility_type]
                         weight = dist * edge_multiplier
                         
-                        direction = _bike_edge_direction(tags, infra_type)
+                        direction = _bike_edge_direction(tags, infra_type, facility_type)
                         edge_attrs = dict(
                             weight=weight,
                             length=dist,
@@ -1277,9 +1325,152 @@ def build_graph(region_id="boulder", weights=None):
 
     mark_graph_build_ready(region_id, G_connected)
 
-def build_bike_routes_geojson(region_id="boulder"):
-    """Load, filter, and simplify official bike routes data into a lightweight FeatureCollection."""
-    print(f"Compiling lightweight official bike routes GeoJSON for {region_id}...")
+def get_bike_route_simplification_tolerance_meters():
+    """Read display-layer simplification tolerance in meters. Zero disables simplification."""
+    raw_value = os.environ.get("BIKE_ROUTE_SIMPLIFICATION_TOLERANCE_METERS", "0")
+    try:
+        return max(0.0, float(raw_value))
+    except (TypeError, ValueError):
+        print(f"Invalid BIKE_ROUTE_SIMPLIFICATION_TOLERANCE_METERS={raw_value!r}; using 0.")
+        return 0.0
+
+
+BIKE_ROUTE_SIMPLIFICATION_TOLERANCE_METERS = get_bike_route_simplification_tolerance_meters()
+
+
+def simplify_bike_route_line(coordinates, tolerance_meters=BIKE_ROUTE_SIMPLIFICATION_TOLERANCE_METERS):
+    """Thin display-only GeoJSON coordinates while preserving endpoints."""
+    if tolerance_meters <= 0 or len(coordinates) <= 2:
+        return coordinates
+
+    simplified = [coordinates[0]]
+    last_kept = coordinates[0]
+    for coordinate in coordinates[1:-1]:
+        if haversine_distance((last_kept[1], last_kept[0]), (coordinate[1], coordinate[0])) >= tolerance_meters:
+            simplified.append(coordinate)
+            last_kept = coordinate
+
+    if simplified[-1] != coordinates[-1]:
+        simplified.append(coordinates[-1])
+    return simplified
+
+
+BIKE_ROUTE_DISPLAY_CATEGORIES = {
+    "paths": {
+        "display_name": "Paths",
+        "facility_types": ["Multi-Use Path", "Bike Park Path", "Soft Surface Trail"],
+    },
+    "protected": {
+        "display_name": "Protected Bike Lanes",
+        "facility_types": ["Protected Bike Lane", "Separated Bike Lane", "Contra Flow Bike Lane"],
+    },
+    "lanes": {
+        "display_name": "Bike Lanes",
+        "facility_types": ["On-Street Bike Lane", "Bikeable Shoulder"],
+    },
+    "designated": {
+        "display_name": "Designated Bike Routes",
+        "facility_types": ["Designated Bike Route"],
+    },
+    "other": {
+        "display_name": "Other Bike Routes",
+        "facility_types": [],
+    },
+}
+
+BIKE_ROUTE_FACILITY_CATEGORY = {
+    facility_type: category
+    for category, metadata in BIKE_ROUTE_DISPLAY_CATEGORIES.items()
+    for facility_type in metadata["facility_types"]
+}
+
+
+def bike_route_display_category(facility_type):
+    return BIKE_ROUTE_FACILITY_CATEGORY.get(facility_type, "other")
+
+
+def simplify_bike_route_geometry(geometry):
+    """Simplify LineString/MultiLineString geometry for map-layer rendering."""
+    if not geometry:
+        return geometry
+
+    geom_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if geom_type == "LineString" and isinstance(coordinates, list):
+        return {**geometry, "coordinates": simplify_bike_route_line(coordinates)}
+    if geom_type == "MultiLineString" and isinstance(coordinates, list):
+        return {**geometry, "coordinates": [simplify_bike_route_line(line) for line in coordinates]}
+    return geometry
+
+
+def bike_route_geometry_paths(geometry):
+    """Return GeoJSON LineString coordinate paths from a LineString/MultiLineString geometry."""
+    if not geometry:
+        return []
+
+    geom_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if geom_type == "LineString" and isinstance(coordinates, list):
+        return [coordinates]
+    if geom_type == "MultiLineString" and isinstance(coordinates, list):
+        return coordinates
+    return []
+
+
+def grouped_bike_route_geojson(features):
+    grouped_paths = {category: [] for category in BIKE_ROUTE_DISPLAY_CATEGORIES}
+    grouped_facilities = {category: set() for category in BIKE_ROUTE_DISPLAY_CATEGORIES}
+
+    for feature in features:
+        properties = feature.get("properties", {})
+        facility_type = properties.get("FACILITYTYPE") or "Other"
+        category = bike_route_display_category(facility_type)
+        paths = bike_route_geometry_paths(feature.get("geometry"))
+        valid_paths = [path for path in paths if isinstance(path, list) and len(path) >= 2]
+        if not valid_paths:
+            continue
+        grouped_paths[category].extend(valid_paths)
+        grouped_facilities[category].add(facility_type)
+
+    grouped_features = []
+    for category, metadata in BIKE_ROUTE_DISPLAY_CATEGORIES.items():
+        paths = grouped_paths[category]
+        if not paths:
+            continue
+        configured_facilities = metadata["facility_types"]
+        facility_types = [
+            facility_type
+            for facility_type in configured_facilities
+            if facility_type in grouped_facilities[category]
+        ]
+        facility_types.extend(
+            sorted(grouped_facilities[category] - set(configured_facilities))
+        )
+        grouped_features.append({
+            "type": "Feature",
+            "properties": {
+                "route_category": category,
+                "display_name": metadata["display_name"],
+                "facility_types": facility_types,
+                "FACILITYTYPE": metadata["display_name"],
+                "name": metadata["display_name"],
+            },
+            "geometry": {
+                "type": "MultiLineString",
+                "coordinates": paths,
+            },
+        })
+
+    return {
+        "type": "FeatureCollection",
+        "features": grouped_features,
+    }
+
+
+def build_bike_routes_geojson(region_id="boulder", simplify=True, store=True):
+    """Load and filter official bike routes data into a display FeatureCollection."""
+    layer_type = "grouped display" if simplify else "full-detail"
+    print(f"Compiling {layer_type} official bike routes GeoJSON for {region_id}...")
     
     features = []
     config = REGIONS[region_id]
@@ -1306,6 +1497,8 @@ def build_bike_routes_geojson(region_id="boulder"):
                 if fac_type in allowed_stress_types:
                     geom = feat.get("geometry")
                     if geom and geom.get("type") in ["LineString", "MultiLineString"]:
+                        if simplify:
+                            geom = simplify_bike_route_geometry(geom)
                         features.append({
                             "type": "Feature",
                             "geometry": geom,
@@ -1337,6 +1530,8 @@ def build_bike_routes_geojson(region_id="boulder"):
                 if fac_type in allowed_offstreet_types:
                     geom = feat.get("geometry")
                     if geom and geom.get("type") in ["LineString", "MultiLineString"]:
+                        if simplify:
+                            geom = simplify_bike_route_geometry(geom)
                         features.append({
                             "type": "Feature",
                             "geometry": geom,
@@ -1348,12 +1543,16 @@ def build_bike_routes_geojson(region_id="boulder"):
         except Exception as e:
             print(f"Error compiling off-street routes for {region_id}: {e}")
             
-    geojson = {
-        "type": "FeatureCollection",
-        "features": features
-    }
-    bike_routes_geojson_by_region[region_id] = geojson
-    print(f"Successfully compiled {len(features)} official bike route features for {region_id}.")
+    if simplify:
+        geojson = grouped_bike_route_geojson(features)
+    else:
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+    if store:
+        bike_routes_geojson_by_region[region_id] = geojson
+    print(f"Successfully compiled {len(geojson['features'])} {layer_type} official bike route features for {region_id}.")
     return geojson
 
 def find_nearest_node(graph, target_coord):
@@ -2182,8 +2381,12 @@ def get_playgrounds():
 def get_bike_routes():
     """API endpoint to get the compiled, lightweight official bike routes GeoJSON for the specified region."""
     region_id = request.args.get("region", "boulder")
+    detail = request.args.get("detail", "simplified")
     if region_id not in REGIONS:
         return jsonify({"error": f"Invalid region: {region_id}"}), 400
+
+    if detail == "full":
+        return jsonify(build_bike_routes_geojson(region_id, simplify=False, store=False))
 
     geojson = bike_routes_geojson_by_region.get(region_id)
     if geojson is None:
@@ -2913,13 +3116,31 @@ def home_location_record_to_api(record):
         "updated": record.get("updated")
     }
 
-def get_home_location_record(pb_url, user_id, auth_header):
+def sanitize_map_layers_payload(data):
+    """Validate and normalize persisted map layer preferences."""
+    if not isinstance(data, dict):
+        return None, "Invalid JSON payload"
+
+    return {
+        "show_official_bike_routes": bool(data.get("show_official_bike_routes", False))
+    }, None
+
+def map_layers_record_to_api(record):
+    value = record.get("value") or {}
+    return {
+        "id": record.get("id"),
+        "show_official_bike_routes": bool(value.get("show_official_bike_routes", False)),
+        "created": record.get("created"),
+        "updated": record.get("updated")
+    }
+
+def get_user_config_record(pb_url, user_id, auth_header, key):
     headers = {"Authorization": auth_header} if auth_header else {}
     resp = requests.get(
         f"{pb_url}/api/collections/user_configs/records",
         headers=headers,
         params={
-            "filter": f"user='{user_id}' && key='home_location'",
+            "filter": f"user='{user_id}' && key='{key}'",
             "limit": 1
         },
         timeout=5
@@ -2928,6 +3149,9 @@ def get_home_location_record(pb_url, user_id, auth_header):
         return None, resp
     items = resp.json().get("items", [])
     return (items[0] if items else None), resp
+
+def get_home_location_record(pb_url, user_id, auth_header):
+    return get_user_config_record(pb_url, user_id, auth_header, "home_location")
 
 def get_guest_owner_hash():
     guest_id = (request.headers.get("X-Guest-Id") or "").strip()
@@ -3067,6 +3291,59 @@ def home_location_settings():
             return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
 
         return jsonify({"home": home_location_record_to_api(resp.json())}), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/settings/map-layers", methods=["GET", "POST", "PATCH", "PUT", "OPTIONS"])
+def map_layer_settings():
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    pb_url = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090")
+    auth_header = request.headers.get("Authorization")
+    user_id = get_auth_user_id(auth_header)
+
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    headers = {"Authorization": auth_header} if auth_header else {}
+
+    try:
+        existing, existing_resp = get_user_config_record(pb_url, user_id, auth_header, "map_layers")
+        if existing_resp.status_code != 200:
+            return jsonify({"error": f"PocketBase returned {existing_resp.status_code}: {existing_resp.text}"}), existing_resp.status_code
+
+        if request.method == "GET":
+            if not existing:
+                return jsonify({"map_layers": None}), 200
+            return jsonify({"map_layers": map_layers_record_to_api(existing)}), 200
+
+        payload, error = sanitize_map_layers_payload(request.json or {})
+        if error:
+            return jsonify({"error": error}), 400
+
+        if request.method == "POST" and existing:
+            return jsonify({"error": "Map layer settings already exist"}), 409
+
+        if existing:
+            resp = requests.patch(
+                f"{pb_url}/api/collections/user_configs/records/{existing.get('id')}",
+                json={"value": payload},
+                headers=headers,
+                timeout=5
+            )
+        else:
+            resp = requests.post(
+                f"{pb_url}/api/collections/user_configs/records",
+                json={"user": user_id, "key": "map_layers", "value": payload},
+                headers=headers,
+                timeout=5
+            )
+
+        if resp.status_code not in [200, 201]:
+            return jsonify({"error": f"PocketBase returned {resp.status_code}: {resp.text}"}), resp.status_code
+
+        return jsonify({"map_layers": map_layers_record_to_api(resp.json())}), resp.status_code
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

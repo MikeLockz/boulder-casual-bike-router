@@ -52,9 +52,7 @@ struct MainMapView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             // 1. Native Map canvas
-            MapReader { proxy in
-                mapCanvas(proxy: proxy)
-            }
+            mapCanvas()
             .ignoresSafeArea()
 
             // 2. Map HUD / UI Controls when navigation is NOT active
@@ -181,7 +179,7 @@ struct MainMapView: View {
                 }
             }
         }
-        .task(id: "\(viewModel.activeRegionId)-\(viewModel.showOfficialRoutesLayer)") {
+        .task(id: viewModel.activeRegionId) {
             if viewModel.showOfficialRoutesLayer {
                 await viewModel.loadBikeRouteOverlays()
             }
@@ -404,11 +402,7 @@ struct MainMapView: View {
 
     private func historyFitCoordinates(start: CLLocationCoordinate2D, end: CLLocationCoordinate2D) -> [CLLocationCoordinate2D] {
         let actual = viewModel.selectedHistoryRouteDetails?.actualRouteCoordinatePath ?? []
-        if actual.count >= 2 {
-            return actual
-        }
-        let planned = viewModel.selectedHistoryRouteDetails?.plannedRouteCoordinatePaths.flatMap { $0 } ?? []
-        return planned + [start, end]
+        return actual
     }
 
     private var routeMarkerCoordinates: [CLLocationCoordinate2D] {
@@ -963,7 +957,16 @@ struct MainMapView: View {
     }
     
     private func historySelectionBanner(_ route: PastRoute) -> some View {
-        HStack(spacing: 12) {
+        let detailDistanceMeters = viewModel.selectedHistoryRouteDetails?.id == route.id
+            ? viewModel.selectedHistoryRouteDetails?.actualDistanceMeters
+            : nil
+        let detailDurationSeconds = viewModel.selectedHistoryRouteDetails?.id == route.id
+            ? viewModel.selectedHistoryRouteDetails?.actualDurationSeconds
+            : nil
+        let distanceMiles = (detailDistanceMeters ?? route.displayedDistanceMeters) / 1609.34
+        let durationMinutes = Int((detailDurationSeconds ?? route.displayedDurationSeconds) / 60)
+
+        return HStack(spacing: 12) {
             Image(systemName: "clock.arrow.circlepath")
                 .foregroundColor(.mintGlow)
             
@@ -971,7 +974,7 @@ struct MainMapView: View {
                 Text(route.name)
                     .font(.system(size: 14, weight: .bold))
                     .foregroundColor(.onSurface)
-                Text(String(format: "Actual: %.2f mi (Time: %d min)", route.distanceMiles, route.durationSeconds / 60))
+                Text(String(format: "Actual: %.2f mi (Time: %d min)", distanceMiles, durationMinutes))
                     .font(.system(size: 11))
                     .foregroundColor(.onSurfaceVariant)
             }
@@ -1168,163 +1171,43 @@ struct MainMapView: View {
     }
     
     @ViewBuilder
-    private func mapCanvas(proxy: MapProxy) -> some View {
-        Map(position: $cameraPosition, interactionModes: .all) {
-            if viewModel.showOfficialRoutesLayer {
-                ForEach(viewModel.bikeRouteOverlays) { bikeRoute in
-                    MapPolyline(coordinates: bikeRoute.coordinates)
-                        .stroke(
-                            bikeRouteColor(for: bikeRoute.facilityType).opacity(0.75),
-                            style: StrokeStyle(
-                                lineWidth: bikeRoute.facilityType == "Multi-Use Path" || bikeRoute.facilityType == "Bike Park Path" ? 4.5 : 3.5,
-                                lineCap: .round,
-                                lineJoin: .round
-                            )
-                        )
-                }
-            }
-
-            if !viewModel.isSelectingHomeLocation {
-                // Start Marker
-                if let start = viewModel.startLocation {
-                    Annotation("Start", coordinate: start, anchor: .bottom) {
-                        markerView(color: .primaryMint)
-                            .gesture(
-                                DragGesture(coordinateSpace: .named("mapCanvas"))
-                                    .onChanged { value in
-                                        if let coordinate = proxy.convert(value.location, from: .local) {
-                                            viewModel.dragStartLocation(to: coordinate)
-                                        }
-                                    }
-                                    .onEnded { value in
-                                        if let coordinate = proxy.convert(value.location, from: .local) {
-                                            viewModel.setStartLocation(coordinate, startName: nil)
-                                        }
-                                    }
-                            )
-                    }
-                } else if let historyRoute = viewModel.selectedHistoryRoute {
-                    Annotation("Start", coordinate: CLLocationCoordinate2D(latitude: historyRoute.startLat, longitude: historyRoute.startLon), anchor: .bottom) {
-                        markerView(color: .primaryMint)
-                    }
-                }
-
-                // Destination Marker
-                if let end = viewModel.endLocation {
-                    Annotation("Destination", coordinate: end, anchor: .bottom) {
-                        markerView(color: .errorRose)
-                            .gesture(
-                                DragGesture(coordinateSpace: .named("mapCanvas"))
-                                    .onChanged { value in
-                                        if let coordinate = proxy.convert(value.location, from: .local) {
-                                            viewModel.dragEndLocation(to: coordinate)
-                                        }
-                                    }
-                                    .onEnded { value in
-                                        if let coordinate = proxy.convert(value.location, from: .local) {
-                                            viewModel.setEndLocation(coordinate, destinationName: nil)
-                                        }
-                                    }
-                            )
-                    }
-                } else if let historyRoute = viewModel.selectedHistoryRoute {
-                    Annotation("Destination", coordinate: CLLocationCoordinate2D(latitude: historyRoute.endLat, longitude: historyRoute.endLon), anchor: .bottom) {
-                        markerView(color: .errorRose)
-                    }
-                }
-
-                // Render route paths as continuous rounded strokes to avoid squared segment joins.
-                if let route = viewModel.routeResponse {
-                    ForEach(0..<route.routeCoordinatePaths.count, id: \.self) { pathIdx in
-                        MapPolyline(coordinates: route.routeCoordinatePaths[pathIdx])
-                            .stroke(Color.primaryMint, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                    }
-                } else if let details = viewModel.selectedHistoryRouteDetails {
-                    let actualCoordinates = details.actualRouteCoordinatePath
-                    if actualCoordinates.count >= 2 {
-                        MapPolyline(coordinates: actualCoordinates)
-                            .stroke(Color.primaryMint, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                    } else if let tickCoordinate = actualCoordinates.first {
-                        Annotation("", coordinate: tickCoordinate) {
-                            Circle()
-                                .fill(Color.primaryMint)
-                                .frame(width: 8, height: 8)
-                                .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                                .shadow(radius: 2)
-                        }
-                    } else {
-                        ForEach(0..<details.plannedRouteCoordinatePaths.count, id: \.self) { pathIdx in
-                            MapPolyline(coordinates: details.plannedRouteCoordinatePaths[pathIdx])
-                                .stroke(Color.secondary, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-                        }
-                    }
-                }
-
-                // Render waypoints as minor circles
-                ForEach(0..<viewModel.waypoints.count, id: \.self) { idx in
-                    Annotation("", coordinate: viewModel.waypoints[idx]) {
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 8, height: 8)
-                            .shadow(radius: 2)
-                    }
-                }
-            }
-
-            // User Location Dot — placed as an Annotation so MapKit moves it with the map canvas.
-            // UserLocationMarker observes locationManager directly (at leaf-view level) so heading
-            // updates fire inside the annotation's own hosted SwiftUI view, bypassing MapKit's
-            // annotation-view cache which would otherwise suppress content-only re-renders.
-            if let userLoc = locationManager.currentLocation {
-                Annotation("User Location", coordinate: userLoc.coordinate) {
-                    UserLocationMarker(locationManager: locationManager)
-                }
-            }
-
-            if let pendingHome = viewModel.pendingHomeCoordinate {
-                Annotation("Home", coordinate: pendingHome, anchor: .bottom) {
-                    markerView(color: .mintGlow)
-                        .gesture(
-                            DragGesture(coordinateSpace: .named("mapCanvas"))
-                                .onChanged { value in
-                                    if let coordinate = proxy.convert(value.location, from: .local) {
-                                        viewModel.updatePendingHomeLocation(coordinate)
-                                    }
-                                }
-                        )
-                }
-            }
-        }
-        .coordinateSpace(name: "mapCanvas")
-        .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
-        .onTapGesture { screenPoint in
-            if viewModel.isSelectingHomeLocation {
-                if let coordinate = proxy.convert(screenPoint, from: .local) {
+    private func mapCanvas() -> some View {
+        MapKitMapView(
+            cameraPosition: $cameraPosition,
+            startLocation: viewModel.startLocation,
+            endLocation: viewModel.endLocation,
+            selectedHistoryActualCoordinates: viewModel.selectedHistoryRouteDetails?.actualRouteCoordinatePath ?? [],
+            pendingHomeCoordinate: viewModel.pendingHomeCoordinate,
+            userCoordinate: locationManager.currentLocation?.coordinate,
+            routeCoordinatePaths: viewModel.routeResponse?.routeCoordinatePaths ?? [],
+            waypoints: viewModel.waypoints,
+            officialRouteGroups: viewModel.bikeRouteOverlays,
+            showOfficialRoutes: viewModel.showOfficialRoutesLayer,
+            isSelectingHomeLocation: viewModel.isSelectingHomeLocation,
+            mapSelectionMode: mapSelectionMode,
+            onMapTap: { coordinate in
+                if viewModel.isSelectingHomeLocation {
                     handleHomeMapTap(at: coordinate)
-                }
-            } else if mapSelectionMode != nil {
-                if let coordinate = proxy.convert(screenPoint, from: .local) {
+                } else if mapSelectionMode != nil {
                     handleMapTap(at: coordinate)
                 }
+            },
+            onStartDragChanged: { coordinate in
+                viewModel.dragStartLocation(to: coordinate)
+            },
+            onStartDragEnded: { coordinate in
+                viewModel.setStartLocation(coordinate, startName: nil)
+            },
+            onEndDragChanged: { coordinate in
+                viewModel.dragEndLocation(to: coordinate)
+            },
+            onEndDragEnded: { coordinate in
+                viewModel.setEndLocation(coordinate, destinationName: nil)
+            },
+            onHomeDragChanged: { coordinate in
+                viewModel.updatePendingHomeLocation(coordinate)
             }
-        }
-    }
-
-    private func bikeRouteColor(for facilityType: String) -> Color {
-        switch facilityType {
-        case "Multi-Use Path", "Bike Park Path":
-            return Color(red: 0.0, green: 0.90, blue: 0.46)
-        case "Protected Bike Lane", "Separated Bike Lane", "Contra Flow Bike Lane":
-            return Color(red: 0.0, green: 0.90, blue: 1.0)
-        case "On-Street Bike Lane":
-            return Color(red: 0.16, green: 0.47, blue: 1.0)
-        case "Designated Bike Route":
-            return Color(red: 0.70, green: 0.53, blue: 1.0)
-        case "Bikeable Shoulder":
-            return Color(red: 0.56, green: 0.64, blue: 0.68)
-        default:
-            return Color(red: 0.69, green: 0.74, blue: 0.77)
-        }
+        )
     }
     
     private func parseCoordinate(from text: String) -> CLLocationCoordinate2D? {

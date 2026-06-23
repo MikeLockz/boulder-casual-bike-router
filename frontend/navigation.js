@@ -1125,9 +1125,6 @@ const Navigation = (() => {
             : { distanceMeters: 0, durationSeconds: 0 };
         let actualDistance = metricSummary.distanceMeters || 0.0;
         let actualDuration = metricSummary.durationSeconds || 0.0;
-        if (actualDuration <= 0) {
-            actualDuration = state.localTicksCache.length * 3;
-        }
         
         const avgSpeed = actualDuration > 0 ? (actualDistance / actualDuration) : 0.0;
         const startReq = state.localStartRequest;

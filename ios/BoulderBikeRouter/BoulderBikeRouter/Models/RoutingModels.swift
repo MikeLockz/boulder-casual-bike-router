@@ -404,6 +404,37 @@ struct HomeLocationRequest: Codable {
     let lng: Double
 }
 
+/// Authenticated map layer preferences.
+struct MapLayerSettings: Codable, Identifiable, Hashable {
+    let id: String?
+    let showOfficialBikeRoutes: Bool
+    let created: String?
+    let updated: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case showOfficialBikeRoutes = "show_official_bike_routes"
+        case created
+        case updated
+    }
+}
+
+struct MapLayerSettingsResponse: Codable {
+    let mapLayers: MapLayerSettings?
+
+    enum CodingKeys: String, CodingKey {
+        case mapLayers = "map_layers"
+    }
+}
+
+struct MapLayerSettingsRequest: Codable {
+    let showOfficialBikeRoutes: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case showOfficialBikeRoutes = "show_official_bike_routes"
+    }
+}
+
 /// Represents a completed route in the navigation history log.
 struct PastRoute: Codable, Identifiable, Hashable {
     let id: String
@@ -485,38 +516,19 @@ struct PastRoute: Codable, Identifiable, Hashable {
     }
 
     var displayedDistanceMeters: Double {
-        if let displayDistanceMeters, displayDistanceMeters > 0 {
-            return displayDistanceMeters
-        }
-        let actual = actualDistanceMeters ?? 0
-        if actual > 0 {
-            return actual
-        }
-        return totalLengthMeters
+        actualDistanceMeters ?? 0
     }
 
     var displayedDurationSeconds: Double {
-        if let displayDurationSeconds, displayDurationSeconds > 0 {
-            return displayDurationSeconds
-        }
-        if let actualDurationSeconds, actualDurationSeconds > 0 {
-            return actualDurationSeconds
-        }
-        if let endDate {
-            let elapsed = endDate.timeIntervalSince(date)
-            if elapsed > 0 {
-                return elapsed
-            }
-        }
-        return totalEstimatedTimeSeconds
+        actualDurationSeconds ?? 0
     }
 
     var displayedAverageSpeedMetersPerSecond: Double? {
-        if let displayAverageSpeed, displayAverageSpeed > 0 {
-            return displayAverageSpeed
+        if let averageSpeed {
+            return averageSpeed
         }
         let duration = displayedDurationSeconds
-        guard duration > 0 else { return nil }
+        guard duration > 0 else { return 0 }
         return displayedDistanceMeters / duration
     }
 
@@ -576,6 +588,14 @@ struct GeoJSONFeature: Codable {
 struct GeoJSONFeatureCollection: Codable {
     let type: String
     let features: [GeoJSONFeature]
+}
+
+struct BikeRouteOverlayGroup: Identifiable {
+    let id: String
+    let category: String
+    let displayName: String
+    let facilityTypes: [String]
+    let coordinatePaths: [[CLLocationCoordinate2D]]
 }
 
 struct BikeRouteOverlay: Identifiable {

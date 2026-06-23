@@ -276,18 +276,8 @@ class NavigationManager: NSObject, @preconcurrency AVSpeechSynthesizerDelegate {
         
         // 1. Calculate actual distance and duration locally with the shared filter.
         let metricSummary = NavigationMetricFilter.summarize(localTicksCache)
-        var actualDistance = metricSummary.distanceMeters
-        var actualDuration = metricSummary.durationSeconds
-        if actualDuration <= 0 {
-            actualDuration = Double(localTicksCache.count) * 3.0
-        }
-        
-        if status == "completed",
-           let plannedDistance = localStartRequest?.totalLengthMeters,
-           plannedDistance > 0,
-           actualDistance < plannedDistance * 0.25 {
-            actualDistance = plannedDistance
-        }
+        let actualDistance = metricSummary.distanceMeters
+        let actualDuration = metricSummary.durationSeconds
 
         let avgSpeed = actualDuration > 0 ? (actualDistance / actualDuration) : 0.0
         

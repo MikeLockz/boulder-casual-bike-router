@@ -55,12 +55,18 @@ private struct BikeRoutesFeatureCollection: Decodable {
 
 private struct BikeRouteFeature: Decodable {
     struct Properties: Decodable {
-        let facilityType: String
-        let name: String
+        let facilityType: String?
+        let name: String?
+        let routeCategory: String?
+        let displayName: String?
+        let facilityTypes: [String]?
 
         enum CodingKeys: String, CodingKey {
             case facilityType = "FACILITYTYPE"
             case name
+            case routeCategory = "route_category"
+            case displayName = "display_name"
+            case facilityTypes = "facility_types"
         }
     }
 
@@ -219,7 +225,7 @@ class APIService {
         }
     }
 
-    func fetchBikeRoutes(region: String) async throws -> [BikeRouteOverlay] {
+    func fetchBikeRoutes(region: String) async throws -> [BikeRouteOverlayGroup] {
         guard var components = URLComponents(string: "\(baseURLLabel)/api/bike-routes") else {
             throw APIError.invalidURL
         }
@@ -243,8 +249,8 @@ class APIService {
 
         do {
             let collection = try JSONDecoder().decode(BikeRoutesFeatureCollection.self, from: data)
-            return collection.features.enumerated().flatMap { featureIndex, feature in
-                feature.geometry.coordinatePaths.enumerated().compactMap { pathIndex, path in
+            let groups = collection.features.reduce(into: [String: (displayName: String, facilityTypes: Set<String>, paths: [[CLLocationCoordinate2D]])]()) { grouped, feature in
+                let coordinatePaths = feature.geometry.coordinatePaths.compactMap { path -> [CLLocationCoordinate2D]? in
                     let coordinates = path.compactMap { pair -> CLLocationCoordinate2D? in
                         guard pair.count >= 2,
                               (-180.0...180.0).contains(pair[0]),
@@ -252,16 +258,71 @@ class APIService {
                         return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
                     }
                     guard coordinates.count >= 2 else { return nil }
-                    return BikeRouteOverlay(
-                        id: "\(region)-\(featureIndex)-\(pathIndex)",
-                        facilityType: feature.properties.facilityType,
-                        name: feature.properties.name,
-                        coordinates: coordinates
-                    )
+                    return coordinates
                 }
+                guard !coordinatePaths.isEmpty else { return }
+
+                let category = feature.properties.routeCategory
+                    ?? Self.category(forFacilityType: feature.properties.facilityType)
+                let displayName = feature.properties.routeCategory != nil
+                    ? (feature.properties.displayName ?? Self.displayName(forCategory: category))
+                    : Self.displayName(forCategory: category)
+                let facilityTypes = feature.properties.facilityTypes
+                    ?? feature.properties.facilityType.map { [$0] }
+                    ?? []
+
+                var group = grouped[category] ?? (displayName: displayName, facilityTypes: Set<String>(), paths: [])
+                group.paths.append(contentsOf: coordinatePaths)
+                group.facilityTypes.formUnion(facilityTypes)
+                if group.displayName == Self.displayName(forCategory: category) {
+                    group.displayName = displayName
+                }
+                grouped[category] = group
+            }
+
+            let categoryOrder = ["paths", "protected", "lanes", "designated", "other"]
+            return categoryOrder.compactMap { category in
+                guard let group = groups[category], !group.paths.isEmpty else { return nil }
+                return BikeRouteOverlayGroup(
+                    id: "\(region)-\(category)",
+                    category: category,
+                    displayName: group.displayName,
+                    facilityTypes: Array(group.facilityTypes).sorted(),
+                    coordinatePaths: group.paths
+                )
             }
         } catch {
             throw APIError.decodingError(error)
+        }
+    }
+
+    private static func category(forFacilityType facilityType: String?) -> String {
+        switch facilityType {
+        case "Multi-Use Path", "Bike Park Path", "Soft Surface Trail":
+            return "paths"
+        case "Protected Bike Lane", "Separated Bike Lane", "Contra Flow Bike Lane":
+            return "protected"
+        case "On-Street Bike Lane", "Bikeable Shoulder":
+            return "lanes"
+        case "Designated Bike Route":
+            return "designated"
+        default:
+            return "other"
+        }
+    }
+
+    private static func displayName(forCategory category: String) -> String {
+        switch category {
+        case "paths":
+            return "Paths"
+        case "protected":
+            return "Protected Bike Lanes"
+        case "lanes":
+            return "Bike Lanes"
+        case "designated":
+            return "Designated Bike Routes"
+        default:
+            return "Other Bike Routes"
         }
     }
 
@@ -833,6 +894,77 @@ class APIService {
         guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+    }
+
+    func fetchMapLayerSettings() async throws -> MapLayerSettings? {
+        guard let baseURL = URL(string: baseURLLabel),
+              let settingsURL = URL(string: "/api/settings/map-layers", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: settingsURL)
+        urlRequest.httpMethod = "GET"
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode(MapLayerSettingsResponse.self, from: data).mapLayers
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    func saveMapLayerSettings(showOfficialBikeRoutes: Bool) async throws -> MapLayerSettings? {
+        guard let baseURL = URL(string: baseURLLabel),
+              let settingsURL = URL(string: "/api/settings/map-layers", relativeTo: baseURL) else {
+            throw APIError.invalidURL
+        }
+
+        var urlRequest = URLRequest(url: settingsURL)
+        urlRequest.httpMethod = "PUT"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        AuthSessionStore.shared.applyAuthorization(to: &urlRequest)
+
+        do {
+            urlRequest.httpBody = try JSONEncoder().encode(MapLayerSettingsRequest(showOfficialBikeRoutes: showOfficialBikeRoutes))
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError("Invalid response type")
+        }
+        guard httpResponse.statusCode != 401 else { throw APIError.unauthorized }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.serverError("Invalid HTTP status code: \(httpResponse.statusCode)")
+        }
+
+        do {
+            return try JSONDecoder().decode(MapLayerSettingsResponse.self, from: data).mapLayers
+        } catch {
+            throw APIError.decodingError(error)
         }
     }
 
