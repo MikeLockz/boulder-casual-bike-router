@@ -1,9 +1,10 @@
 # Boulder hosting and recovery
 
 Implementation in progress, **2026-11-22 America/Denver**. Production remains on
-VM 100, source `cc02768d6f4739f173ad7e7416fcbe19e57e31e7`. VM 110 has a restricted staging deployment from signed release
-`fd6ac3baed6906fffe9f09496ab8a380a6a6b314`; neither real-client SSO nor cutover
-is accepted. Keep the old
+VM 100, source `cc02768d6f4739f173ad7e7416fcbe19e57e31e7`. VM 110 has a restricted signed staging deployment; neither real-client SSO nor
+cutover is accepted. The shared apps-host plan records the current deployed
+source and image checkpoint; the guest holds the exact image values in
+`/etc/lockdev-apps/boulder/release.env`. Keep the old
 writers, route and database until the shared apps-host plan's cutover window.
 
 ## Placement and source
@@ -170,7 +171,7 @@ The user requested preparation with unavailable human checks explicitly pending.
 No migration-complete claim is justified yet. Eldorado Fly/Pages and stopped
 LXC 902 remain unchanged.
 
-The deployed release is backed by
+The prior `fd6ac3b` recovery/reboot checkpoint is backed by
 [publication 44996166255](https://github.com/MikeLockz/boulder-casual-bike-router/actions/runs/44996166255).
 Its image digests are backend `82e5b0a9ad3ae4c15eb2efab8669637e1946b780560579223ecf61e5b2dcf431`,
 frontend `8adc52cf12d7239b394bf3100f2d3e51b33ce8175fc5fa01cc5287193f70e9a2`,
@@ -184,3 +185,20 @@ Do not apply the current Aspen DNS plan wholesale: its staging catalog snapshot
 would remove concurrently created `iptvnator.lockdev.com` and
 `podcasts.lockdev.com` overrides. Preserve and reconcile those owning changes
 before any future cutover. Cloudflare's preview proposed zero changes.
+
+First household admission requires migration `1795330000`: PocketBase 0.39
+provisions OAuth profiles through its internal record creation API, so the rule
+is `@request.context = "oauth2"` rather than locked/null. The group/email/subject
+hook runs before that creation; ordinary HTTP callers cannot select this internal
+context. All optional caller `createData` is discarded, preventing a caller from
+preclaiming another email, choosing a local password or assigning identity/role
+fields. The real isolated provider test covers first sign-in as an ordinary user,
+rejected public signup/context spoofing and rejected caller password injection,
+as well as existing-profile linking. Do not select an older authentication image
+for production rollback without reviewing compatibility with this admission rule.
+
+Image rollback/return was rehearsed on staging through
+[runs 44997942532](https://github.com/MikeLockz/boulder-casual-bike-router/actions/runs/44997942532)
+and [44998241997](https://github.com/MikeLockz/boulder-casual-bike-router/actions/runs/44998241997).
+Stable profile ownership and all 247 staging analytics rows survived; no database
+restore occurred. The guest receipt is `/var/lib/lockdev-apps/rollback-data-proof.json`.

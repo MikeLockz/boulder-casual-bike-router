@@ -7,6 +7,7 @@ import urllib.parse
 
 SECRET='fixture-confidential-client-secret-not-for-real-use'
 USERS={
+    'new-household':dict(sub='subject-new',email='new@fixture.invalid',email_verified=True,groups=['family']),
     'existing':dict(sub='subject-existing',email='existing@fixture.invalid',email_verified=True,groups=['family']),
     'new-email':dict(sub='subject-another',email='changed@fixture.invalid',email_verified=True,groups=['kids']),
     'denied':dict(sub='subject-denied',email='denied@fixture.invalid',email_verified=True,groups=['unknown']),
