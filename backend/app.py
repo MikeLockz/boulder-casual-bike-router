@@ -8,11 +8,13 @@ import difflib
 import threading
 import hashlib
 import hmac
+import time
 
 try:
     import requests
     import networkx as nx
-    from flask import Flask, request, jsonify
+    from flask import Flask, request, jsonify, g, Response
+    from prometheus_client import Counter, Histogram, CollectorRegistry, generate_latest, CONTENT_TYPE_LATEST
 except ImportError as e:
     missing_module = getattr(e, "name", "dependencies")
     print(f"\n[ERROR] Missing required library: '{missing_module}'")
@@ -35,6 +37,37 @@ from graph_cache import (
 )
 
 DEFAULT_REGION_ID = "boulder"
+
+# No user IDs, coordinates, request URLs or tokens in metrics labels.
+app_metrics_registry = CollectorRegistry()
+route_requests = Counter("boulder_route_requests_total", "Route calculation responses", ["region", "status_class"], registry=app_metrics_registry)
+route_duration = Histogram("boulder_route_duration_seconds", "Route calculation duration", ["region"],
+                          buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60), registry=app_metrics_registry)
+
+
+@app.before_request
+def begin_route_metrics():
+    if request.path == "/api/route" and request.method == "POST":
+        g.route_started = time.monotonic()
+
+
+@app.after_request
+def finish_route_metrics(response):
+    started = getattr(g, "route_started", None)
+    if started is not None:
+        body = request.get_json(silent=True)
+        region = body.get("region", DEFAULT_REGION_ID) if isinstance(body, dict) else "invalid"
+        region = region if isinstance(region, str) and region in REGIONS else "invalid"
+        route_requests.labels(region, f"{response.status_code // 100}xx").inc()
+        route_duration.labels(region).observe(time.monotonic() - started)
+    return response
+
+
+@app.route("/internal/metrics", methods=["GET"])
+def internal_metrics():
+    # Production Compose publishes no backend port; frontend explicitly denies
+    # /internal/. Only the separate internal collector network reaches this.
+    return Response(generate_latest(app_metrics_registry), content_type=CONTENT_TYPE_LATEST)
 
 NAV_METRIC_FILTER = {
     "max_accuracy_meters": 75.0,

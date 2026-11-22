@@ -1,3 +1,4 @@
 flask
 networkx
 requests
+prometheus-client==0.23.1

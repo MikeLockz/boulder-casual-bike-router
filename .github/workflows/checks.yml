@@ -1,0 +1,76 @@
+name: Application checks
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  application-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11.18'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.3'
+      - name: Install frozen production dependencies
+        run: python -m pip install --require-hashes -r requirements.production.txt
+      - name: Run graph, ownership and bounded-metrics tests
+        env:
+          PYTHONPATH: backend:.
+        run: python -m unittest backend.test_graph_cache backend.test_multi_region backend.test_guest_route_ownership backend.test_metrics -v
+      - name: Check web syntax and household identity boundaries
+        run: |
+          node --check frontend/app.js
+          node --test tools/test_household_oidc.mjs
+  image-build-components:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {component: backend, dockerfile: Dockerfile.production}
+          - {component: frontend, dockerfile: Dockerfile.frontend}
+          - {component: pocketbase, dockerfile: Dockerfile.pocketbase}
+    name: image-build-${{ matrix.component }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.39.1
+      - name: Build code-only amd64 image without publishing
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          COMPONENT: ${{ matrix.component }}
+        run: docker buildx build --platform linux/amd64 --load -f "$DOCKERFILE" -t "boulder-check:$COMPONENT" .
+  image-build:
+    runs-on: ubuntu-24.04
+    needs: [image-build-components]
+    if: always()
+    steps:
+      - env:
+          RESULT: ${{ needs.image-build-components.result }}
+        run: test "$RESULT" = success
+  ios-auth-tests:
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test exact PKCE/callback logic on native Apple silicon
+        run: python3 tools/test_household_oauth_core.py
+      - name: Compile iOS app and test targets
+        run: xcodebuild -project ios/BoulderBikeRouter/BoulderBikeRouter.xcodeproj -scheme BoulderBikeRouter -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build-for-testing

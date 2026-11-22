@@ -1,0 +1,3 @@
+FROM ghcr.io/muchobien/pocketbase:0.39.1@sha256:27d249c0d849b2581eb5d303cfa0bec89a815702651426ce8ea23b2fc43c2de6
+COPY pb_migrations/ /pb_migrations/
+COPY pb_hooks/ /pb_hooks/

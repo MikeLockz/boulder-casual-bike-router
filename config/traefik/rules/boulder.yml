@@ -1,0 +1,14 @@
+http:
+  routers:
+    boulder-apps:
+      rule: Host(`boulder.lockdev.com`)
+      entryPoints: [websecure]
+      middlewares: [apps-lan-tailnet, apps-headers]
+      service: boulder-apps
+      tls:
+        certResolver: letsencrypt
+  services:
+    boulder-apps:
+      loadBalancer:
+        servers:
+          - url: http://boulder-frontend:8080

@@ -1,0 +1,114 @@
+name: Publish approved Boulder release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: boulder-release-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      checks: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require exact-source checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/check_release_checks.py
+      - name: Refuse to replace an existing release checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "apps-$GITHUB_SHA" --repo MikeLockz/boulder-casual-bike-router >/dev/null 2>&1; then
+            echo 'This immutable release already exists; use Deploy Boulder apps host.'
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.39.1
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: backend
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: Dockerfile.production
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ghcr.io/mikelockz/boulder-casual-bike-router-backend:${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/MikeLockz/boulder-casual-bike-router
+      - id: frontend
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: Dockerfile.frontend
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ghcr.io/mikelockz/boulder-casual-bike-router-frontend:${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/MikeLockz/boulder-casual-bike-router
+      - id: pocketbase
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: Dockerfile.pocketbase
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ghcr.io/mikelockz/boulder-casual-bike-router-pocketbase:${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/MikeLockz/boulder-casual-bike-router
+      - name: Attest backend image
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ghcr.io/mikelockz/boulder-casual-bike-router-backend
+          subject-digest: ${{ steps.backend.outputs.digest }}
+          push-to-registry: true
+      - name: Attest frontend image
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ghcr.io/mikelockz/boulder-casual-bike-router-frontend
+          subject-digest: ${{ steps.frontend.outputs.digest }}
+          push-to-registry: true
+      - name: Attest PocketBase image
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ghcr.io/mikelockz/boulder-casual-bike-router-pocketbase
+          subject-digest: ${{ steps.pocketbase.outputs.digest }}
+          push-to-registry: true
+      - name: Write release descriptor
+        env:
+          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+          FRONTEND_DIGEST: ${{ steps.frontend.outputs.digest }}
+          POCKETBASE_DIGEST: ${{ steps.pocketbase.outputs.digest }}
+        run: python3 tools/make_release_manifest.py
+      - id: manifest
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: release.json
+      - name: Publish immutable recovery checkpoint and verification bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.manifest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" release.intoto.jsonl
+          printf 'Boulder source %s. Exact image digests are in the signed release descriptor.\n' "$GITHUB_SHA" > release-notes.txt
+          gh release create "apps-$GITHUB_SHA" release.json release.intoto.jsonl \
+            --repo MikeLockz/boulder-casual-bike-router --target "$GITHUB_SHA" \
+            --title "Boulder $GITHUB_SHA" --notes-file release-notes.txt

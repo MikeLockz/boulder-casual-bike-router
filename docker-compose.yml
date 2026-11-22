@@ -4,7 +4,7 @@ services:
     container_name: pocketbase-local
     restart: unless-stopped
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     volumes:
       - ./pb_data:/pb_data
       - ./pb_migrations:/pb_migrations
@@ -15,7 +15,7 @@ services:
       dockerfile: Dockerfile
     container_name: boulder-backend-local
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     environment:
       - POCKETBASE_URL=http://pocketbase:8090
       - PYTHONUNBUFFERED=1
@@ -38,6 +38,6 @@ services:
       - ./frontend:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "8081:80"
+      - "127.0.0.1:8081:80"
     depends_on:
       - boulder-backend
