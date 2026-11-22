@@ -272,12 +272,13 @@
 
                         <!-- Logged Out State -->
                         <div id="auth-logged-out" class="auth-state-container">
-                            <div class="auth-tabs">
+                            <div id="auth-tabs" class="auth-tabs">
                                 <button type="button" id="tab-btn-login" class="auth-tab-btn active">Log In</button>
                                 <button type="button" id="tab-btn-signup" class="auth-tab-btn">Sign Up</button>
                             </div>
 
                             <button id="household-sso" type="button" class="btn btn-primary btn-auth hidden">Sign in with LockDev</button>
+                            <p id="household-link-instructions" class="subtext hidden">Already have Boulder routes? Log in with your existing password once, then choose “Link LockDev to this profile” in Settings.</p>
                             <form id="auth-form" class="auth-form">
                                 <div class="form-group">
                                     <label for="auth-email">Email Address</label>

@@ -5,6 +5,10 @@ import Security
 import UIKit
 
 struct HouseholdAuthMethods: Decodable {
+    struct Password: Decodable {
+        let enabled: Bool
+    }
+    let password: Password?
     struct OAuth2: Decodable {
         struct Provider: Decodable {
             let name: String
