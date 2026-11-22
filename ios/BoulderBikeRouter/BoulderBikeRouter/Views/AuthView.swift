@@ -73,7 +73,7 @@ struct AuthView: View {
                             .font(.system(size: 28, weight: .bold))
                             .foregroundColor(.onSurface)
                         
-                        Text(isSignUpMode ? "Create an account to sync your routes" : "Sign in to access your saved trips")
+                        Text(viewModel.isUserLoggedIn ? "Link your household sign-in to this Boulder profile" : (isSignUpMode ? "Create an account to sync your routes" : "Sign in to access your saved trips"))
                             .font(.system(size: 14))
                             .foregroundColor(.onSurfaceVariant)
                             .multilineTextAlignment(.center)
@@ -82,7 +82,7 @@ struct AuthView: View {
                     .padding(.top, 20)
                     
                     if householdSSOAvailable {
-                        Button("Sign in with LockDev") {
+                        Button(viewModel.isUserLoggedIn ? "Link LockDev to this profile" : "Sign in with LockDev") {
                             isLoading = true
                             errorMessage = nil
                             Task { @MainActor in
@@ -100,6 +100,7 @@ struct AuthView: View {
                     }
 
                     // Retained until household linking and native-client checks pass.
+                    if !viewModel.isUserLoggedIn {
                     HStack(spacing: 0) {
                         Button(action: {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -116,6 +117,7 @@ struct AuthView: View {
                                 .background(isSignUpMode ? Color.clear : Color.primaryMint)
                         }
                         
+                        if !householdSSOAvailable {
                         Button(action: {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                 isSignUpMode = true
@@ -129,6 +131,7 @@ struct AuthView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
                                 .background(isSignUpMode ? Color.primaryMint : Color.clear)
+                        }
                         }
                     }
                     .background(Color.surfaceElevated)
@@ -210,6 +213,7 @@ struct AuthView: View {
                     .padding(.horizontal, 24)
                     
                     // Feedback messages (Error/Success)
+                    }
                     if let errorMessage = errorMessage {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -252,6 +256,7 @@ struct AuthView: View {
                     }
                     
                     // Submit Button
+                    if !viewModel.isUserLoggedIn {
                     Button(action: handleSubmit) {
                         HStack {
                             if isLoading {
@@ -272,6 +277,7 @@ struct AuthView: View {
                     }
                     .disabled(!isFormValid || isLoading)
                     .padding(.horizontal, 24)
+                    }
                     
                     Spacer()
                 }
@@ -281,6 +287,7 @@ struct AuthView: View {
         .task {
             if let methods = try? await APIService().householdAuthMethods() {
                 householdSSOAvailable = methods.oauth2.providers.contains { $0.name == "oidc" }
+                if householdSSOAvailable { isSignUpMode = false }
             }
         }
     }

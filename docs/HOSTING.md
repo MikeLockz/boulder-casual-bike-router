@@ -1,8 +1,9 @@
 # Boulder hosting and recovery
 
 Implementation in progress, **2026-11-21 America/Denver**. Production remains on
-VM 100, source `cc02768d6f4739f173ad7e7416fcbe19e57e31e7`. The VM 110 release is
-not yet deployed, and neither new SSO nor cutover is accepted. Keep the old
+VM 100, source `cc02768d6f4739f173ad7e7416fcbe19e57e31e7`. VM 110 has a restricted staging deployment from signed release
+`9b9f68a4ef86a8f3921d18f149f5bc6e7d5e6e8a`; neither real-client SSO nor cutover
+is accepted. Keep the old
 writers, route and database until the shared apps-host plan's cutover window.
 
 ## Placement and source
@@ -26,8 +27,11 @@ hash-pinned Python 3.11 lock generated from `requirements.in`; Flask 3.1.3,
 NetworkX 3.6.1 and Requests 2.34.2 match the inspected live backend. Build contexts
 are an explicit code-only allowlist; `.env`, databases, keys, PEM files, local
 venvs and graph caches are excluded. Build and publish in CI, never on VM 110.
-The public GHCR image digests/source attestations and restricted release workflow
-still need installation and verification before production deployment.
+The public GHCR images and source attestations are verified by the root-owned
+dispatcher before deployment. A real main-branch CI deployment succeeded at
+[run 44992914382](https://github.com/MikeLockz/boulder-casual-bike-router/actions/runs/44992914382).
+Its federated runner reached only the new host’s forced deployment SSH account;
+the checked HTTPS, metrics and other-host SSH destinations were denied.
 
 ## Household identity and linking
 
@@ -60,7 +64,8 @@ The resulting token goes through the existing Keychain-backed `AuthSessionStore`
 The client secret is never sent to browser/iPhone code.
 
 **Existing profile linking requires an authenticated Boulder session.** Sign in
-to the existing profile first, then use LockDev SSO from that same session. The
+to the existing profile first, then choose **Link LockDev to this profile** in
+Settings from that same session (web or iOS). The
 hook rejects PocketBase's email-only fallback when no matching authenticated
 profile is present. Once linked, a different OIDC subject cannot take over the
 profile. Verify the unchanged profile ID, home setting, tuning profiles, routes
@@ -76,7 +81,15 @@ PocketBase administrative tools, never expose its admin endpoint publicly.
 
 Initial staged token lifetime and maximum household renewal age are 15 minutes.
 After that a new OIDC authorization is required; a removed group cannot acquire
-a new session. Password recovery remains enabled until client acceptance. This
+a new session. The staged `BOULDER_HOUSEHOLD_PASSWORD_RECOVERY=1` retains password recovery
+until client acceptance. A successful password sign-in starts its own 15-minute
+recovery window; an old SSO timestamp cannot make the retained password unusable.
+This is a temporary admission/revocation exception: a removed directory member
+who still knows the retained password can use that recovery path. After real
+linking, recovery and mobile checks pass, an administrator sets the flag to `0`.
+The hook disables password authentication and rotates the token secret once,
+revoking retained sessions. Reruns never re-enable passwords. A schema migration
+also revokes older long-lived tokens when first installed. This
 short policy still needs real iPhone/background-navigation verification before
 acceptance or disabling passwords; unit tests do not prove native lifecycle or
 group-removal behavior against the live identity provider.
@@ -89,7 +102,9 @@ including uploads and SQLite files), and `/srv/lockdev-apps/data/boulder/graphs/
 (regenerable caches). Release manifests/checkpoints belong under
 `/srv/lockdev-apps/releases/boulder/RELEASE/`. Only the reviewed fixed dispatcher
 may execute a CI deployment; no Docker-group membership or arbitrary Compose uploads.
-Its provenance enforcement and forced-command deployment remain pending.
+Provenance enforcement and the forced-command deployment are active on staging.
+The GitHub environment accepts only main, and main requires policy, application,
+image/runtime and native-auth checks.
 
 `GET /api/health?region=boulder` and `?region=broomfield` must both become ready.
 Flask runs one Gunicorn worker with eight threads; that worker owns both graphs.
@@ -109,8 +124,13 @@ Local: `/var/backups/lockdev-apps/`. Schedule: 00:30 America/Denver, seven compl
 local scheduled archives and thirty completed Tower scheduled archives. Baselines
 are not pruned. Predeploy checkpoints stay through at least the 14-day rollback
 window and the last two releases. The timer remains disabled during preparation.
-The direct-transfer encrypted fixture passed Mac decryption; an application cold
-copy and isolated app/guest restore are still pending.
+The VM 100 rehearsal cold copy was encrypted, decrypted on the Mac, verified
+file by file, sent directly from VM 110 to Tower, and restored into staging.
+All stable user/ownership fingerprints matched after PocketBase startup: one
+user/config, 37 routes, 7,627 ticks and two tuning profiles. The cold pause was
+22.074 seconds and the old writers resumed. A VM 110 baseline guest backup was
+restored as network-isolated VM 111, checked and removed. A newer VM 110
+application-archive restore and interruption/failure tests remain pending.
 
 ## Recovery and migration gates
 
@@ -128,10 +148,16 @@ and its release for at least 14 days. Never restore an old database over newer
 writes; preserve/export new writes and reconcile them before any database rollback.
 Image rollback alone does not reverse schema migrations.
 
-Pending: Authelia registration, real profile linking, browser/iPhone SSO, denied
-groups/cross-user data checks, token revocation/recovery, full client network
-matrix (home off/on, away on/off), native transitions, immutable release CI,
-catalog enforcement, app/guest restore, alerts and media-VM outage verification.
+The confidential Authelia client is registered. Monitoring reaches the private
+central ingestion endpoint; all five collection jobs report up, and all three
+Boulder containers have resource metrics. The restricted notification publisher
+passed publish/read/other-topic boundaries; phone receipt remains pending.
+
+Pending: real profile linking, browser/iPhone SSO, live denied-group/cross-user
+checks, token revocation/recovery, the full client network matrix (home off/on,
+away on/off), native transitions, newer application restore, interruption/failure
+alerts and media-VM outage verification. Backup and external-check timers remain
+disabled during preparation. Production DNS and old writers remain on VM 100.
 The user requested preparation with unavailable human checks explicitly pending.
 No migration-complete claim is justified yet. Eldorado Fly/Pages and stopped
 LXC 902 remain unchanged.

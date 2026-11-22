@@ -1698,7 +1698,11 @@ class MapViewModel {
 
     @MainActor
     func signInWithHousehold() async throws {
+        let linkingProfile = isUserLoggedIn ? currentUserId : nil
         let auth = try await apiService.signInWithHousehold()
+        if let linkingProfile, auth.record.id != linkingProfile {
+            throw APIError.serverError("This LockDev identity belongs to another Boulder profile.")
+        }
         await completeSignIn(auth)
     }
 

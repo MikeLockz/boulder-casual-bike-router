@@ -12,6 +12,7 @@ struct SettingsTabView: View {
     @State private var draftOffsets: [String: Double] = [:]
     @State private var deleteCandidate: RouteTuningProfile?
     @State private var showEditorDeleteConfirm = false
+    @State private var householdSSOAvailable = false
 
     private enum SettingsScreen {
         case root
@@ -44,6 +45,11 @@ struct SettingsTabView: View {
         .ignoresSafeArea(edges: .top)
         .sheet(isPresented: $isAuthSheetPresented) {
             AuthView(viewModel: viewModel, initialMode: authInitialMode)
+        }
+        .task {
+            if let methods = try? await APIService().householdAuthMethods() {
+                householdSSOAvailable = methods.oauth2.providers.contains { $0.name == "oidc" }
+            }
         }
         .alert("Delete Weight Setting?", isPresented: Binding(
             get: { deleteCandidate != nil },
@@ -231,6 +237,7 @@ struct SettingsTabView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(.primaryMint)
 
+                            if !householdSSOAvailable {
                             Button(action: { presentAuth(.signUp) }) {
                                 Text("Sign Up")
                                     .font(.system(size: 13, weight: .bold))
@@ -238,8 +245,14 @@ struct SettingsTabView: View {
                             }
                             .buttonStyle(.bordered)
                             .tint(.primaryMint)
+                            }
                         }
                     } else {
+                        if householdSSOAvailable {
+                            Button("Link LockDev to this profile") { presentAuth(.signIn) }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.primaryMint)
+                        }
                         Button("Sign Out") {
                             viewModel.signOut()
                         }
