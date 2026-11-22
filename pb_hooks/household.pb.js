@@ -1,4 +1,14 @@
 /// <reference path="../pb_data/types.d.ts" />
+onRealtimeSubscribeRequest((e) => {
+    // The web SDK needs only its OAuth callback channel. Legacy collection
+    // rules are intentionally used by the private Flask API; never expose
+    // their record streams through the public realtime subscription endpoint.
+    if (e.subscriptions.length > 1 || e.subscriptions.some(topic => topic !== "@oauth2")) {
+        throw new ForbiddenError("Only the household sign-in callback channel is available");
+    }
+    e.next();
+});
+
 onBootstrap((e) => {
     e.next();
     if ($os.getenv("BOULDER_HOUSEHOLD_OIDC") !== "1") return;

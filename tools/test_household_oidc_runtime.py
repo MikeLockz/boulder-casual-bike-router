@@ -71,6 +71,33 @@ except urllib.error.HTTPError as error:print(json.dumps([error.code,json.load(er
                     if time.monotonic()>deadline:raise RuntimeError('PocketBase fixture startup deadline')
                     time.sleep(.5)
             ready()
+            realtime_program = r"""import json,sys,urllib.request,urllib.error,urllib.parse
+base=sys.argv[1]
+with urllib.request.urlopen(base+'/__fixture/collections',timeout=5) as r:ids=json.load(r)
+with urllib.request.urlopen(base+'/api/realtime',timeout=5) as stream:
+    while True:
+        line=stream.readline()
+        if line.startswith(b'data:'):
+            client=json.loads(line[5:])['clientId'];break
+    def subscribe(topics):
+        req=urllib.request.Request(base+'/api/realtime',data=json.dumps({'clientId':client,'subscriptions':topics}).encode(),headers={'Content-Type':'application/json'})
+        try:
+            with urllib.request.urlopen(req,timeout=5) as response:return response.status
+        except urllib.error.HTTPError as error:return error.code
+    assert subscribe(['@oauth2'])==204
+    for topics in [['navigation_routes/*'],[ids['routes']+'/*'],[ids['ticks']+'/*'],['@oauth2',ids['routes']+'/*']]:
+        assert subscribe(topics)==403,'Record realtime subscription accepted'
+    query=urllib.parse.urlencode({'code':'fixture-code','state':client})
+    with urllib.request.urlopen(base+'/api/oauth2-redirect?'+query,timeout=5) as response:response.read()
+    while True:
+        line=stream.readline()
+        if line.startswith(b'data:'):
+            event=json.loads(line[5:]);assert event['code']=='fixture-code' and event['state']==client;break
+    assert subscribe([])==204
+print('OAuth realtime callback passed; record subscriptions denied by name and ID')
+"""
+            result=docker('exec',provider,'python','-c',realtime_program,base)
+            assert 'OAuth realtime callback passed' in result
             def password(email):
                 status,data=request('/api/collections/users/auth-with-password',{'identity':email,'password':'fixture-password-for-local-tests'})
                 assert status==200,('fixture password',status);return data['token']

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import urllib.error
+import urllib.request
 
 
 def run(command, timeout=60):
@@ -38,6 +40,22 @@ def main():
             run(compose+['up','-d','--no-build','--wait','--wait-timeout','420'],450)
             for region in ['boulder','broomfield']:
                 run(compose+['exec','-T','boulder-frontend','wget','-q','-O','/dev/null','http://127.0.0.1:8080/api/health?region='+region])
+            frontend=subprocess.check_output(compose+['ps','-q','boulder-frontend'],text=True).strip()
+            address=json.loads(subprocess.check_output(['docker','inspect',frontend]))[0]['NetworkSettings']['Networks']['lockdev-apps-ingress']['IPAddress']
+            def status(path):
+                try:
+                    with urllib.request.urlopen('http://'+address+':8080'+path,timeout=5) as response:
+                        return response.status
+                except urllib.error.HTTPError as error:return error.code
+            assert status('/pb/api/health')==200
+            assert status('/pb/api/collections/users/auth-methods')==200
+            query="import sqlite3,json; db=sqlite3.connect('file:/srv/lockdev-apps/data/boulder/pocketbase/data.db?mode=ro',uri=True); print(json.dumps([r[0] for r in db.execute(\"select id from _collections where name in ('navigation_routes','navigation_ticks','place_search_events','route_analytics_events','_superusers')\")]))"
+            ids=json.loads(subprocess.check_output(['sudo','python3','-c',query]))
+            for name in ['navigation_routes','navigation_ticks','place_search_events','route_analytics_events','_superusers',*ids]:
+                assert status('/pb/api/collections/'+name+'/records')==404, 'Direct data collection exposed: '+name
+            for path in ['/pb/_/','/pb/api/settings','/pb/api/collections','/pb/api/batch','/pb/api/backups','/pb/api/files/anything',
+                         '/pb/api/collections/users/impersonate/fixtureexisting']:
+                assert status(path)==404, 'Non-client PocketBase API exposed: '+path
         finally:
             # Avoid PocketBase logs: first-run administrative URLs contain tokens.
             run(compose+['ps','--all'])

@@ -27,3 +27,9 @@ routerAdd("POST", "/__fixture/expire", (event) => {
         event.app.save(record);
         return event.json(200, {ok: true});
 });
+routerAdd("GET", "/__fixture/collections", (event) => {
+    return event.json(200, {
+        routes: event.app.findCollectionByNameOrId("navigation_routes").id,
+        ticks: event.app.findCollectionByNameOrId("navigation_ticks").id
+    });
+});
