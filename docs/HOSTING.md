@@ -1,8 +1,8 @@
 # Boulder hosting and recovery
 
-Implementation in progress, **2026-11-21 America/Denver**. Production remains on
+Implementation in progress, **2026-11-22 America/Denver**. Production remains on
 VM 100, source `cc02768d6f4739f173ad7e7416fcbe19e57e31e7`. VM 110 has a restricted staging deployment from signed release
-`9b9f68a4ef86a8f3921d18f149f5bc6e7d5e6e8a`; neither real-client SSO nor cutover
+`fd6ac3baed6906fffe9f09496ab8a380a6a6b314`; neither real-client SSO nor cutover
 is accepted. Keep the old
 writers, route and database until the shared apps-host plan's cutover window.
 
@@ -29,7 +29,7 @@ are an explicit code-only allowlist; `.env`, databases, keys, PEM files, local
 venvs and graph caches are excluded. Build and publish in CI, never on VM 110.
 The public GHCR images and source attestations are verified by the root-owned
 dispatcher before deployment. A real main-branch CI deployment succeeded at
-[run 44992914382](https://github.com/MikeLockz/boulder-casual-bike-router/actions/runs/44992914382).
+[run 44996525186](https://github.com/MikeLockz/boulder-casual-bike-router/actions/runs/44996525186).
 Its federated runner reached only the new host’s forced deployment SSH account;
 the checked HTTPS, metrics and other-host SSH destinations were denied.
 
@@ -129,8 +129,13 @@ file by file, sent directly from VM 110 to Tower, and restored into staging.
 All stable user/ownership fingerprints matched after PocketBase startup: one
 user/config, 37 routes, 7,627 ticks and two tuning profiles. The cold pause was
 22.074 seconds and the old writers resumed. A VM 110 baseline guest backup was
-restored as network-isolated VM 111, checked and removed. A newer VM 110
-application-archive restore and interruption/failure tests remain pending.
+restored as network-isolated VM 111, checked and removed. The VM 110 predeploy archive
+`boulder-20261122T061622Z-2f8cf3b0.tar.gz.cms` independently passed Mac decryption,
+all 29 file checksums, isolated PocketBase startup without networking, and
+post-stop SQLite/count checks. Encryption-failure and systemd SIGKILL probes
+recovered writers without publishing an incomplete archive or erasing the last
+successful backup timestamp. After the SSO migration, stable profile/ownership
+fingerprints and all five counts matched again.
 
 ## Recovery and migration gates
 
@@ -155,9 +160,27 @@ passed publish/read/other-topic boundaries; phone receipt remains pending.
 
 Pending: real profile linking, browser/iPhone SSO, live denied-group/cross-user
 checks, token revocation/recovery, the full client network matrix (home off/on,
-away on/off), native transitions, newer application restore, interruption/failure
-alerts and media-VM outage verification. Backup and external-check timers remain
+away on/off), native transitions, phone receipt, the final cutover backup and full media-VM
+outage verification. Labeled synthetic stale-backup/queue/delivery failure and
+recovery notifications passed without duplicate failure posts. Full-stack reboot
+passed in 51 seconds; both regions returned over HTTPS. The second full
+configuration run reported 93 checks, zero changes and zero failures. Backup and external-check timers remain
 disabled during preparation. Production DNS and old writers remain on VM 100.
 The user requested preparation with unavailable human checks explicitly pending.
 No migration-complete claim is justified yet. Eldorado Fly/Pages and stopped
 LXC 902 remain unchanged.
+
+The deployed release is backed by
+[publication 44996166255](https://github.com/MikeLockz/boulder-casual-bike-router/actions/runs/44996166255).
+Its image digests are backend `82e5b0a9ad3ae4c15eb2efab8669637e1946b780560579223ecf61e5b2dcf431`,
+frontend `8adc52cf12d7239b394bf3100f2d3e51b33ce8175fc5fa01cc5287193f70e9a2`,
+and PocketBase `8091beee8bc666e5d43f16d5d8df3830489783dd4d8bff600b7eae1c878806b2`.
+The immutable `apps-fd6ac3baed6906fffe9f09496ab8a380a6a6b314` release holds
+the manifest and attestations. Both regions calculated synthetic test routes;
+private metrics/admin/direct data APIs returned 404, protected user APIs returned
+401, and seven unintended HTTP/backend/collector ports were denied.
+
+Do not apply the current Aspen DNS plan wholesale: its staging catalog snapshot
+would remove concurrently created `iptvnator.lockdev.com` and
+`podcasts.lockdev.com` overrides. Preserve and reconcile those owning changes
+before any future cutover. Cloudflare's preview proposed zero changes.
