@@ -385,10 +385,9 @@ function fallbackLocalRendering() {
 function initMap() {
     map = L.map("map").setView(BOULDER_CO, ZOOM_LEVEL);
 
-    // CartoDB Dark Matter tile layer for premium dark aesthetics
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    // CARTO Dark Matter raster tiles require a public basemap API key.
+    L.tileLayer("https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png?key=cb1_5e46_1_a40797ad64ea05136624f44e", {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: "abcd",
         maxZoom: 20
     }).addTo(map);
 
@@ -4843,8 +4842,8 @@ async function renderHistoryMapPreview(route) {
             tap: false
         });
 
-        L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-            subdomains: "abcd",
+        L.tileLayer("https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png?key=cb1_5e46_1_a40797ad64ea05136624f44e", {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
             maxZoom: 20
         }).addTo(historyPreviewMap);
 
