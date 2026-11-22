@@ -51,12 +51,10 @@ onRecordAuthWithOAuth2Request((e) => {
             throw new ForbiddenError("Sign in to the existing Boulder profile before linking LockDev");
         }
     }
-    // Do not accept caller-selected hidden identity metadata during OAuth signup.
-    if (e.createData) {
-        delete e.createData.household_subject;
-        delete e.createData.household_authenticated_at;
-        delete e.createData.household_recovery_authenticated_at;
-    }
+    // New household profiles come only from verified provider data. Do not let
+    // an admitted caller preclaim another email, choose a local password, or
+    // assign hidden identity/role fields through the optional createData payload.
+    e.createData = {};
     // Assign the authenticated profile explicitly when the directory email has
     // changed and PocketBase has no email/provider match. Never create a second
     // profile while the user is asking to link their signed-in profile.

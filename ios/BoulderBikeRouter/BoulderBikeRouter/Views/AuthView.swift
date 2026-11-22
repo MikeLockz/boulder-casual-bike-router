@@ -19,6 +19,7 @@ struct AuthView: View {
     @State private var errorMessage: String? = nil
     @State private var successMessage: String? = nil
     @State private var householdSSOAvailable = false
+    @State private var passwordLoginAvailable = true
 
     init(viewModel: MapViewModel, initialMode: AuthMode = .signIn) {
         self.viewModel = viewModel
@@ -97,10 +98,16 @@ struct AuthView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(isLoading)
+                        if !viewModel.isUserLoggedIn && passwordLoginAvailable {
+                            Text("Already have Boulder routes? Sign in with your existing password once, then link LockDev to this profile in Settings.")
+                                .font(.system(size: 14))
+                                .foregroundColor(.onSurfaceVariant)
+                                .padding(.horizontal, 24)
+                        }
                     }
 
                     // Retained until household linking and native-client checks pass.
-                    if !viewModel.isUserLoggedIn {
+                    if !viewModel.isUserLoggedIn && passwordLoginAvailable {
                     HStack(spacing: 0) {
                         Button(action: {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -256,7 +263,7 @@ struct AuthView: View {
                     }
                     
                     // Submit Button
-                    if !viewModel.isUserLoggedIn {
+                    if !viewModel.isUserLoggedIn && passwordLoginAvailable {
                     Button(action: handleSubmit) {
                         HStack {
                             if isLoading {
@@ -287,6 +294,7 @@ struct AuthView: View {
         .task {
             if let methods = try? await APIService().householdAuthMethods() {
                 householdSSOAvailable = methods.oauth2.providers.contains { $0.name == "oidc" }
+                passwordLoginAvailable = methods.password?.enabled ?? true
                 if householdSSOAvailable { isSignUpMode = false }
             }
         }

@@ -3327,6 +3327,12 @@ async function initHouseholdSSO() {
         const methods = await pb.collection("users").listAuthMethods();
         if (!methods.oauth2?.providers?.some(provider => provider.name === "oidc")) return;
         document.getElementById("tab-btn-signup")?.classList.add("hidden");
+        if (methods.password?.enabled === false) {
+            document.getElementById("auth-form")?.classList.add("hidden");
+            document.getElementById("auth-tabs")?.classList.add("hidden");
+        } else {
+            document.getElementById("household-link-instructions")?.classList.remove("hidden");
+        }
         for (const button of buttons) {
             button.classList.remove("hidden");
             button.addEventListener("click", async () => {

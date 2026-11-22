@@ -74,9 +74,19 @@ except urllib.error.HTTPError as error:print(json.dumps([error.code,json.load(er
             def password(email):
                 status,data=request('/api/collections/users/auth-with-password',{'identity':email,'password':'fixture-password-for-local-tests'})
                 assert status==200,('fixture password',status);return data['token']
-            def oauth(code,token=None,native=False):
+            def oauth(code,token=None,native=False,create_data=None):
                 return request('/api/collections/users/auth-with-oauth2',{'provider':'oidc','code':code,'codeVerifier':'x'*64,
-                    'redirectURL':'com.lockdev.boulder:/oauth2redirect' if native else 'https://boulder.lockdev.com/pb/api/oauth2-redirect'},token)
+                    'redirectURL':'com.lockdev.boulder:/oauth2redirect' if native else 'https://boulder.lockdev.com/pb/api/oauth2-redirect',
+                    'createData':create_data or {}},token)
+            assert request('/api/collections/users/records',{'email':'public@fixture.invalid','password':'chosen-fixture-password',
+                'passwordConfirm':'chosen-fixture-password','context':'oauth2'})[0] in [400,403],'Caller spoofed internal OAuth context'
+            status,new=oauth('new-household',create_data={'email':'forged@fixture.invalid','password':'chosen-fixture-password',
+                'passwordConfirm':'chosen-fixture-password','household_subject':'forged'})
+            assert status==200 and new['record']['email']=='new@fixture.invalid',('New household provisioning',status)
+            assert new['record']['collectionName']=='users','Household admission granted administrative authentication'
+            assert request('/api/collections/users/auth-refresh',{},new['token'])[0]==200
+            assert request('/api/collections/users/auth-with-password',{'identity':'new@fixture.invalid',
+                'password':'chosen-fixture-password'})[0]!=200,'OAuth caller selected a local household password'
             assert oauth('existing')[0]==403,'Email fallback linked without consent'
             existing=password('existing@fixture.invalid')
             status,data=oauth('existing',existing);assert status==200 and data['record']['id']=='fixtureexisting',('controlled linking',status)
@@ -95,7 +105,7 @@ except urllib.error.HTTPError as error:print(json.dumps([error.code,json.load(er
             status,methods=request('/api/collections/users/auth-methods');assert status==200 and not methods['password']['enabled']
             assert request('/api/collections/users/auth-refresh',{},token)[0]==401,'Acceptance did not revoke retained password sessions'
             assert oauth('existing')[0]==200,'Shared sign-in failed after closing password recovery'
-            print('Real PocketBase: web/native exchange, controlled linking, denied claims, fail-closed metadata and recovery switch passed')
+            print('Real PocketBase: first household sign-in, web/native exchange, controlled linking, denied claims, fail-closed metadata and recovery switch passed')
     finally:
         for name in reversed(names):docker('rm','-f',name,check=False)
         docker('network','rm',network,check=False);docker('volume','rm',volume,check=False)

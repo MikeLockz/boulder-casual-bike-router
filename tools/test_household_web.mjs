@@ -7,14 +7,14 @@ const source = readFileSync(new URL('../frontend/app.js', import.meta.url), 'utf
 const start = source.indexOf('async function initHouseholdSSO()');
 const end = source.indexOf('async function detectPocketBaseUrl()', start);
 
-async function setup() {
-    const buttons = Object.fromEntries(['household-sso', 'household-link', 'tab-btn-signup'].map(id =>
-        [id, {id, classList: {add() {}, remove() {}}, addEventListener(_, fn) { this.click = fn; }}]));
+async function setup(passwordEnabled = true) {
+    const buttons = Object.fromEntries(['household-sso', 'household-link', 'tab-btn-signup', 'auth-form', 'auth-tabs', 'household-link-instructions'].map(id =>
+        [id, {id, hidden: false, classList: {add() { buttons[id].hidden = true; }, remove() { buttons[id].hidden = false; }}, addEventListener(_, fn) { this.click = fn; }}]));
     const state = {session: null, errors: [], completed: [], current: null};
     class PocketBase {
         authStore = {save: (token, record) => { state.current = {token, record}; }, clear: () => { state.current = null; }};
         collection() { return {
-            listAuthMethods: async () => ({oauth2: {providers: [{name: 'oidc'}]}}),
+            listAuthMethods: async () => ({oauth2: {providers: [{name: 'oidc'}]}, password: {enabled: passwordEnabled}}),
             authWithOAuth2: async () => {
                 state.atExchange = state.current;
                 return state.result ?? {token: 'new-token', record: {id: 'existing'}};
@@ -58,4 +58,11 @@ test('linking requires an existing session; ordinary sign-in clears stale SDK au
     await buttons['household-sso'].click();
     assert.equal(state.atExchange, null);
     assert.equal(state.completed.length, 1);
+});
+
+test('closing server password recovery hides the retained password controls', async () => {
+    const {buttons} = await setup(false);
+    assert.equal(buttons['auth-form'].hidden, true);
+    assert.equal(buttons['auth-tabs'].hidden, true);
+    assert.equal(buttons['household-sso'].hidden, false);
 });
