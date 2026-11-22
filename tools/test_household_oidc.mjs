@@ -8,11 +8,23 @@ let recoveryEnabled = '1';
 const sandbox = {Date, ForbiddenError: Error, UnauthorizedError: Error,
     $os: {getenv: () => recoveryEnabled},
     onBootstrap: fn => { hooks.bootstrap = fn; },
+    onRealtimeSubscribeRequest: fn => { hooks.realtime = fn; },
     onRecordAuthWithOAuth2Request: fn => { hooks.oauth = fn; },
     onRecordAuthRequest: fn => { hooks.auth = fn; },
     onRecordUpdateRequest: fn => { hooks.update = fn; },
     onRecordAuthRefreshRequest: fn => { hooks.refresh = fn; }};
 vm.runInNewContext(readFileSync(new URL('../pb_hooks/household.pb.js', import.meta.url), 'utf8'), sandbox);
+
+test('realtime exposes only the OAuth callback, never collection names or IDs', () => {
+    for (const subscriptions of [[], ['@oauth2']]) {
+        let next = false;
+        hooks.realtime({subscriptions, next() { next = true; }});
+        assert.equal(next, true);
+    }
+    for (const subscriptions of [['navigation_routes/*'], ['collection12345/*'], ['@oauth2', 'navigation_ticks/*'], ['@oauth2?options=anything']]) {
+        assert.throws(() => hooks.realtime({subscriptions, next() { assert.fail('Record topic reached the broker'); }}), /callback channel/);
+    }
+});
 
 function record(subject = '', timestamp = '') {
     const values = {household_subject: subject, household_authenticated_at: timestamp};

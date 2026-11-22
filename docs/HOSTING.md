@@ -202,3 +202,20 @@ Image rollback/return was rehearsed on staging through
 and [44998241997](https://github.com/MikeLockz/boulder-casual-bike-router/actions/runs/44998241997).
 Stable profile ownership and all 247 staging analytics rows survived; no database
 restore occurred. The guest receipt is `/var/lib/lockdev-apps/rollback-data-proof.json`.
+
+## Public PocketBase API boundary
+
+PocketBase accepts collection IDs as well as names. The frontend therefore
+allowlists only the named user authentication/record, user-config and tuning-
+profile APIs used by the clients, plus health, OAuth redirect and realtime.
+All other PocketBase routes return 404, including raw navigation/analytics
+collections by name **or ID**, batch, administrative and file APIs. Record/file
+administration remains SSH-assisted; unused raw file APIs are not a supported
+client integration. The private Flask API retains ownership/guest-token checks.
+
+The web SDK needs only the `@oauth2` realtime callback. A PocketBase hook rejects
+all collection subscriptions, including IDs and mixed OAuth/record subscriptions.
+The integration fixture verifies that the real callback still arrives after
+denied record subscriptions; production Compose CI checks both alias forms and
+non-client APIs against the actual frontend. Do not roll back to an older
+frontend/PocketBase-hook pair that predates these boundaries for production.
