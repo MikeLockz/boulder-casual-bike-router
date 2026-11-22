@@ -18,6 +18,7 @@ struct AuthView: View {
     @State private var isLoading = false
     @State private var errorMessage: String? = nil
     @State private var successMessage: String? = nil
+    @State private var householdSSOAvailable = false
 
     init(viewModel: MapViewModel, initialMode: AuthMode = .signIn) {
         self.viewModel = viewModel
@@ -80,7 +81,25 @@ struct AuthView: View {
                     }
                     .padding(.top, 20)
                     
-                    // Mode Selector Segmented Control
+                    if householdSSOAvailable {
+                        Button("Sign in with LockDev") {
+                            isLoading = true
+                            errorMessage = nil
+                            Task { @MainActor in
+                                defer { isLoading = false }
+                                do {
+                                    try await viewModel.signInWithHousehold()
+                                    dismiss()
+                                } catch {
+                                    errorMessage = error.localizedDescription
+                                }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isLoading)
+                    }
+
+                    // Retained until household linking and native-client checks pass.
                     HStack(spacing: 0) {
                         Button(action: {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -257,6 +276,11 @@ struct AuthView: View {
                     Spacer()
                 }
                 .padding(.bottom, 40)
+            }
+        }
+        .task {
+            if let methods = try? await APIService().householdAuthMethods() {
+                householdSSOAvailable = methods.oauth2.providers.contains { $0.name == "oidc" }
             }
         }
     }

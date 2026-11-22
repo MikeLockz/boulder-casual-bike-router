@@ -1693,7 +1693,17 @@ class MapViewModel {
     @MainActor
     func signIn(email: String, password: String) async throws {
         let auth = try await apiService.signIn(email: email, password: password)
-        
+        await completeSignIn(auth)
+    }
+
+    @MainActor
+    func signInWithHousehold() async throws {
+        let auth = try await apiService.signInWithHousehold()
+        await completeSignIn(auth)
+    }
+
+    @MainActor
+    private func completeSignIn(_ auth: AuthResponse) async {
         AuthSessionStore.shared.save(token: auth.token, userId: auth.record.id, email: auth.record.email)
         
         // Enable Cloud Sync by default on sign-in

@@ -1,0 +1,75 @@
+name: Service access policy
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  service-access-policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require read-only cross-repository deploy keys
+        env:
+          INFRA_KEY: ${{ secrets.SERVICE_CATALOG_INFRA_SSH_KEY }}
+          HOME_KEY: ${{ secrets.SERVICE_CATALOG_HOME_SSH_KEY }}
+          VPS_KEY: ${{ secrets.SERVICE_CATALOG_VPS_SSH_KEY }}
+          DOCS_KEY: ${{ secrets.SERVICE_CATALOG_DOCS_SSH_KEY }}
+        run: |
+          test -n "$INFRA_KEY" && test -n "$HOME_KEY" && test -n "$VPS_KEY" && test -n "$DOCS_KEY"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: MikeLockz/lockdev-infra
+          ref: ${{ vars.APPS_HOST_INFRA_REF || vars.LOCKDEV_INFRA_REF || 'main' }}
+          path: lockdev-infra
+          ssh-key: ${{ secrets.SERVICE_CATALOG_INFRA_SSH_KEY }}
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: MikeLockz/lockdev-home
+          ref: ${{ vars.APPS_HOST_HOME_REF || vars.LOCKDEV_HOME_REF || 'main' }}
+          path: lockdev-home
+          ssh-key: ${{ secrets.SERVICE_CATALOG_HOME_SSH_KEY }}
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: MikeLockz/lockdev-do-docker
+          ref: ${{ vars.APPS_HOST_DO_DOCKER_REF || vars.LOCKDEV_DO_DOCKER_REF || 'master' }}
+          path: lockdev-do-docker
+          ssh-key: ${{ secrets.SERVICE_CATALOG_VPS_SSH_KEY }}
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: MikeLockz/lockdev-docs
+          ref: ${{ vars.APPS_HOST_DOCS_REF || vars.LOCKDEV_DOCS_REF || 'trunk' }}
+          path: lockdev-docs
+          ssh-key: ${{ secrets.SERVICE_CATALOG_DOCS_SSH_KEY }}
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: MikeLockz/boulder-casual-bike-router
+          ref: ${{ github.sha }}
+          path: boulder-casual-bike-router
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install validator dependencies
+        run: python -m pip install -r lockdev-infra/services/requirements.txt
+      - name: Require Boulder-aware catalog metadata
+        run: python -c "import json; c=json.load(open('lockdev-infra/services/catalog.json')); assert 'boulder-casual-bike-router' in c.get('repositories', {})"
+      - name: Check generated configuration
+        run: python lockdev-infra/services/catalog.py check
+      - name: Test policy failure cases
+        run: python -m unittest discover -s lockdev-infra/services/tests -v
+      - name: Audit routes and bindings at checked-out revisions
+        run: python lockdev-infra/services/catalog.py audit --repos-root "$GITHUB_WORKSPACE" --receipt evidence/service-access.json
+      - name: Verify outside-tailnet access from the hosted runner
+        run: python lockdev-infra/services/probe.py --condition away-off --required-only --output evidence/away-off.json
+      - name: Check published docs and dashboard
+        run: python lockdev-infra/services/catalog.py publish --repos-root "$GITHUB_WORKSPACE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: service-access-evidence
+          path: evidence/

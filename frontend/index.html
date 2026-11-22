@@ -274,6 +274,7 @@
                                 <button type="button" id="tab-btn-signup" class="auth-tab-btn">Sign Up</button>
                             </div>
 
+                            <button id="household-sso" type="button" class="btn btn-primary btn-auth hidden">Sign in with LockDev</button>
                             <form id="auth-form" class="auth-form">
                                 <div class="form-group">
                                     <label for="auth-email">Email Address</label>
@@ -709,7 +710,8 @@
     
     <!-- Custom JS -->
     <script src="mock-permissions.js"></script>
-    <script src="app.js?v=20260615-routes-fixed"></script>
+    <script src="vendor/pocketbase.umd.js"></script>
+    <script src="app.js?v=20261121-household-sso"></script>
     <script src="sim.js"></script>
     <script src="navigationMetricsFilter.js"></script>
     <script src="navigation.js"></script>

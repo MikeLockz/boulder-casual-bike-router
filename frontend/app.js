@@ -3290,6 +3290,7 @@ let currentUser = null;
 
 async function initAuth() {
     await detectPocketBaseUrl();
+    await initHouseholdSSO();
     
     const storedAuth = localStorage.getItem("pocketbase_auth");
     if (storedAuth) {
@@ -3316,6 +3317,36 @@ async function initAuth() {
     initAuthEventListeners();
     await loadHomeLocation();
     await loadMapLayerSettings();
+}
+
+async function initHouseholdSSO() {
+    const button = document.getElementById("household-sso");
+    if (!button || typeof PocketBase !== "function") return;
+    const pb = new PocketBase(new URL(PB_URL, window.location.origin).href);
+    try {
+        const methods = await pb.collection("users").listAuthMethods();
+        if (!methods.oauth2?.providers?.some(provider => provider.name === "oidc")) return;
+        button.classList.remove("hidden");
+        button.addEventListener("click", async () => {
+            button.disabled = true;
+            hideAuthMessages();
+            try {
+                // The pinned SDK owns per-attempt state/PKCE and the realtime
+                // /pb/api/oauth2-redirect callback. No client secret is sent here.
+                const data = await pb.collection("users").authWithOAuth2({
+                    provider: "oidc", scopes: ["openid", "profile", "email", "groups"]
+                });
+                await completeLogin(data);
+            } catch (error) {
+                showAuthError(error.message || "LockDev sign-in did not complete.");
+            } finally {
+                button.disabled = false;
+            }
+        });
+    } catch {
+        // Discovery failure must not remove the retained recovery login.
+        button.classList.add("hidden");
+    }
 }
 
 async function detectPocketBaseUrl() {
@@ -3592,6 +3623,11 @@ async function performLogin(email, password) {
         throw new Error(errorMsg || "Invalid email or password.");
     }
     
+    await completeLogin(data);
+}
+
+async function completeLogin(data) {
+    if (!data.token || !data.record?.id) throw new Error("Invalid sign-in response.");
     localStorage.setItem("pocketbase_auth", JSON.stringify({
         token: data.token,
         record: data.record

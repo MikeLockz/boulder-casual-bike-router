@@ -1114,7 +1114,45 @@ class APIService {
         }
     }
 
-    /// Sign in to PocketBase using email (identity) and password
+    func householdAuthMethods() async throws -> HouseholdAuthMethods {
+        guard let url = URL(string: baseURLLabel + "/pb/api/collections/users/auth-methods") else {
+            throw APIError.invalidURL
+        }
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 30))
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw APIError.serverError("LockDev sign-in is unavailable.")
+        }
+        return try JSONDecoder().decode(HouseholdAuthMethods.self, from: data)
+    }
+
+    @MainActor
+    func signInWithHousehold() async throws -> AuthResponse {
+        let methods = try await householdAuthMethods()
+        guard let provider = methods.oauth2.providers.first(where: { $0.name == "oidc" }),
+              let exchangeURL = URL(string: baseURLLabel + "/pb/api/collections/users/auth-with-oauth2") else {
+            throw APIError.serverError("LockDev sign-in is unavailable.")
+        }
+        let state = try HouseholdOAuthRequest.randomToken()
+        let verifier = try HouseholdOAuthRequest.randomToken()
+        let url = try HouseholdOAuthRequest.authorizationURL(providerURL: provider.authURL, state: state, verifier: verifier)
+        let callback = try await HouseholdOAuth.shared.authenticate(url: url)
+        let code = try HouseholdOAuthRequest.authorizationCode(callback: callback, expectedState: state)
+        var request = URLRequest(url: exchangeURL, timeoutInterval: 30)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Existing-profile linking is permitted only from its authenticated session.
+        AuthSessionStore.shared.applyAuthorization(to: &request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "provider": "oidc", "code": code, "codeVerifier": verifier,
+            "redirectURL": HouseholdOAuthRequest.redirectURI
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.serverError("Invalid response") }
+        guard (200...299).contains(http.statusCode) else { throw parsePBError(data: data, httpResponse: http) }
+        return try JSONDecoder().decode(AuthResponse.self, from: data)
+    }
+
+    /// Retained until real-client SSO and controlled profile linking pass.
     func signIn(email: String, password: String) async throws -> AuthResponse {
         guard let baseURL = URL(string: baseURLLabel),
               let authURL = URL(string: "/pb/api/collections/users/auth-with-password", relativeTo: baseURL) else {

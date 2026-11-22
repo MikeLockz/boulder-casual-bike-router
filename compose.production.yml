@@ -1,0 +1,75 @@
+name: boulder
+services:
+  pocketbase:
+    image: ${BOULDER_POCKETBASE_IMAGE:?exact approved digest required}
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp:size=64m,mode=1777]
+    volumes:
+      - /srv/lockdev-apps/data/boulder/pocketbase:/pb_data
+      - /etc/lockdev-apps/boulder/oidc.json:/run/secrets/boulder-oidc.json:ro
+    environment:
+      BOULDER_HOUSEHOLD_OIDC: '1'
+    networks: [private]
+    mem_limit: 512m
+    cpus: 0.5
+    healthcheck:
+      test: [CMD, /usr/local/bin/pocketbase, --version]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  boulder-backend:
+    image: ${BOULDER_BACKEND_IMAGE:?exact approved digest required}
+    restart: unless-stopped
+    user: '10001:10001'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp:size=64m,mode=1777]
+    volumes:
+      - /srv/lockdev-apps/data/boulder/graphs:/app/.cache/graphs
+    environment:
+      POCKETBASE_URL: http://pocketbase:8090
+      BACKEND_DEBUG: '0'
+      BACKEND_RELOAD: '0'
+    networks: [private, metrics]
+    mem_limit: 5g
+    cpus: 1.5
+    depends_on:
+      pocketbase:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:3001/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+  boulder-frontend:
+    image: ${BOULDER_FRONTEND_IMAGE:?exact approved digest required}
+    restart: unless-stopped
+    user: '101:101'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp:size=64m,mode=1777]
+    networks: [private, ingress]
+    mem_limit: 128m
+    cpus: 0.25
+    depends_on:
+      boulder-backend:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:8080/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+networks:
+  private: {}
+  ingress:
+    external: true
+    name: lockdev-apps-ingress
+  metrics:
+    external: true
+    name: lockdev-apps-metrics

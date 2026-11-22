@@ -1,0 +1,64 @@
+name: Deploy Boulder apps host
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Approved main-branch source SHA with an existing signed apps release
+        required: true
+        type: string
+      action:
+        description: Image deployment or compatible image rollback; never database restore
+        required: true
+        default: deploy
+        type: choice
+        options: [deploy, rollback]
+permissions:
+  contents: read
+concurrency:
+  group: boulder-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    environment: boulder-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Validate bounded release descriptor
+        env:
+          RELEASE: ${{ inputs.release }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          python3 - <<'PY'
+          import os,re,json
+          from pathlib import Path
+          assert re.fullmatch(r'[0-9a-f]{40}',os.environ['RELEASE'])
+          assert os.environ['ACTION'] in ['deploy','rollback']
+          Path(os.environ['RUNNER_TEMP'],'descriptor.json').write_text(json.dumps({'action':os.environ['ACTION'],'release':os.environ['RELEASE']})+'\n')
+          PY
+      - name: Join only the app deployment tailnet identity
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c
+        with:
+          oauth-client-id: ${{ vars.TS_BOULDER_CLIENT_ID }}
+          audience: ${{ vars.TS_BOULDER_AUDIENCE }}
+          tags: tag:boulder-deploy
+          version: 1.104.7
+          hostname: boulder-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Configure app-scoped SSH credential
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.BOULDER_DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.BOULDER_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/boulder_deploy"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/boulder_deploy" "$HOME/.ssh/known_hosts"
+      - name: Request the fixed root-owned Boulder dispatcher
+        run: |
+          ssh -F /dev/null -i "$HOME/.ssh/boulder_deploy" -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o HostKeyAlias=lockdev-apps -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            deploy-boulder@100.97.153.78 < "$RUNNER_TEMP/descriptor.json"
