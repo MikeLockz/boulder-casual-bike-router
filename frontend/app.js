@@ -3320,32 +3320,48 @@ async function initAuth() {
 }
 
 async function initHouseholdSSO() {
-    const button = document.getElementById("household-sso");
-    if (!button || typeof PocketBase !== "function") return;
+    const buttons = ["household-sso", "household-link"].map(id => document.getElementById(id)).filter(Boolean);
+    if (!buttons.length || typeof PocketBase !== "function") return;
     const pb = new PocketBase(new URL(PB_URL, window.location.origin).href);
     try {
         const methods = await pb.collection("users").listAuthMethods();
         if (!methods.oauth2?.providers?.some(provider => provider.name === "oidc")) return;
-        button.classList.remove("hidden");
-        button.addEventListener("click", async () => {
-            button.disabled = true;
-            hideAuthMessages();
-            try {
-                // The pinned SDK owns per-attempt state/PKCE and the realtime
-                // /pb/api/oauth2-redirect callback. No client secret is sent here.
-                const data = await pb.collection("users").authWithOAuth2({
-                    provider: "oidc", scopes: ["openid", "profile", "email", "groups"]
-                });
-                await completeLogin(data);
-            } catch (error) {
-                showAuthError(error.message || "LockDev sign-in did not complete.");
-            } finally {
-                button.disabled = false;
-            }
-        });
+        document.getElementById("tab-btn-signup")?.classList.add("hidden");
+        for (const button of buttons) {
+            button.classList.remove("hidden");
+            button.addEventListener("click", async () => {
+                const linking = button.id === "household-link";
+                let previous = null;
+                try { previous = JSON.parse(localStorage.getItem("pocketbase_auth") || "null"); } catch {}
+                if (linking && (!previous?.token || !previous.record?.id)) {
+                    showAuthError("Sign in to your existing Boulder profile before linking LockDev.");
+                    return;
+                }
+                buttons.forEach(item => { item.disabled = true; });
+                hideAuthMessages();
+                try {
+                    // Read the current session at click time, including a password
+                    // sign-in completed after provider discovery. The server requires
+                    // that same profile's authenticated consent before linking.
+                    if (previous?.token && previous.record?.id) pb.authStore.save(previous.token, previous.record);
+                    else pb.authStore.clear();
+                    const data = await pb.collection("users").authWithOAuth2({
+                        provider: "oidc", scopes: ["openid", "profile", "email", "groups"]
+                    });
+                    if (linking && data.record?.id !== previous.record.id) {
+                        throw new Error("This LockDev identity belongs to another Boulder profile.");
+                    }
+                    await completeLogin(data);
+                } catch (error) {
+                    if (linking && previous) pb.authStore.save(previous.token, previous.record);
+                    showAuthError(error.message || "LockDev sign-in did not complete.");
+                } finally {
+                    buttons.forEach(item => { item.disabled = false; });
+                }
+            });
+        }
     } catch {
-        // Discovery failure must not remove the retained recovery login.
-        button.classList.add("hidden");
+        buttons.forEach(button => button.classList.add("hidden"));
     }
 }
 

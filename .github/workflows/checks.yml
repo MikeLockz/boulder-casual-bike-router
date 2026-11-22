@@ -31,7 +31,7 @@ jobs:
       - name: Check web syntax and household identity boundaries
         run: |
           node --check frontend/app.js
-          node --test tools/test_household_oidc.mjs
+          node --test tools/test_household_oidc.mjs tools/test_household_web.mjs
   image-build-components:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -72,6 +72,8 @@ jobs:
           version: v0.39.1
       - name: Start the real production Compose with disposable data
         run: python3 tools/test_production_compose.py
+      - name: Exercise real PocketBase OIDC against an isolated TLS provider
+        run: python3 tools/test_household_oidc_runtime.py
   ios-auth-tests:
     runs-on: xcode-27
     timeout-minutes: 15

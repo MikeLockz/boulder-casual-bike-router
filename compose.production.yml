@@ -12,6 +12,9 @@ services:
       - /etc/lockdev-apps/boulder/oidc.json:/run/secrets/boulder-oidc.json:ro
     environment:
       BOULDER_HOUSEHOLD_OIDC: '1'
+      # Retain real password recovery until browser/iPhone acceptance. Only the
+      # administrator changes this to 0 after completing the shared plan's gates.
+      BOULDER_HOUSEHOLD_PASSWORD_RECOVERY: '1'
     networks: [private]
     mem_limit: 512m
     cpus: 0.5

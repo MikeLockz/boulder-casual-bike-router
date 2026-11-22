@@ -267,6 +267,9 @@
                             </div>
                         </div>
 
+                        <div id="auth-message" class="auth-message error hidden" role="alert"></div>
+                        <div id="auth-success-message" class="auth-message success hidden" role="status"></div>
+
                         <!-- Logged Out State -->
                         <div id="auth-logged-out" class="auth-state-container">
                             <div class="auth-tabs">
@@ -288,9 +291,6 @@
                                     <label for="auth-password-confirm">Confirm Password</label>
                                     <input type="password" id="auth-password-confirm" placeholder="Repeat password">
                                 </div>
-                                
-                                <div id="auth-message" class="auth-message error hidden"></div>
-                                <div id="auth-success-message" class="auth-message success hidden"></div>
                                 
                                 <button type="submit" id="auth-submit-btn" class="btn btn-primary btn-auth">Log In</button>
                             </form>
@@ -321,6 +321,9 @@
                                     Sync past routes and GPS tracks automatically with your account.
                                 </span>
                             </div>
+
+                            <button id="household-link" type="button" class="btn btn-primary btn-auth hidden">Link LockDev to this profile</button>
+                            <p class="subtext">Keep your saved routes, history and settings when linking your household sign-in.</p>
 
                             <button type="button" id="btn-logout" class="btn btn-secondary btn-auth-logout"><i class="fa-solid fa-right-from-bracket"></i> Log Out</button>
                         </div>

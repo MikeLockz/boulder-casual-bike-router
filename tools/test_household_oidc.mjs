@@ -4,9 +4,12 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const hooks = {};
+let recoveryEnabled = '1';
 const sandbox = {Date, ForbiddenError: Error, UnauthorizedError: Error,
+    $os: {getenv: () => recoveryEnabled},
     onBootstrap: fn => { hooks.bootstrap = fn; },
     onRecordAuthWithOAuth2Request: fn => { hooks.oauth = fn; },
+    onRecordAuthRequest: fn => { hooks.auth = fn; },
     onRecordUpdateRequest: fn => { hooks.update = fn; },
     onRecordAuthRefreshRequest: fn => { hooks.refresh = fn; }};
 vm.runInNewContext(readFileSync(new URL('../pb_hooks/household.pb.js', import.meta.url), 'utf8'), sandbox);
@@ -23,8 +26,16 @@ function event() {
         oAuth2User: {id: 'directory-subject', email: 'household@example.invalid',
             rawUser: {groups: ['family'], email_verified: true}},
         createData: {}, saved: false, proceeded: false, record: null,
-        app: {save: () => { e.saved = true; }},
-        next: () => { e.proceeded = true; e.record ??= record(); }};
+        app: {save: () => { assert.equal(e.tokenIssued, false); e.saved = true; },
+            findAllExternalAuthsByRecord: () => e.externalAuths || []},
+        next: () => {
+            e.proceeded = true;
+            e.record ??= record();
+            hooks.auth({...e, authMethod: 'oauth2', next: () => { e.tokenIssued = true; }});
+        }, tokenIssued: false};
+    const data = new Map();
+    e.set = (key, value) => data.set(key, value);
+    e.get = key => data.get(key);
     return e;
 }
 
@@ -53,6 +64,9 @@ test('another user or directory subject cannot take over a linked profile', () =
     e.record = record('another-subject');
     e.auth = record();
     assert.throws(() => hooks.oauth(e), /another identity/);
+    e.record = record('directory-subject');
+    e.auth = {...record(), id: 'different-profile'};
+    assert.throws(() => hooks.oauth(e), /another Boulder profile/);
 });
 
 test('denied groups and unverified email never reach token issuance', () => {
@@ -72,8 +86,38 @@ test('household refresh cannot indefinitely extend a removed member session', ()
     e.record = record('subject', '2020-01-01 00:00:00.000Z');
     assert.throws(() => hooks.refresh(e), /sign in/);
     e.record = record('subject', new Date().toISOString());
+    e.next = () => { e.proceeded = true; };
     hooks.refresh(e);
     assert.equal(e.proceeded, true);
+});
+
+test('authenticated profile is reused when no email/provider record matched', () => {
+    const e = event(); e.auth = record();
+    hooks.oauth(e);
+    assert.equal(e.record, e.auth);
+    assert.equal(e.isNewRecord, false);
+    assert.equal(e.tokenIssued, true);
+});
+
+test('admission metadata is saved before a token response and fails closed', () => {
+    const e = event(); e.app.save = () => { throw Error('storage failure'); };
+    assert.throws(() => hooks.oauth(e), /storage failure/);
+    assert.equal(e.tokenIssued, false);
+    const refresh = event();refresh.record = record();
+    refresh.externalAuths = [{provider: () => 'oidc'}];
+    assert.throws(() => hooks.refresh(refresh), /complete LockDev/);
+});
+
+test('retained password recovery works after linking and closes only at acceptance', () => {
+    const e = event();e.authMethod = 'password';e.record = record('subject', '2020-01-01 00:00:00.000Z');
+    e.next = () => { e.tokenIssued = true; };
+    hooks.auth(e);
+    assert.equal(e.tokenIssued, true);
+    e.next = () => {};
+    hooks.refresh(e);
+    recoveryEnabled = '0';
+    try { assert.throws(() => hooks.refresh(e), /sign in/); }
+    finally { recoveryEnabled = '1'; }
 });
 
 test('normal API updates cannot set identity metadata', () => {
