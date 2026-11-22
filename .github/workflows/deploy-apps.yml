@@ -47,6 +47,24 @@ jobs:
           tags: tag:boulder-deploy
           version: 1.104.7
           hostname: boulder-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify deployment identity network boundaries
+        run: |
+          python3 - <<'PY'
+          import socket
+          with socket.create_connection(('100.97.153.78',22),timeout=5):
+              pass
+          denied=[('100.97.153.78',443),('100.97.153.78',8428),
+                  ('100.127.44.82',22),('100.127.44.82',443),
+                  ('100.85.10.129',22),('100.65.83.87',22),('192.168.1.30',22)]
+          for host,port in denied:
+              try:
+                  connection=socket.create_connection((host,port),timeout=3)
+              except OSError:
+                  continue
+              connection.close()
+              raise SystemExit('Unexpected CI network authority: '+host+':'+str(port))
+          print('Only apps-host deployment SSH is reachable from this CI identity')
+          PY
       - name: Configure app-scoped SSH credential
         env:
           SSH_PRIVATE_KEY: ${{ secrets.BOULDER_DEPLOY_SSH_KEY }}
