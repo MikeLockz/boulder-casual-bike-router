@@ -59,10 +59,19 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [image-build-components]
     if: always()
+    timeout-minutes: 15
     steps:
       - env:
           RESULT: ${{ needs.image-build-components.result }}
         run: test "$RESULT" = success
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          version: v0.39.1
+      - name: Start the real production Compose with disposable data
+        run: python3 tools/test_production_compose.py
   ios-auth-tests:
     runs-on: xcode-27
     timeout-minutes: 15
